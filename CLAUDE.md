@@ -18,8 +18,10 @@ Or activate first: `source .venv/bin/activate`
 ## Project Structure
 
 ```
-main.py                          # intraday entry point (MIS, 5-min candles)
-main_interday.py                 # interday entry point (CNC, daily candles)
+main.py                          # unified entry point — intraday and interday
+                                 #   python main.py                                       (intraday)
+                                 #   python main.py --config config/config_interday.yaml  (interday)
+main_interday.py                 # convenience wrapper — sets TRADER_CONFIG and calls main.py
 config/
   config.yaml                    # intraday runtime config
   config_interday.yaml           # interday runtime config
@@ -78,9 +80,16 @@ tests/                           # pytest unit tests
 
 **Paper mode:** Controlled by `env: paper` in config.yaml. `OrderManager` queues paper fills and fills them at the next candle's open price. No real orders are placed.
 
+**Unified entry point:** `main.py` runs both intraday and interday — all behaviour is driven by config. Pass `--config config/config_interday.yaml` for interday mode. Key config properties that switch behaviour:
+- `product` (MIS/CNC) — controls market hours gate and post-market position reset
+- `square_off_enabled` — controls whether square-off scheduler job is registered
+- `candle_minutes` — controls LiveFeed bucket size and pre-market warmup timeframes
+
+**Strategy registry:** `trader/strategies/registry.py` is the single source of truth for all strategy classes, group compositions, and filter-only strategies. `build_strategies(symbol, config)` is the one function all entry points call — `main.py`, `scripts/backtest.py`, `scripts/calibrate.py`. Adding a new strategy only requires editing `registry.py` and `calibration/param_space.py`.
+
 **Strategy groups:** `StrategyGroup(primary, filters)` in `strategies/group.py`. ENTRY signals from primary are only forwarded if all filters return `True` from `confirm_entry()`. EXIT signals always pass through. Each filter's `on_candle()` still runs every bar to keep indicator state current.
 
-**Market hours gate:** In `main.py`, strategy signals are only generated between 9:15–15:25 IST. `orders.on_candle()` and `portfolio.refresh()` run unconditionally on every candle.
+**Market hours gate:** Applied only when `config.product == "MIS"`. Signals blocked outside 9:15–15:25 IST; `orders.on_candle()` and `portfolio.refresh()` run unconditionally on every candle.
 
 **Paper fill isolation:** `candle["_symbol"]` is injected in `handle_candle()` before `orders.on_candle()`. `OrderManager._fill_pending_paper()` filters by instrument so INDHOTEL orders are never filled at NATIONALUM prices.
 
@@ -146,11 +155,12 @@ Find optimal strategy parameters by running backtests across a search space:
 1. Create `trader/strategies/my_strategy.py` subclassing `Strategy` from `base.py`
 2. Implement `on_candle(candle) -> Signal | None` and `name` property
 3. Optionally implement `confirm_entry(direction) -> bool` to act as a filter in a `StrategyGroup`
-4. Add config section under `strategies:` in the relevant config yaml
-5. Register in `main.py` or `main_interday.py` under the strategies list
-6. Add to `_build_strategies()` in `scripts/backtest.py`
-7. Add param search space to `PARAM_SPACES` in `trader/calibration/param_space.py`
-8. Write unit tests under `tests/strategies/`
+4. Add to `STRATEGY_CLASSES` in `trader/strategies/registry.py` (and `GROUP_COMPOSITIONS` if it's a group)
+5. Add config section under `strategies:` in the relevant config yaml
+6. Add param search space to `PARAM_SPACES` in `trader/calibration/param_space.py`
+7. Write unit tests under `tests/strategies/`
+
+**No changes needed** to `main.py`, `scripts/backtest.py`, or `scripts/calibrate.py`.
 
 ---
 

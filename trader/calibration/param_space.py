@@ -1,8 +1,10 @@
 """
-Parameter search spaces for each intraday strategy.
+Parameter search spaces for each strategy.
 
 No trader.* imports — this module is pure data so it can be imported
 before the config singleton is loaded.
+
+GROUP_COMPOSITIONS and FILTER_ONLY live in trader/strategies/registry.py.
 """
 
 # Maps strategy name → {param_name: [candidate values]}
@@ -58,13 +60,3 @@ PARAM_SPACES: dict[str, dict[str, list]] = {
     },
 }
 
-# Maps group name → (primary_strategy_name, [filter_strategy_names])
-GROUP_COMPOSITIONS: dict[str, tuple[str, list[str]]] = {
-    # Intraday groups
-    "orb_supertrend": ("orb",          ["supertrend"]),
-    "rsi_bollinger":  ("rsi",          ["bollinger"]),
-    # Interday groups
-    "ema_adx":        ("ema_crossover", ["adx"]),
-}
-
-ALL_STRATEGIES = set(PARAM_SPACES) | set(GROUP_COMPOSITIONS)

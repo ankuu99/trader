@@ -1,4 +1,34 @@
+"""
+Unified trading entry point — intraday and interday both run from here.
+All behaviour is driven by the active config file.
+
+    python main.py                                         # intraday (MIS, 5-min candles)
+    python main.py --config config/config_interday.yaml   # interday (CNC, daily candles)
+
+Config controls:
+    product          : MIS → market hours gate + square-off + daily position reset
+                       CNC → no gate, no square-off, positions persist overnight
+    candle_minutes   : LiveFeed bucket size (5 for intraday, 390 for daily)
+    square_off_enabled: whether to register the square-off scheduler job
+"""
+
+import argparse
+import os
+import sys
 from datetime import time as dtime
+from pathlib import Path
+
+# Parse --config early so TRADER_CONFIG is set before trader modules are imported
+_pre = argparse.ArgumentParser(add_help=False)
+_pre.add_argument("--config", default=None)
+_pre_args, _ = _pre.parse_known_args()
+if _pre_args.config:
+    os.environ["TRADER_CONFIG"] = _pre_args.config
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / "config" / ".env")
 
 from trader.auth.session import create_kite
 from trader.core.config import config
@@ -9,24 +39,20 @@ from trader.data.store import Store
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
-from trader.risk.manager import RiskManager, should_square_off
+from trader.risk.manager import RiskManager
 from trader.scheduler.jobs import Scheduler
-from trader.strategies.base import SignalType
-from trader.strategies.bollinger import BollingerBandStrategy
-from trader.strategies.ema_pullback import EMAPullbackStrategy
-from trader.strategies.group import StrategyGroup
-from trader.strategies.orb import ORBStrategy
-from trader.strategies.rsi import RSIStrategy
-
-from trader.strategies.supertrend import SupertrendStrategy
-from trader.strategies.vwap import VWAPReversionStrategy
+from trader.strategies.base import Direction, SignalType
+from trader.strategies.registry import build_strategies
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
 
+_MARKET_OPEN  = dtime(9, 15)
+_MARKET_CLOSE = dtime(15, 25)   # last candle that can generate a new entry
+
 
 def main():
-    logger.info("Starting trader | env=%s", config.env)
+    logger.info("Starting trader | env=%s | product=%s", config.env, config.product)
     logger.info(
         "Capital: %.0f | Max risk/trade: %.0f | Daily loss limit: %.0f",
         config.total_capital,
@@ -60,44 +86,11 @@ def main():
     # ------------------------------------------------------------------ #
     strategies = []
     for symbol in valid_watchlist:
-        rsi_cfg = config.strategy_config("rsi")
-        orb_cfg = config.strategy_config("orb")
-        vwap_cfg = config.strategy_config("vwap")
-        st_cfg = config.strategy_config("supertrend")
-        bb_cfg = config.strategy_config("bollinger")
-        ep_cfg = config.strategy_config("ema_pullback")
-
-        if rsi_cfg.get("enabled"):
-            strategies.append(RSIStrategy(symbol, rsi_cfg))
-        if orb_cfg.get("enabled"):
-            strategies.append(ORBStrategy(symbol, orb_cfg))
-        if vwap_cfg.get("enabled"):
-            strategies.append(VWAPReversionStrategy(symbol, vwap_cfg))
-        if st_cfg.get("enabled"):
-            strategies.append(SupertrendStrategy(symbol, st_cfg))
-        if bb_cfg.get("enabled"):
-            strategies.append(BollingerBandStrategy(symbol, bb_cfg))
-        if ep_cfg.get("enabled"):
-            strategies.append(EMAPullbackStrategy(symbol, ep_cfg))
-
-        # Strategy groups (signal combination)
-        if config.strategy_config("orb_supertrend").get("enabled"):
-            strategies.append(StrategyGroup(
-                primary=ORBStrategy(symbol, orb_cfg),
-                filters=[SupertrendStrategy(symbol, st_cfg)],
-            ))
-        if config.strategy_config("rsi_bollinger").get("enabled"):
-            strategies.append(StrategyGroup(
-                primary=RSIStrategy(symbol, rsi_cfg),
-                filters=[BollingerBandStrategy(symbol, bb_cfg)],
-            ))
+        strategies.extend(build_strategies(symbol, config))
 
     # ------------------------------------------------------------------ #
     # Signal → risk → order pipeline                                      #
     # ------------------------------------------------------------------ #
-    _MARKET_OPEN  = dtime(9, 15)
-    _MARKET_CLOSE = dtime(15, 25)   # last candle that can generate a new entry
-
     def handle_candle(candle: dict):
         # Resolve symbol first — needed for instrument-specific paper fills
         symbol = next(
@@ -108,14 +101,14 @@ def main():
 
         # Always fill pending paper orders (candle arrived regardless of time)
         orders.on_candle(candle)
-
         portfolio.refresh()
 
-        # Gate: no new strategy signals outside market hours
-        ts = candle.get("timestamp")
-        candle_time = ts.time() if ts is not None else None
-        if candle_time is None or not (_MARKET_OPEN <= candle_time <= _MARKET_CLOSE):
-            return
+        # Gate: no new strategy signals outside market hours (intraday only)
+        if config.product == "MIS":
+            ts = candle.get("timestamp")
+            candle_time = ts.time() if ts is not None else None
+            if candle_time is None or not (_MARKET_OPEN <= candle_time <= _MARKET_CLOSE):
+                return
 
         # Run all strategies for this instrument's candle
         for strategy in strategies:
@@ -149,13 +142,11 @@ def main():
         if status != "COMPLETE":
             return
 
-        from trader.strategies.base import Direction
         risk.on_order_filled(
             instrument, Direction(direction), qty, fill_price, SignalType(signal_type)
         )
         portfolio.on_order_filled(instrument, direction, qty, fill_price, signal_type)
 
-        # Notify the relevant strategy
         for strategy in strategies:
             if strategy.instrument == instrument:
                 strategy.on_order_update(update)
@@ -166,7 +157,6 @@ def main():
             mode=config.env,
         )
 
-        # Check if halt was triggered after this fill
         if risk.is_halted():
             telegram.notify_halt(
                 daily_pnl=risk.realised_pnl(),
@@ -181,19 +171,16 @@ def main():
     # ------------------------------------------------------------------ #
     scheduler = Scheduler()
 
+    # Warm up the timeframes needed by the active strategies
+    warmup_timeframes = ["5minute", "day"] if config.candle_minutes < 390 else ["day"]
+
     def pre_market():
-        logger.info("Pre-market: warming up data cache")
+        logger.info("Pre-market: warming up candle cache %s", warmup_timeframes)
         for symbol in valid_watchlist:
             token = symbol_to_token[symbol]
-            for timeframe in ("5minute", "day"):
-                warm_up(kite, store, token, symbol, timeframe,
+            for tf in warmup_timeframes:
+                warm_up(kite, store, token, symbol, tf,
                         lookback_days=config.historical_cache_days)
-
-    def on_square_off():
-        logger.info("Square-off time reached — exiting all positions")
-        sq_orders = risk.square_off_all()
-        for sq_order in sq_orders:
-            orders.place(sq_order)
 
     def post_market():
         portfolio.log_summary()
@@ -206,12 +193,22 @@ def main():
             capital=config.total_capital,
         )
         risk.reset_day()
-        risk.reset_positions()
-        logger.info("Post-market teardown complete")
+        if config.product == "MIS":
+            risk.reset_positions()
+            logger.info("Post-market teardown complete")
+        else:
+            logger.info("Post-market update complete (positions held)")
 
     scheduler.on_pre_market(pre_market)
-    scheduler.on_square_off(on_square_off)
     scheduler.on_post_market(post_market)
+
+    if config.square_off_enabled:
+        def on_square_off():
+            logger.info("Square-off time reached — exiting all positions")
+            sq_orders = risk.square_off_all()
+            for sq_order in sq_orders:
+                orders.place(sq_order)
+        scheduler.on_square_off(on_square_off)
 
     # ------------------------------------------------------------------ #
     # Live feed                                                            #
@@ -220,21 +217,20 @@ def main():
     feed = LiveFeed(
         api_key=config.kite_api_key,
         access_token=config.kite_access_token,
-        timeframe_minutes=5,
+        timeframe_minutes=config.candle_minutes,
     )
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)
-    feed.register_tick_handler(lambda tick: None)  # placeholder for tick-level use
+    feed.register_tick_handler(lambda _tick: None)
 
     scheduler.start()
 
     logger.info(
-        "System ready | mode=%s | instruments=%s | strategies=%d",
-        config.env, valid_watchlist, len(strategies),
+        "System ready | mode=%s | product=%s | instruments=%s | strategies=%d",
+        config.env, config.product, valid_watchlist, len(strategies),
     )
     telegram.notify_startup(config.env, valid_watchlist, len(strategies))
 
-    # Warm up immediately on startup (in addition to scheduled pre-market)
     pre_market()
 
     feed.start(threaded=True)  # non-blocking so we can catch KeyboardInterrupt

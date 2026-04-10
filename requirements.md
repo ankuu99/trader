@@ -76,10 +76,26 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 - Allow multiple strategies to run simultaneously
 - Strategies should be self-contained and configurable via parameters
 
-### 5.2 Built-in Strategies (initial set)
+### 5.2 Built-in Strategies
+
+**Intraday (5-minute candles, MIS):**
 - **RSI Mean Reversion** — buy oversold, sell overbought on NSE equities
-- **Opening Range Breakout (ORB)** — trade breakout of first 15/30 min high/low
-- Moving Average Crossover (SMA/EMA) — future consideration
+- **Opening Range Breakout (ORB)** — trade breakout of first N minutes high/low (configurable)
+- **VWAP Reversion** — enter on VWAP deviation, exit on mean reversion
+- **Supertrend** — ATR-based trend filter; usable standalone or as a group filter
+- **Bollinger Band** — mean reversion at band extremes
+- **EMA Pullback** — enter on pullbacks to fast EMA in an uptrend
+
+**Interday (daily candles, CNC):**
+- **EMA Crossover** — BUY on golden cross, EXIT on death cross
+- **RSI + EMA** — RSI oversold + price above EMA for entry
+- **Breakout** — 52-week high breakout with trailing stop
+- **ADX Filter** — trend strength filter; filter-only, not used standalone
+
+**Strategy Groups (AND-logic):**
+- **orb_supertrend** — ORB primary + Supertrend filter
+- **rsi_bollinger** — RSI primary + Bollinger filter
+- **ema_adx** — EMA Crossover primary + ADX filter
 
 ### 5.3 Signal → Order Bridge
 - Convert strategy signals into actual orders respecting risk controls
@@ -103,9 +119,19 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 
 - Run strategies on historical data without live connectivity
 - Simulate order fills (market orders fill at next candle open)
+- Deduct real Zerodha transaction costs (brokerage, STT, NSE charges, SEBI charges, GST, stamp duty) from every trade
 - Track equity curve, drawdown, win rate, Sharpe ratio
-- Output a summary report per backtest run
-- Allow parameter sweeping for optimisation (manual, not automated grid search initially)
+- Output a summary report showing gross P&L, transaction costs, net P&L, and net P&L % of capital
+- Export per-trade CSV with `gross_pnl`, `costs`, `net_pnl` columns
+
+## 7a. Parameter Calibration
+
+- Automated parameter search via backtest — random sampling or exhaustive grid
+- Optimise on configurable metric: Sharpe ratio, total P&L, win rate, or max drawdown
+- Aggregate results across multiple symbols (mean)
+- Ranked output table showing top N parameter sets
+- `--update-config` flag writes best params directly back to config YAML
+- CLI: `scripts/calibrate.py --strategy rsi --from 2026-01-01 --iterations 20`
 
 ---
 
@@ -189,10 +215,10 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ## 16. Interday (Positional/Swing) Trading
 
 ### Overview
-A separate execution mode for holding positions overnight or across multiple days. Shares all core infrastructure with the intraday system — only config, entry point, and product type differ.
+A separate execution mode for holding positions overnight or across multiple days. Shares all core infrastructure with the intraday system — only config and product type differ.
 
 ### Execution Model
-- **Separate entry point:** `main_interday.py`
+- **Unified entry point:** `main.py --config config/config_interday.yaml` (or the convenience wrapper `main_interday.py`)
 - **Separate config:** `config/config_interday.yaml`
 - **Separate SQLite DB:** `data/market_interday.db` (avoids mixing candle timeframes)
 - **Shared:** all `trader/` modules — auth, data, orders, risk, portfolio, notifications, backtest
@@ -232,7 +258,6 @@ A separate execution mode for holding positions overnight or across multiple day
 - Web UI / dashboard (beyond CLI)
 - Options pricing / Greeks calculation
 - Machine learning-based strategies
-- Automated parameter optimisation
 - HFT or sub-second latency requirements
 
 ---

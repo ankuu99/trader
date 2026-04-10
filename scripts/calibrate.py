@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
 
-from trader.calibration.param_space import ALL_STRATEGIES
+from trader.calibration.param_space import PARAM_SPACES
 from trader.calibration.runner import (
     CalibrationRunner,
     print_ranked_table,
@@ -41,6 +41,9 @@ from trader.calibration.runner import (
 from trader.core.config import config, CONFIG_FILE
 from trader.core.logger import setup
 from trader.data.store import Store
+from trader.strategies.registry import FILTER_ONLY, GROUP_COMPOSITIONS
+
+ALL_STRATEGIES = (set(PARAM_SPACES) | set(GROUP_COMPOSITIONS)) - FILTER_ONLY
 
 setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during calibration
 

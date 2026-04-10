@@ -10,11 +10,11 @@ watchlist:
 strategies:
   rsi:
     enabled: false
-    period: 10
+    period: 7
     oversold: 30
     overbought: 65
     timeframe: 5minute
-    midpoint: 50
+    midpoint: 55
   orb:
     enabled: false
     range_minutes: 15
@@ -29,7 +29,7 @@ strategies:
   bollinger:
     enabled: false
     period: 20
-    std: 1.5
+    std: 2.0
   ema_pullback:
     enabled: false
     fast: 20

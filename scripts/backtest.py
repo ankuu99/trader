@@ -33,8 +33,7 @@ from trader.core.config import config
 from trader.core.logger import setup, get_logger
 from trader.data.historical import warm_up
 from trader.data.store import Store
-from trader.strategies.orb import ORBStrategy
-from trader.strategies.rsi import RSIStrategy
+from trader.strategies.registry import build_strategies
 
 setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during backtest
 logger = get_logger(__name__)
@@ -52,79 +51,6 @@ def parse_args():
                         help="Save trade logs to backtest_results/")
     return parser.parse_args()
 
-
-def _build_strategies(symbol: str):
-    """Instantiate enabled strategies for a symbol based on active config."""
-    from trader.strategies.adx import ADXFilter
-    from trader.strategies.bollinger import BollingerBandStrategy
-    from trader.strategies.breakout import BreakoutStrategy
-    from trader.strategies.ema_crossover import EMACrossoverStrategy
-    from trader.strategies.ema_pullback import EMAPullbackStrategy
-    from trader.strategies.group import StrategyGroup
-    from trader.strategies.rsi_ema import RSIEMAStrategy
-    from trader.strategies.supertrend import SupertrendStrategy
-    from trader.strategies.vwap import VWAPReversionStrategy
-
-    strategies = []
-
-    # Intraday
-    rsi_cfg = config.strategy_config("rsi")
-    if rsi_cfg.get("enabled"):
-        strategies.append(RSIStrategy(symbol, rsi_cfg))
-
-    orb_cfg = config.strategy_config("orb")
-    if orb_cfg.get("enabled"):
-        strategies.append(ORBStrategy(symbol, orb_cfg))
-
-    vwap_cfg = config.strategy_config("vwap")
-    if vwap_cfg.get("enabled"):
-        strategies.append(VWAPReversionStrategy(symbol, vwap_cfg))
-
-    st_cfg = config.strategy_config("supertrend")
-    if st_cfg.get("enabled"):
-        strategies.append(SupertrendStrategy(symbol, st_cfg))
-
-    bb_cfg = config.strategy_config("bollinger")
-    if bb_cfg.get("enabled"):
-        strategies.append(BollingerBandStrategy(symbol, bb_cfg))
-
-    ep_cfg = config.strategy_config("ema_pullback")
-    if ep_cfg.get("enabled"):
-        strategies.append(EMAPullbackStrategy(symbol, ep_cfg))
-
-    # Intraday groups
-    if config.strategy_config("orb_supertrend").get("enabled"):
-        strategies.append(StrategyGroup(
-            primary=ORBStrategy(symbol, orb_cfg),
-            filters=[SupertrendStrategy(symbol, st_cfg)],
-        ))
-    if config.strategy_config("rsi_bollinger").get("enabled"):
-        strategies.append(StrategyGroup(
-            primary=RSIStrategy(symbol, rsi_cfg),
-            filters=[BollingerBandStrategy(symbol, bb_cfg)],
-        ))
-
-    # Interday
-    ema_cfg = config.strategy_config("ema_crossover")
-    if ema_cfg.get("enabled"):
-        strategies.append(EMACrossoverStrategy(symbol, ema_cfg))
-
-    rsi_ema_cfg = config.strategy_config("rsi_ema")
-    if rsi_ema_cfg.get("enabled"):
-        strategies.append(RSIEMAStrategy(symbol, rsi_ema_cfg))
-
-    breakout_cfg = config.strategy_config("breakout")
-    if breakout_cfg.get("enabled"):
-        strategies.append(BreakoutStrategy(symbol, breakout_cfg))
-
-    adx_cfg = config.strategy_config("adx")
-    if config.strategy_config("ema_adx").get("enabled"):
-        strategies.append(StrategyGroup(
-            primary=EMACrossoverStrategy(symbol, ema_cfg),
-            filters=[ADXFilter(symbol, adx_cfg)],
-        ))
-
-    return strategies
 
 
 def main():
@@ -169,7 +95,7 @@ def main():
         warm_up(kite, store, token, symbol, timeframe,
                 lookback_days=(to_dt - from_dt).days + 5)
 
-        for strategy in _build_strategies(symbol):
+        for strategy in build_strategies(symbol, config):
             bt = Backtest(store, strategy, capital=config.total_capital,
                           reset_daily=reset_daily)
             report = bt.run(symbol, timeframe, from_dt, to_dt)

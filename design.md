@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The system is a personal, single-user automated trading application for NSE equities, connected to Zerodha via the KiteConnect API. It runs locally on a Mac, executes two intraday strategies (RSI Mean Reversion and Opening Range Breakout), and enforces strict risk controls before placing any real order.
+The system is a personal, single-user automated trading application for NSE equities, connected to Zerodha via the KiteConnect API. It runs locally on a Mac, executes multiple intraday and interday strategies, enforces strict risk controls before placing any real order, and includes a parameter calibration framework for optimising strategy parameters via backtest.
 
 The design is deliberately simple and modular — each concern lives in its own module, modules communicate through well-defined interfaces, and no module reaches into another's domain directly.
 
@@ -12,8 +12,9 @@ The design is deliberately simple and modular — each concern lives in its own 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                          main.py                            │
-│          (wires all components, starts the system)          │
+│              main.py  (unified entry point)                 │
+│   python main.py                    → intraday (MIS)        │
+│   python main.py --config ...       → interday (CNC)        │
 └────────────┬───────────────────────────────────┬────────────┘
              │                                   │
     ┌────────▼────────┐                 ┌────────▼────────┐
@@ -47,7 +48,8 @@ Two modules that every other component imports. Initialised first, before anythi
 
 **`core/config.py`**
 - Loads `config.yaml` and merges with `.env` (via `python-dotenv`)
-- Exposes a single `Config` object accessible everywhere
+- Exposes a single `Config` object accessible everywhere via `config` singleton; `CONFIG_FILE` path exported
+- Config file selected by `TRADER_CONFIG` env var (set before any trader import); defaults to `config/config.yaml`
 - Validates required fields on startup (fail fast if API key is missing)
 
 **`core/logger.py`**
@@ -104,9 +106,9 @@ Three distinct responsibilities:
 ```python
 class Strategy(ABC):
     def on_tick(self, tick: dict) -> None: ...
-    def on_candle(self, candle: dict) -> None: ...
+    def on_candle(self, candle: dict) -> Signal | None: ...
     def on_order_update(self, order: dict) -> None: ...
-    def generate_signal(self) -> Signal | None: ...
+    def confirm_entry(self, direction) -> bool: ...   # optional — filter role
 ```
 
 - `Signal` is a dataclass: `(instrument, direction=BUY|SELL, signal_type=ENTRY|EXIT, price_hint)`
@@ -114,19 +116,39 @@ class Strategy(ABC):
 - Each strategy instance is configured with its own parameters from `config.yaml`
 - Strategies maintain their own internal state (e.g. current RSI value, opening range high/low)
 
-**`strategies/rsi.py` — RSI Mean Reversion**
-- Computes RSI over a rolling window of closed candles
-- Emits BUY signal when RSI crosses below `oversold` threshold (default 30)
-- Emits SELL signal when RSI crosses above `overbought` threshold (default 70)
-- Exits position when RSI reverts to the midpoint (50)
-- Timeframe: 5-minute candles
+**`strategies/registry.py` — Single source of truth**
+- `STRATEGY_CLASSES`: maps config key → class for all 10 strategies
+- `FILTER_ONLY`: set of strategy names that only implement `confirm_entry()` and never emit signals (e.g. `adx`)
+- `GROUP_COMPOSITIONS`: maps group config key → (primary strategy key, [filter keys])
+- `build_strategies(symbol, config) -> list[Strategy]`: the one function all entry points call — no strategy logic in main.py, backtest.py, or calibrate.py
 
-**`strategies/orb.py` — Opening Range Breakout**
-- Observes candles from 9:15 AM to 9:30 AM (first 15 minutes) to establish high/low range
-- Emits BUY signal on first candle close above the range high
-- Emits SELL signal on first candle close below the range low
-- Exits at 3:15 PM if not stopped out earlier
-- Timeframe: 5-minute candles
+**`strategies/group.py` — StrategyGroup**
+- `StrategyGroup(primary, filters)`: AND-logic combination layer
+- ENTRY signals from primary are forwarded only if all filters return `True` from `confirm_entry()`
+- EXIT signals always pass through unconditionally
+- Each filter's `on_candle()` runs every bar to keep indicator state current
+
+**Intraday strategies (5-minute candles, MIS)**
+
+- `rsi.py` — RSI Mean Reversion: BUY when RSI crosses below `oversold`, SELL above `overbought`, exit at midpoint
+- `orb.py` — Opening Range Breakout: establishes high/low from first N minutes (configurable), trades first breakout
+- `vwap.py` — VWAP Reversion: enters when price deviates from VWAP by a configurable %, exits on mean reversion
+- `supertrend.py` — Supertrend ATR-based trend filter: `confirm_entry()` checks trend direction; also usable standalone
+- `bollinger.py` — Bollinger Band mean reversion: enters near bands, exits at midpoint
+- `ema_pullback.py` — EMA Pullback in uptrend: enters on pullbacks to fast EMA when fast > slow
+
+**Interday strategies (daily candles, CNC)**
+
+- `ema_crossover.py` — EMA Crossover: BUY on golden cross (fast > slow), EXIT on death cross
+- `rsi_ema.py` — RSI + EMA combo: RSI oversold + price above EMA for entry
+- `breakout.py` — 52-week high breakout with configurable trailing stop
+- `adx.py` — ADX trend strength filter: `confirm_entry()` only; `FILTER_ONLY` — never used standalone
+
+**Strategy groups (AND-logic combos)**
+
+- `orb_supertrend`: ORB primary + Supertrend filter (intraday)
+- `rsi_bollinger`: RSI primary + Bollinger filter (intraday)
+- `ema_adx`: EMA Crossover primary + ADX filter (interday)
 
 ---
 
@@ -174,8 +196,11 @@ Runs strategies against historical data without any live connectivity.
 - Calls `on_candle()` on strategy instances exactly as the live feed does
 - Simulates fills: market orders fill at the next candle's open; limit orders fill if price is reached
 - Tracks equity curve, per-trade P&L, max drawdown, win rate, Sharpe ratio
-- Outputs a summary report to stdout and a CSV of all trades
+- **Transaction costs:** deducts real Zerodha charges (brokerage, STT, NSE transaction charges, SEBI charges, GST, stamp duty) from every trade's P&L via `trader/costs.py`
+- Outputs a summary report showing gross P&L, transaction costs, net P&L, and net P&L % of capital
+- `save_trades()` exports CSV with `gross_pnl`, `costs`, `net_pnl` columns
 - Shares the same strategy code as live trading — no separate backtest strategy class
+- `reset_daily=True` resets daily P&L between calendar days (intraday); set `False` for interday backtests
 
 ---
 
@@ -185,24 +210,47 @@ Uses APScheduler to run tasks on a market-hours schedule (IST).
 
 | Time | Job |
 |---|---|
-| 9:00 AM | Pre-market: fetch instrument list, warm up data cache, validate token |
-| 9:15 AM | Start live feed, activate strategies |
-| 3:15 PM | Trigger square-off for all open positions |
-| 3:35 PM | Post-market: generate daily P&L report, rotate logs |
+| 9:00 AM | Pre-market: warm up candle cache for active symbols and timeframes |
+| 3:15 PM | Square-off: exit all open positions (MIS / `square_off_enabled` only) |
+| 3:35 PM | Post-market: log portfolio summary, send Telegram P&L report, reset daily risk state |
 
-The scheduler only runs during market days (Mon–Fri, excluding NSE holidays — holiday list loaded from config or a static file).
+- Square-off job is only registered when `config.square_off_enabled = true` (intraday MIS mode)
+- Post-market resets `risk.reset_day()` always; additionally calls `risk.reset_positions()` for MIS only
+- Pre-market warmup timeframes: `["5minute", "day"]` for intraday, `["day"]` for interday — derived from `config.candle_minutes`
 
 ---
 
-### 3.10 `notifications/telegram.py` — Alerts (deferred)
+### 3.10 `notifications/telegram.py` — Alerts
 
-Stub module for now. Will be implemented as a separate phase.
+Fire-and-forget Telegram notifications. Skips silently if `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are absent from `.env`.
 
-Planned events:
-- Order placed / filled / rejected
-- Daily P&L summary
-- Daily loss limit breached
-- System errors / crashes
+Implemented events:
+- System startup (mode, watchlist, strategy count)
+- Order filled (instrument, direction, qty, fill price, strategy name)
+- Order rejected (instrument, direction, reason)
+- Daily P&L summary (realised, unrealised, trade count, net % of capital)
+- Daily loss limit breached / trading halted
+
+### 3.11 `costs.py` — Transaction Cost Calculator
+
+Computes all Zerodha charges for equity trades. Used by the backtest engine to produce realistic net P&L.
+
+- `order_cost(product, side, quantity, price)` — per-leg charges
+- `round_trip_cost(product, quantity, entry_price, exit_price)` — entry + exit combined
+- MIS: brokerage = min(0.03% × turnover, ₹20), STT = 0.025% sell-side, stamp = 0.003% buy-side
+- CNC: brokerage = ₹0, STT = 0.1% both sides, stamp = 0.015% buy-side
+- Both: NSE transaction charges 0.00307%, SEBI charges ₹10/crore, GST 18% on applicable fees
+
+### 3.12 `calibration/` — Parameter Optimisation
+
+Finds optimal strategy parameters by running backtests across a search space.
+
+- `calibration/param_space.py` — `PARAM_SPACES` dict: candidate values for every strategy parameter; pure data, no trader imports
+- `calibration/runner.py` — `CalibrationRunner`: runs random or grid search, aggregates metrics across symbols, ranks results
+- `scripts/calibrate.py` — CLI entry point: `--strategy`, `--from`, `--to`, `--iterations`, `--metric`, `--mode`, `--update-config`
+- Supported metrics: `sharpe` (default), `total_pnl`, `win_rate`, `max_drawdown`
+- `--update-config` writes best params back to the active config YAML file
+- Requires candle data already cached in SQLite — run `main.py` or `scripts/backtest.py` first
 
 ---
 
@@ -237,9 +285,11 @@ Kite order update WS
 data/historical.py (loads candles from SQLite)
     └─▶ backtest/engine.py (replays candle by candle)
             └─▶ strategy.on_candle(candle)
-                    └─▶ signal = strategy.generate_signal()
-                            └─▶ backtest/engine.py simulates fill
-                                    └─▶ equity curve updated
+                    └─▶ signal returned
+                            └─▶ risk.validate(signal)
+                                    └─▶ backtest/engine.py simulates fill at next open
+                                            └─▶ costs.round_trip_cost() deducted
+                                            └─▶ equity curve updated
 ```
 
 ---

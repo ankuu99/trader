@@ -29,39 +29,11 @@ from typing import Iterator
 import yaml
 
 from trader.backtest.engine import Backtest, BacktestReport
-from trader.calibration.param_space import (
-    GROUP_COMPOSITIONS,
-    PARAM_SPACES,
-    ALL_STRATEGIES,
-)
+from trader.calibration.param_space import PARAM_SPACES
 from trader.data.store import Store
 from trader.strategies.base import Strategy
-from trader.strategies.adx import ADXFilter
-from trader.strategies.bollinger import BollingerBandStrategy
-from trader.strategies.breakout import BreakoutStrategy
-from trader.strategies.ema_crossover import EMACrossoverStrategy
-from trader.strategies.ema_pullback import EMAPullbackStrategy
 from trader.strategies.group import StrategyGroup
-from trader.strategies.orb import ORBStrategy
-from trader.strategies.rsi import RSIStrategy
-from trader.strategies.rsi_ema import RSIEMAStrategy
-from trader.strategies.supertrend import SupertrendStrategy
-from trader.strategies.vwap import VWAPReversionStrategy
-
-STRATEGY_CLASSES: dict[str, type[Strategy]] = {
-    # Intraday
-    "rsi":          RSIStrategy,
-    "orb":          ORBStrategy,
-    "vwap":         VWAPReversionStrategy,
-    "supertrend":   SupertrendStrategy,
-    "bollinger":    BollingerBandStrategy,
-    "ema_pullback": EMAPullbackStrategy,
-    # Interday
-    "ema_crossover": EMACrossoverStrategy,
-    "rsi_ema":       RSIEMAStrategy,
-    "breakout":      BreakoutStrategy,
-    "adx":           ADXFilter,
-}
+from trader.strategies.registry import FILTER_ONLY, GROUP_COMPOSITIONS, STRATEGY_CLASSES
 
 
 # ------------------------------------------------------------------ #
