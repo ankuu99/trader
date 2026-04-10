@@ -1,225 +1,149 @@
-# Systematic Trading Platform — Enhancement Proposal
+# Trading System — Enhancement Plan
 
-## 1. Objective
+## Overview
 
-Extend the existing Python trading platform to support two complementary modes on Indian equities (NSE):
-
-1. **Interday swing trading** — portfolio-level systematic momentum, holding days to weeks, decisions made post-close, orders placed as AMO or at next-day open.
-2. **Intraday swing trading** — single-session directional trades on liquid largecaps/F&O stocks, entered after the opening range and exited by 3:15 PM, no overnight exposure.
-
-Both modes must share infrastructure (data, risk, execution, logging) but run as independent strategy tracks with separate capital buckets.
+Phased enhancement plan for the existing trading system. Based on analysis of the original proposal against current system state. Items that are already implemented, overkill for this scale, or not needed (bhavcopy reconciliation, Parquet storage, adjusted price handling, corporate action calendar, AMO orders) have been dropped.
 
 ---
 
-## 2. Capital Allocation Between Tracks
+## What We Already Have (No Rebuild Needed)
 
-- Interday swing: 70% of capital
-- Intraday swing: 20% of capital
-- Cash buffer: 10% (for margin spikes, drawdown reserve)
-
-Each track has its own drawdown kill-switch independent of the other.
-
----
-
-## 3. Shared Infrastructure to Build
-
-### 3.1 Universe Manager
-- Maintain point-in-time NIFTY 200 / NIFTY 500 / F&O list
-- Daily refresh from NSE bhavcopy + index constituent files
-- Exclusion filters applied centrally:
-  - T2T, GSM, ASM stage 2+
-  - Within 5% of circuit limits
-  - ADTV < ₹5 crore (interday), < ₹25 crore (intraday)
-  - Pending corporate actions in next 5 trading days
-
-### 3.2 Data Layer
-- Daily bars: from broker API + NSE bhavcopy reconciliation
-- Minute bars (1m, 5m, 15m): only for intraday universe (~150 stocks), stored in Parquet partitioned by date
-- Adjusted vs unadjusted prices kept separate; backtests use adjusted, live orders use unadjusted
-- Corporate action calendar maintained as a separate table
-
-### 3.3 Risk & Order Layer (shared)
-- Per-trade risk cap, per-track drawdown cap, portfolio gross exposure cap
-- Idempotent order placement keyed by `(strategy_id, signal_date, symbol)`
-- Order state machine: PENDING → PLACED → FILLED/PARTIAL/REJECTED → RECONCILED
-- All rejections logged with reason
-
-### 3.4 Logging & Post-Trade Analytics
-- Signal log (generated, accepted, rejected + reason)
-- Order log (placed, filled, slippage vs expected)
-- Daily PnL attribution by strategy and by symbol
-- Weekly auto-generated report
+| Item | Location |
+|---|---|
+| Realistic Zerodha cost model (MIS + CNC) | `trader/costs.py` |
+| Backtest engine with equity curve, Sharpe, drawdown | `trader/backtest/engine.py` |
+| Parameter calibration (random + grid search) | `trader/calibration/` |
+| Paper trading mode | `trader/orders/manager.py` |
+| ORB strategy (15-min range, breakout on close) | `trader/strategies/orb.py` |
+| VWAP mean reversion strategy | `trader/strategies/vwap.py` |
+| Per-trade SL enforcement | `trader/risk/manager.py` |
+| Daily loss limit + trading halt | `trader/risk/manager.py` |
+| Telegram alerts | `trader/notifications/telegram.py` |
 
 ---
 
-## 4. Interday Swing Module
+## Phase 1 — Quick Wins (No Architecture Change)
 
-### 4.1 Strategy: Cross-Sectional Momentum Core
-- Universe: NIFTY 200, post-filters
-- Score: `0.5 * R_6M + 0.3 * R_12M + 0.2 * R_3M`, skip most recent 5 trading days
-- Trend filter: only stocks with price > 200 DMA
-- Select top 15, equal weight, monthly rebalance (last Friday)
-- Hold until exit signal or rebalance
+All changes are targeted edits to existing files. No new strategy classes or registry changes needed.
 
-### 4.2 Position Sizing
-- ATR-based: `qty = (capital_per_track * 0.01) / (2 * ATR_14)`
-- Cap any single position at 8% of track capital
+### 1.1 ORB Signal Quality Filters
+**File:** `trader/strategies/orb.py`
 
-### 4.3 Exits
-- Stop loss: 2× ATR from entry
-- Trailing stop: Chandelier exit (22-day high − 3 × ATR)
-- Hard exit: stock drops out of top 30 of ranking on rebalance day
+- **Volume filter:** Skip entry if first-15-min cumulative volume < 1.5× 20-day average of first-15-min volume. Reduces false breakouts on low-volume days.
+- **Gap filter:** Skip entry if today's open is > 2% above/below previous close. Gap days have different breakout dynamics.
 
-### 4.4 Regime Overlay
-- If NIFTY < 200 DMA: halt new entries, cut gross to 50%
-- If NIFTY drawdown from 52w high > 15%: halt new entries entirely
+### 1.2 Regime Overlay
+**File:** `trader/risk/manager.py`, `config/config.yaml`
 
-### 4.5 Execution
-- Decisions generated post-close
-- Orders placed as AMO; entry at next-day open
-- Slippage budget: 0.15% largecap, 0.25% midcap
+- On each entry validation, check if NIFTY 50 price > its 200-day SMA.
+- If NIFTY < 200 DMA → block all new entry signals (exit signals still pass through).
+- If NIFTY drawdown from 52-week high > 15% → block all new entry signals.
+- Config param: `regime_filter: enabled: true` with `index_symbol: NSE:NIFTY 50`.
+- Data comes from existing historical data layer — no new data source needed.
 
----
+### 1.3 ATR-Based Position Sizing
+**File:** `trader/risk/manager.py`
 
-## 5. Intraday Swing Module
+- Current formula: `qty = max_risk_per_trade / sl_distance`
+- New formula: `qty = (capital × risk_pct) / (2 × ATR_14)`, capped at `max_position_pct` (e.g. 8%) of capital
+- ATR_14 passed in from strategy via signal metadata or computed in risk manager from cached candles
+- Config params: `atr_multiplier: 2`, `max_position_pct: 8`
 
-### 5.1 Strategy A: Opening Range Breakout (ORB)
-- Universe: F&O stocks with ADTV > ₹100 crore (~80 names)
-- Define opening range: 9:15–9:30 high/low
-- Long entry: 5-min close above OR high with volume > 1.5× 20-day avg of first 15-min volume
-- Short entry: mirror condition (only if stock has F&O for shorting)
-- Filter: skip if gap > 2% at open; skip if NIFTY shows opposing gap
+### 1.4 Signal Logging
+**Files:** `trader/data/store.py`, `trader/risk/manager.py`
 
-### 5.2 Strategy B: VWAP Pullback Continuation
-- Stock trending up on daily (above 50 DMA, R_1M > 0)
-- Intraday: price above VWAP, pulls back to touch VWAP, resumes with bullish 5-min candle
-- Entry on breakout of pullback candle high
-- Mirror for shorts
+- Add a `signals` table to SQLite: `(timestamp, instrument, strategy, direction, signal_type, accepted, reject_reason)`
+- `RiskManager.validate()` writes to this table on every signal — accepted or rejected with reason
+- Enables post-session analysis of signal quality and rejection rates
 
-### 5.3 Position Sizing (Intraday)
-- Risk per trade: 0.3% of intraday track capital
-- Max concurrent positions: 4
-- Stop: below opening range low (ORB) or below VWAP touch low (VWAP pullback)
-- Target 1: 1R (book 50%), Target 2: trail with 5-min swing lows
-- Hard time stop: square off all positions by 3:15 PM
+### 1.5 Weekly Circuit Breaker (Intraday)
+**File:** `trader/risk/manager.py`, `config/config.yaml`
 
-### 5.4 Daily Loss Circuit Breaker
-- If intraday track loses 1.5% in a day → stop trading for the day
-- If loses 4% in a week → pause intraday module for one week, manual review
-
-### 5.5 Execution
-- MIS orders, bracket order semantics emulated in code (entry + SL + target managed by platform, not broker, since Zerodha removed BO)
-- Use limit orders with 0.05% buffer; convert to market if unfilled in 30 seconds
-- Latency target: signal-to-order under 2 seconds
+- Track weekly realised P&L (reset every Monday)
+- If weekly P&L falls below `-weekly_loss_limit_pct` of capital → set `_weekly_halted = True`
+- `_weekly_halted` blocks new entries until next Monday reset
+- Config param: `weekly_loss_limit_pct: 4.0` (intraday config only)
+- `reset_day()` on Monday resets weekly counter; `reset_day()` other days leaves it intact
 
 ---
 
-## 6. India-Specific Constraints (apply to both tracks)
+## Phase 2 — New Strategy + Trailing Stop
 
-- STT, exchange charges, SEBI fees, stamp duty, GST modeled in backtest (~0.12% round-trip intraday, ~0.25% delivery)
-- No trading in first 5 minutes (9:15–9:20) — wide spreads
-- No new intraday entries after 2:30 PM
-- Skip days: budget day, RBI policy day, expiry day for intraday module (optional but recommended)
+### 2.1 VWAP Pullback Continuation
+**File:** `trader/strategies/vwap_pullback.py` (new), `trader/strategies/registry.py`, `trader/calibration/param_space.py`, `config/config.yaml`
 
----
+Different from existing `vwap.py` (mean reversion). This is a trend-continuation entry:
 
-## 7. Backtesting Requirements
+- **Pre-conditions:** Stock is above its 50-period SMA (daily or intraday) AND 1-month return > 0
+- **Entry trigger:** Price is above VWAP → pulls back to touch VWAP → next candle closes bullish and resumes upward
+- **Entry:** Buy on break of pullback candle high
+- **Exit:** Price closes below VWAP (loss of trend support)
+- Config params: `sma_period`, `vwap_touch_tolerance_pct`
 
-- Point-in-time universe (no survivorship bias)
-- Walk-forward: train 2017–2021, test 2022, roll forward yearly
-- Realistic costs and slippage as above
-- Separate backtest engines acceptable for daily vs intraday, but both must consume from the shared data layer
-- Acceptance criteria before going live with real capital:
-  - Sharpe > 1.0 net of costs over walk-forward
-  - Max DD < 20% (interday), < 10% (intraday)
-  - Minimum 100 trades in test window
-  - Profit factor > 1.4
+### 2.2 Chandelier Trailing Stop (Interday)
+**Files:** `trader/backtest/engine.py`, `trader/risk/manager.py`
 
----
-
-## 8. Paper Trading Phase
-
-- Every new strategy runs in paper mode for minimum 2 months on live data via the same code path as production
-- Compare paper fills vs theoretical backtest fills weekly
-- Promote to live only if slippage and hit rate are within 20% of backtest expectations
+- Current: SL is set at entry and never moves
+- New: For interday (CNC) trades, SL trails as `highest_close_since_entry − chandelier_multiplier × ATR_22`
+- Backtest engine: update `trade.stop_loss` each candle using the trailing formula (currently SL is static)
+- Risk manager: track `_highest_close` per open position, update SL on each `on_candle` call
+- Config param: `trailing_stop: chandelier`, `chandelier_period: 22`, `chandelier_multiplier: 3.0`
+- Intraday trades keep the existing fixed SL behavior
 
 ---
 
-## 9. Implementation Roadmap
+## Phase 3 — Architecture Extension
 
-**Phase 1 (Weeks 1–4): Foundation**
-- Universe manager with India filters
-- Shared risk/order layer with idempotency
-- Logging and post-trade analytics scaffolding
-- Backtest cost model upgrade
+### 3.1 Lightweight Universe Manager
+**File:** `trader/universe/manager.py` (new)
 
-**Phase 2 (Weeks 5–8): Interday Swing**
-- Momentum ranker + portfolio allocator
-- ATR sizing, regime overlay
-- Walk-forward backtest, paper trading start
+- Maintain a list of NIFTY 200 constituents (stored as a static CSV, updated monthly)
+- Daily ADTV filter: compute 20-day average daily volume × close for each symbol; exclude if < ₹5 crore (interday) or < ₹25 crore (intraday)
+- Data source: existing Kite historical API — no new integrations
+- `get_universe(mode)` returns filtered symbol list; called by scheduler pre-market
+- `config_interday.yaml` / `config.yaml` watchlists become dynamically populated from this
 
-**Phase 3 (Weeks 9–13): Intraday Swing**
-- Minute-bar data pipeline
-- ORB strategy implementation and backtest
-- VWAP pullback strategy
-- Intraday execution layer with emulated bracket orders
-- Paper trading start
+### 3.2 Cross-Sectional Momentum (Interday)
+**Files:** `trader/strategies/momentum_ranker.py` (new), `trader/scheduler/jobs.py`, `config/config_interday.yaml`
 
-**Phase 4 (Weeks 14–16): Go-Live**
-- Interday live with 25% intended capital, scale up over 4 weeks
-- Intraday live with 25% intended capital after 2 months paper
-- Weekly review cadence
+Architecture note: this is a portfolio-level strategy, not a per-symbol `on_candle` strategy. It runs once post-close.
 
----
+- **Score:** `0.5 × R_6M + 0.3 × R_12M + 0.2 × R_3M`, excluding last 5 trading days
+- **Trend filter:** Only rank stocks with price > 200 DMA
+- **Selection:** Top 15 by score, equal weight
+- **Rebalance:** Last Friday of each month
+- **Exits:** 2× ATR SL from entry; Chandelier trailing stop (from Phase 2); hard exit if stock falls out of top 30 on rebalance
+- **Scheduler job:** Post-close job calls `MomentumRanker.generate_rebalance()` → produces BUY/SELL signals → passes through RiskManager → OrderManager
+- **Sizing:** ATR-based from Phase 1.3, capped at 8% per position
 
-## 10. Module Layout
+### 3.3 Walk-Forward Backtest
+**File:** `scripts/calibrate.py`, `trader/calibration/runner.py`
 
-```
-platform/
-  data/             # bhavcopy, minute bars, corp actions
-  universe/         # filters, point-in-time membership
-  features/         # ATR, VWAP, momentum scores
-  strategies/
-    interday/
-      momentum_core.py
-    intraday/
-      orb.py
-      vwap_pullback.py
-  portfolio/
-    allocator.py
-    constraints.py
-  risk/
-    sizing.py
-    killswitch.py
-    regime.py
-  execution/
-    order_manager.py
-    broker_kite.py
-    bracket_emulator.py
-  backtest/
-    daily_engine.py
-    intraday_engine.py
-    costs_india.py
-  logging/
-    signal_log.py
-    trade_log.py
-    reports.py
-```
+- Add `--walk-forward` flag to `calibrate.py`
+- Splits date range into overlapping windows: train N years, test 1 year, roll forward 1 year
+- Reports in-sample vs out-of-sample metrics side by side
+- Acceptance criteria before going live: Sharpe > 1.0 net of costs, max DD < 20% (interday) / < 10% (intraday), profit factor > 1.4, minimum 100 trades in test window
 
 ---
 
-## 11. Open Decisions for the User
+## Deferred / Out of Scope
 
-- Broker: Zerodha Kite vs Upstox vs Dhan
-- Minute data source: broker historical API vs paid vendor (GDFL, TrueData)
-- Hosting: local machine vs VPS in Mumbai (latency matters for intraday)
-- Whether to enable shorting via F&O for intraday module
+| Item | Reason |
+|---|---|
+| NSE bhavcopy reconciliation | Kite API data reliable enough; complexity not justified |
+| Parquet storage | SQLite sufficient at this scale |
+| Adjusted vs unadjusted prices | Kite historical API already serves adjusted data |
+| Corporate action calendar | Complex; regime overlay + universe ADTV filter partially mitigates |
+| AMO orders | Defer until live interday validated in paper mode |
+| Point-in-time survivorship-free universe | Correct in theory; historical constituent data hard to source |
+| Multi-account / client money | Out of scope permanently |
 
 ---
 
-## 12. Non-Goals
+## Implementation Notes
 
-- HFT or sub-second strategies
-- Options strategies (separate future project)
-- Discretionary overrides during market hours
-- Multi-account / client money management
+- All Phase 1 changes are additive/backward-compatible — no breaking changes to existing strategy interface
+- Phase 2 trailing stop changes the `TradeRecord` update loop in backtest engine — needs careful testing
+- Phase 3 momentum ranker introduces a new execution model (portfolio rebalance vs per-candle signal); keep it decoupled from the existing per-symbol strategy engine
+- Paper trade each phase for minimum 2 weeks before enabling live orders
+- Run `.venv/bin/pytest tests/ -q` after each phase
