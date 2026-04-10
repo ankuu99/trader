@@ -1,0 +1,56 @@
+env: paper  # development | paper | live
+
+product: CNC          # delivery — holds positions overnight
+candle_minutes: 390   # full trading day (9:15–3:25) = 1 candle
+
+capital:
+  total: 20000
+  max_risk_per_trade_pct: 5.0
+  daily_loss_limit_pct: 10.0    # wider than intraday — multi-day swings need room
+
+watchlist:
+  - NSE:INDHOTEL
+  - NSE:MARKSANS
+
+  # add more instruments here
+
+strategies:
+  ema_crossover:
+    enabled: true
+    fast: 12    # fast EMA period (days)
+    slow: 24    # slow EMA period (days)
+
+  # --- additional interday strategies ---
+  rsi_ema:
+    enabled: false              # RSI oversold + price above slow EMA
+    rsi_period: 14
+    ema_period: 50
+    oversold: 35
+    midpoint: 50
+
+  breakout:
+    enabled: false              # 52-week high breakout with trailing stop
+    lookback: 52                # periods to look back (52 daily candles ≈ 2.5 months)
+    stop_pct: 8.0               # trailing stop % below peak since entry
+
+  # --- strategy groups ---
+  # ema_adx: EMA crossover confirmed by ADX trend strength
+  adx:
+    enabled: false
+    period: 14
+    threshold: 25
+
+  ema_adx:
+    enabled: false              # EMA crossover + ADX confirmation group
+
+risk:
+  max_open_positions: 10
+  square_off: false            # no intraday square-off — positions hold overnight
+
+data:
+  db_path: data/market_interday.db   # separate DB to avoid mixing candle timeframes
+  historical_cache_days: 365         # EMA needs ~1 year of daily data to warm up
+
+logging:
+  level: INFO
+  dir: logs/

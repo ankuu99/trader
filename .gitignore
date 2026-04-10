@@ -1,0 +1,24 @@
+# Environment & credentials
+.env
+*.env
+
+# Data & logs (generated at runtime)
+data/
+logs/
+backtest_results/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store

@@ -1,0 +1,49 @@
+env: paper
+capital:
+  total: 20000
+  max_risk_per_trade_pct: 2.0
+  daily_loss_limit_pct: 3.0
+watchlist:
+- NSE:INDHOTEL
+- NSE:MARKSANS
+- NSE:NATIONALUM
+strategies:
+  rsi:
+    enabled: true
+    period: 10
+    oversold: 30
+    overbought: 65
+    timeframe: 5minute
+    midpoint: 50
+  orb:
+    enabled: true
+    range_minutes: 15
+    timeframe: 15minute
+  vwap:
+    enabled: true
+    min_deviation_pct: 0.3
+  supertrend:
+    enabled: true
+    period: 7
+    factor: 3.0
+  bollinger:
+    enabled: true
+    period: 20
+    std: 1.5
+  ema_pullback:
+    enabled: true
+    fast: 20
+    slow: 50
+  orb_supertrend:
+    enabled: false
+  rsi_bollinger:
+    enabled: false
+risk:
+  max_open_positions: 3
+  square_off_time: '15:15'
+data:
+  db_path: data/market.db
+  historical_cache_days: 90
+logging:
+  level: INFO
+  dir: logs/
