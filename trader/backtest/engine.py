@@ -28,6 +28,7 @@ import pandas as pd
 
 from trader.core.config import config
 from trader.core.logger import get_logger
+from trader.costs import round_trip_cost
 from trader.data.store import Store
 from trader.risk.manager import RiskManager
 from trader.strategies.base import Direction, Signal, SignalType, Strategy
@@ -45,8 +46,9 @@ class TradeRecord:
     exit_time: datetime | None
     exit_price: float | None
     quantity: int
-    pnl: float | None
+    pnl: float | None           # net P&L after transaction costs
     stop_loss: float
+    costs: float = 0.0          # total round-trip transaction costs
 
 
 @dataclass
@@ -105,13 +107,19 @@ class BacktestReport:
         total = self.total_trades()
         return self.total_pnl() / total if total > 0 else 0.0
 
+    def total_costs(self) -> float:
+        return sum(t.costs for t in self.trades if t.pnl is not None)
+
     def print_summary(self):
+        gross = self.total_pnl() + self.total_costs()
         print(f"\n{'='*55}")
         print(f"  Backtest Report — {self.strategy} on {self.instrument}")
         print(f"  Period : {self.from_dt.date()} → {self.to_dt.date()}")
         print(f"{'='*55}")
         print(f"  Initial capital  : ₹{self.initial_capital:,.0f}")
         print(f"  Final capital    : ₹{self.initial_capital + self.total_pnl():,.2f}")
+        print(f"  Gross P&L        : ₹{gross:,.2f}")
+        print(f"  Transaction costs: ₹{self.total_costs():,.2f}")
         print(f"  Net P&L          : ₹{self.total_pnl():,.2f}")
         print(f"  Net P&L %        : {self.total_pnl() / self.initial_capital:.2%}")
         print(f"  Total trades     : {self.total_trades()}")
@@ -135,7 +143,9 @@ class BacktestReport:
                 "exit_time": t.exit_time,
                 "exit_price": t.exit_price,
                 "quantity": t.quantity,
-                "pnl": t.pnl,
+                "gross_pnl": round((t.pnl or 0.0) + t.costs, 2),
+                "costs": round(t.costs, 2),
+                "net_pnl": t.pnl,
                 "stop_loss": t.stop_loss,
             }
             for t in self.trades
@@ -259,10 +269,11 @@ class Backtest:
                         })
 
                     elif pending_signal.signal_type == SignalType.EXIT and open_trade:
-                        pnl = self._calc_pnl(open_trade, fill_price)
+                        pnl, costs = self._calc_pnl(open_trade, fill_price)
                         open_trade.exit_time = candle["timestamp"]
                         open_trade.exit_price = fill_price
                         open_trade.pnl = pnl
+                        open_trade.costs = costs
                         equity += pnl
                         report.equity_curve.append(equity)
                         report.trades.append(open_trade)
@@ -283,10 +294,11 @@ class Backtest:
             if open_trade is not None:
                 sl_hit_price = self._check_sl(open_trade, candle)
                 if sl_hit_price is not None:
-                    pnl = self._calc_pnl(open_trade, sl_hit_price)
+                    pnl, costs = self._calc_pnl(open_trade, sl_hit_price)
                     open_trade.exit_time = candle["timestamp"]
                     open_trade.exit_price = sl_hit_price
                     open_trade.pnl = pnl
+                    open_trade.costs = costs
                     equity += pnl
                     report.equity_curve.append(equity)
                     report.trades.append(open_trade)
@@ -311,10 +323,11 @@ class Backtest:
         # Force-close any position still open at end of backtest
         if open_trade is not None and candles:
             last_close = float(candles[-1]["close"])
-            pnl = self._calc_pnl(open_trade, last_close)
+            pnl, costs = self._calc_pnl(open_trade, last_close)
             open_trade.exit_time = candles[-1]["timestamp"]
             open_trade.exit_price = last_close
             open_trade.pnl = pnl
+            open_trade.costs = costs
             equity += pnl
             report.equity_curve.append(equity)
             report.trades.append(open_trade)
@@ -322,10 +335,21 @@ class Backtest:
         return report
 
     @staticmethod
-    def _calc_pnl(trade: TradeRecord, exit_price: float) -> float:
-        if trade.direction == "BUY":
-            return (exit_price - trade.entry_price) * trade.quantity
-        return (trade.entry_price - exit_price) * trade.quantity
+    def _calc_pnl(trade: TradeRecord, exit_price: float) -> tuple[float, float]:
+        """Returns (net_pnl, costs) for a completed trade."""
+        gross = (
+            (exit_price - trade.entry_price) * trade.quantity
+            if trade.direction == "BUY"
+            else (trade.entry_price - exit_price) * trade.quantity
+        )
+        costs = round_trip_cost(
+            product=config.product,
+            quantity=trade.quantity,
+            entry_price=trade.entry_price,
+            exit_price=exit_price,
+            entry_side=trade.direction,
+        )
+        return gross - costs, costs
 
     @staticmethod
     def _check_sl(trade: TradeRecord, candle: dict) -> float | None:

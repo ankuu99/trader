@@ -16,13 +16,13 @@ watchlist:
 
 strategies:
   ema_crossover:
-    enabled: true
+    enabled: false
     fast: 12    # fast EMA period (days)
     slow: 24    # slow EMA period (days)
 
   # --- additional interday strategies ---
   rsi_ema:
-    enabled: false              # RSI oversold + price above slow EMA
+    enabled: true              # RSI oversold + price above slow EMA
     rsi_period: 14
     ema_period: 50
     oversold: 35
@@ -36,7 +36,7 @@ strategies:
   # --- strategy groups ---
   # ema_adx: EMA crossover confirmed by ADX trend strength
   adx:
-    enabled: false
+    enabled: true
     period: 14
     threshold: 25
 

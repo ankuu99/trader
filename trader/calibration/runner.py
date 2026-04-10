@@ -36,21 +36,31 @@ from trader.calibration.param_space import (
 )
 from trader.data.store import Store
 from trader.strategies.base import Strategy
+from trader.strategies.adx import ADXFilter
 from trader.strategies.bollinger import BollingerBandStrategy
+from trader.strategies.breakout import BreakoutStrategy
+from trader.strategies.ema_crossover import EMACrossoverStrategy
 from trader.strategies.ema_pullback import EMAPullbackStrategy
 from trader.strategies.group import StrategyGroup
 from trader.strategies.orb import ORBStrategy
 from trader.strategies.rsi import RSIStrategy
+from trader.strategies.rsi_ema import RSIEMAStrategy
 from trader.strategies.supertrend import SupertrendStrategy
 from trader.strategies.vwap import VWAPReversionStrategy
 
 STRATEGY_CLASSES: dict[str, type[Strategy]] = {
+    # Intraday
     "rsi":          RSIStrategy,
     "orb":          ORBStrategy,
     "vwap":         VWAPReversionStrategy,
     "supertrend":   SupertrendStrategy,
     "bollinger":    BollingerBandStrategy,
     "ema_pullback": EMAPullbackStrategy,
+    # Interday
+    "ema_crossover": EMACrossoverStrategy,
+    "rsi_ema":       RSIEMAStrategy,
+    "breakout":      BreakoutStrategy,
+    "adx":           ADXFilter,
 }
 
 

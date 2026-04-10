@@ -9,35 +9,35 @@ watchlist:
 - NSE:NATIONALUM
 strategies:
   rsi:
-    enabled: true
+    enabled: false
     period: 10
     oversold: 30
     overbought: 65
     timeframe: 5minute
     midpoint: 50
   orb:
-    enabled: true
+    enabled: false
     range_minutes: 15
     timeframe: 15minute
   vwap:
-    enabled: true
+    enabled: false
     min_deviation_pct: 0.3
   supertrend:
-    enabled: true
+    enabled: false
     period: 7
     factor: 3.0
   bollinger:
-    enabled: true
+    enabled: false
     period: 20
     std: 1.5
   ema_pullback:
-    enabled: true
+    enabled: false
     fast: 20
     slow: 50
   orb_supertrend:
     enabled: false
   rsi_bollinger:
-    enabled: false
+    enabled: true
 risk:
   max_open_positions: 3
   square_off_time: '15:15'
