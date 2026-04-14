@@ -48,6 +48,10 @@ class OrderManager:
         # { order_id: Order }
         self._pending_paper: dict[str, Order] = {}
 
+        # Live CNC mode: GTT trigger IDs for open stop-loss orders
+        # { instrument: gtt_trigger_id }
+        self._gtt_ids: dict[str, int] = {}
+
     # ------------------------------------------------------------------ #
     # Public API                                                           #
     # ------------------------------------------------------------------ #
@@ -139,9 +143,13 @@ class OrderManager:
                 transaction, order.instrument, order.quantity, order_id,
             )
 
-            # Place SL order for entry orders
+            # Place GTT (SL-only or OCO with target) for CNC entry orders
             if order.signal_type == SignalType.ENTRY and order.stop_loss > 0:
-                self._place_live_sl(order, symbol)
+                self._place_gtt_oco(order, symbol)
+
+            # Cancel GTT stop-loss when exiting a CNC position
+            if order.signal_type == SignalType.EXIT:
+                self._cancel_gtt(order.instrument)
 
             return str(order_id)
 
@@ -149,25 +157,72 @@ class OrderManager:
             logger.error("Failed to place live order for %s: %s", order.instrument, e)
             raise
 
-    def _place_live_sl(self, order: Order, symbol: str):
+    def _place_gtt_oco(self, order: Order, symbol: str):
+        """Place a GTT stop-loss, or OCO (SL + target) when target_price is set."""
         sl_transaction = "SELL" if order.direction == Direction.BUY else "BUY"
         try:
-            sl_id = self._kite.place_order(
-                variety=KiteConnect.VARIETY_REGULAR,
-                exchange=_EXCHANGE,
-                tradingsymbol=symbol,
-                transaction_type=sl_transaction,
-                quantity=order.quantity,
-                product=config.product,
-                order_type=_ORDER_SL,
-                trigger_price=order.stop_loss,
-            )
-            logger.info(
-                "SL order placed | %s x%d @ trigger=%.2f | id=%s",
-                symbol, order.quantity, order.stop_loss, sl_id,
-            )
+            if order.target_price:
+                # Two-leg OCO: lower trigger = SL (MARKET), upper trigger = target (LIMIT)
+                # Zerodha cancels the other leg automatically when either fires
+                result = self._kite.place_gtt(
+                    trigger_type=self._kite.GTT_TYPE_TWO_LEG,
+                    tradingsymbol=symbol,
+                    exchange=_EXCHANGE,
+                    trigger_values=[order.stop_loss, order.target_price],
+                    last_price=order.price_hint,
+                    orders=[
+                        {
+                            "transaction_type": sl_transaction,
+                            "quantity": order.quantity,
+                            "product": "CNC",
+                            "order_type": "MARKET",
+                        },
+                        {
+                            "transaction_type": sl_transaction,
+                            "quantity": order.quantity,
+                            "product": "CNC",
+                            "order_type": "LIMIT",
+                            "price": order.target_price,
+                        },
+                    ],
+                )
+                logger.info(
+                    "GTT OCO placed | %s x%d | SL=%.2f target=%.2f | gtt_id=%s",
+                    symbol, order.quantity, order.stop_loss, order.target_price,
+                    result["trigger_id"],
+                )
+            else:
+                result = self._kite.place_gtt(
+                    trigger_type=self._kite.GTT_TYPE_SINGLE,
+                    tradingsymbol=symbol,
+                    exchange=_EXCHANGE,
+                    trigger_values=[order.stop_loss],
+                    last_price=order.price_hint,
+                    orders=[{
+                        "transaction_type": sl_transaction,
+                        "quantity": order.quantity,
+                        "product": "CNC",
+                        "order_type": "MARKET",
+                    }],
+                )
+                logger.info(
+                    "GTT SL placed | %s x%d @ SL=%.2f | gtt_id=%s",
+                    symbol, order.quantity, order.stop_loss, result["trigger_id"],
+                )
+            self._gtt_ids[order.instrument] = result["trigger_id"]
         except Exception as e:
-            logger.error("Failed to place SL order for %s: %s", symbol, e)
+            logger.error("Failed to place GTT for %s: %s", symbol, e)
+
+    def _cancel_gtt(self, instrument: str):
+        """Cancel the open GTT stop-loss for an instrument, if any."""
+        gtt_id = self._gtt_ids.pop(instrument, None)
+        if gtt_id is None:
+            return
+        try:
+            self._kite.delete_gtt(gtt_id)
+            logger.info("GTT cancelled | instrument=%s gtt_id=%s", instrument, gtt_id)
+        except Exception as e:
+            logger.warning("GTT cancel failed for %s id=%s: %s", instrument, gtt_id, e)
 
     # ------------------------------------------------------------------ #
     # Paper order simulation                                               #

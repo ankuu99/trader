@@ -110,8 +110,7 @@ def main():
         if args.to_dt else datetime.now()
     ).replace(hour=23, minute=59, second=59)
 
-    # Intraday calibration always uses 5-minute candles
-    timeframe = "5minute"
+    timeframe = config.candle_timeframe
 
     print(f"\n{'=' * 60}")
     print(f"  STRATEGY CALIBRATION — {args.strategy.upper()}")

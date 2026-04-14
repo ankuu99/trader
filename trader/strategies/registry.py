@@ -17,11 +17,15 @@ from trader.strategies.breakout import BreakoutStrategy
 from trader.strategies.ema_crossover import EMACrossoverStrategy
 from trader.strategies.ema_pullback import EMAPullbackStrategy
 from trader.strategies.group import StrategyGroup
+from trader.strategies.macd import MACDStrategy
+from trader.strategies.macd_rsi import MACDRSIStrategy
+from trader.strategies.macd_target import MACDTargetStrategy
 from trader.strategies.orb import ORBStrategy
 from trader.strategies.rsi import RSIStrategy
 from trader.strategies.rsi_ema import RSIEMAStrategy
 from trader.strategies.supertrend import SupertrendStrategy
 from trader.strategies.vwap import VWAPReversionStrategy
+from trader.strategies.vwap_pullback import VWAPPullbackStrategy
 
 # Maps config key → strategy class
 # Order matters: strategies are instantiated in this order per symbol.
@@ -30,9 +34,13 @@ STRATEGY_CLASSES: dict[str, type[Strategy]] = {
     "rsi":          RSIStrategy,
     "orb":          ORBStrategy,
     "vwap":         VWAPReversionStrategy,
+    "vwap_pullback": VWAPPullbackStrategy,
     "supertrend":   SupertrendStrategy,
     "bollinger":    BollingerBandStrategy,
     "ema_pullback": EMAPullbackStrategy,
+    "macd":         MACDStrategy,
+    "macd_rsi":     MACDRSIStrategy,
+    "macd_target":  MACDTargetStrategy,
     # Interday (daily candles, CNC)
     "ema_crossover": EMACrossoverStrategy,
     "rsi_ema":       RSIEMAStrategy,
@@ -48,10 +56,16 @@ FILTER_ONLY: set[str] = {"adx"}
 # Maps group config key → (primary strategy key, [filter strategy keys])
 GROUP_COMPOSITIONS: dict[str, tuple[str, list[str]]] = {
     # Intraday groups
-    "orb_supertrend": ("orb",          ["supertrend"]),
-    "rsi_bollinger":  ("rsi",          ["bollinger"]),
+    "orb_supertrend":      ("orb",          ["supertrend"]),
+    "orb_adx":             ("orb",          ["adx"]),
+    "orb_ema_pullback":    ("orb",          ["ema_pullback"]),
+    "rsi_bollinger":       ("rsi",          ["bollinger"]),
+    "rsi_supertrend":      ("rsi",          ["supertrend"]),
+    "rsi_vwap":            ("rsi",          ["vwap"]),
+    "vwap_pullback_adx":   ("vwap_pullback", ["adx"]),
+    "ema_pullback_adx":    ("ema_pullback", ["adx"]),
     # Interday groups
-    "ema_adx":        ("ema_crossover", ["adx"]),
+    "ema_adx":             ("ema_crossover", ["adx"]),
 }
 
 

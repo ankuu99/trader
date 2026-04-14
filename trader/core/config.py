@@ -113,23 +113,72 @@ class Config:
         return int(self._data["risk"]["max_open_positions"])
 
     @property
-    def product(self) -> str:
-        """Kite product type: MIS (intraday) or CNC (delivery/interday)."""
-        return self._data.get("product", "MIS")
+    def weekly_loss_limit(self) -> float:
+        """Weekly loss limit in rupees. 0 means disabled."""
+        pct = float(self._data["risk"].get("weekly_loss_limit_pct", 0))
+        return self.total_capital * pct / 100
 
     @property
-    def square_off_enabled(self) -> bool:
-        """Whether the system should force-close positions at square_off_time."""
-        return bool(self._data["risk"].get("square_off", True))
+    def regime_filter_enabled(self) -> bool:
+        return bool(self._data["risk"].get("regime_filter", {}).get("enabled", False))
+
+    @property
+    def regime_index_symbol(self) -> str:
+        return self._data["risk"].get("regime_filter", {}).get("index_symbol", "NSE:NIFTY 50")
+
+    @property
+    def regime_dma_period(self) -> int:
+        return int(self._data["risk"].get("regime_filter", {}).get("dma_period", 200))
+
+    @property
+    def regime_max_drawdown_pct(self) -> float:
+        return float(self._data["risk"].get("regime_filter", {}).get("max_drawdown_pct", 15.0))
+
+    @property
+    def atr_sizing_enabled(self) -> bool:
+        return bool(self._data["risk"].get("position_sizing", {}).get("atr_based", False))
+
+    @property
+    def atr_sizing_multiplier(self) -> float:
+        return float(self._data["risk"].get("position_sizing", {}).get("atr_multiplier", 2.0))
+
+    @property
+    def max_position_pct(self) -> float:
+        """Cap a single position at this % of total capital. 0 means no cap."""
+        return float(self._data["risk"].get("position_sizing", {}).get("max_position_pct", 8.0))
+
+    @property
+    def default_sl_pct(self) -> float:
+        """Fallback SL distance as % of price when no ATR is available. Default 2%."""
+        return float(self._data["risk"].get("default_sl_pct", 2.0))
+
+    @property
+    def trailing_stop_enabled(self) -> bool:
+        return bool(self._data["risk"].get("trailing_stop", {}).get("enabled", False))
+
+    @property
+    def chandelier_period(self) -> int:
+        return int(self._data["risk"].get("trailing_stop", {}).get("period", 22))
+
+    @property
+    def chandelier_multiplier(self) -> float:
+        return float(self._data["risk"].get("trailing_stop", {}).get("multiplier", 3.0))
+
+    @property
+    def product(self) -> str:
+        """Kite product type — always CNC (delivery). No intraday MIS trading."""
+        return "CNC"
+
+    @property
+    def candle_timeframe(self) -> str:
+        """Candle period for signal generation: 5minute, 15minute, 30minute, 60minute, day."""
+        return self._data.get("candle_timeframe", "day")
 
     @property
     def candle_minutes(self) -> int:
-        """LiveFeed candle bucket size in minutes."""
-        return int(self._data.get("candle_minutes", 5))
-
-    @property
-    def square_off_time(self) -> str:
-        return self._data["risk"].get("square_off_time", "15:15")
+        """LiveFeed candle bucket size in minutes, derived from candle_timeframe."""
+        mapping = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "day": 390}
+        return mapping.get(self.candle_timeframe, 390)
 
     # ------------------------------------------------------------------ #
     # Data                                                                 #

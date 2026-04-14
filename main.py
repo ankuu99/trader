@@ -1,15 +1,13 @@
 """
-Unified trading entry point — intraday and interday both run from here.
-All behaviour is driven by the active config file.
+Unified CNC trading entry point.
 
-    python main.py                                         # intraday (MIS, 5-min candles)
-    python main.py --config config/config_interday.yaml   # interday (CNC, daily candles)
+    python main.py                         # uses config/config.yaml
+    python main.py --config <path>         # uses alternate config file
 
 Config controls:
-    product          : MIS → market hours gate + square-off + daily position reset
-                       CNC → no gate, no square-off, positions persist overnight
-    candle_minutes   : LiveFeed bucket size (5 for intraday, 390 for daily)
-    square_off_enabled: whether to register the square-off scheduler job
+    candle_timeframe : candle period for signal generation (5minute, 15minute, 30minute, day…)
+    env              : paper | live
+    risk.*           : loss limits, regime filter, position sizing, trailing stop
 """
 
 import argparse
@@ -48,11 +46,14 @@ setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
 
 _MARKET_OPEN  = dtime(9, 15)
-_MARKET_CLOSE = dtime(15, 25)   # last candle that can generate a new entry
+_MARKET_CLOSE = dtime(15, 30)
+
+# Timeframes where order placement must be gated to market hours
+_INTRADAY_TIMEFRAMES = {"5minute", "15minute", "30minute", "60minute"}
 
 
 def main():
-    logger.info("Starting trader | env=%s | product=%s", config.env, config.product)
+    logger.info("Starting trader | env=%s | timeframe=%s", config.env, config.candle_timeframe)
     logger.info(
         "Capital: %.0f | Max risk/trade: %.0f | Daily loss limit: %.0f",
         config.total_capital,
@@ -61,7 +62,7 @@ def main():
     )
 
     # ------------------------------------------------------------------ #
-    # Core components                                                      #
+    # Core components                                                    #
     # ------------------------------------------------------------------ #
     kite = create_kite()
     store = Store(config.db_path)
@@ -70,7 +71,7 @@ def main():
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
 
     # ------------------------------------------------------------------ #
-    # Instrument token lookup                                              #
+    # Instrument token lookup                                            #
     # ------------------------------------------------------------------ #
     instruments = kite.instruments("NSE")
     symbol_to_token = {
@@ -82,7 +83,7 @@ def main():
         logger.warning("Instruments not found on NSE: %s", missing)
 
     # ------------------------------------------------------------------ #
-    # Strategies — one instance per instrument per strategy type          #
+    # Strategies — one instance per instrument per strategy type         #
     # ------------------------------------------------------------------ #
     strategies = []
     for symbol in valid_watchlist:
@@ -103,8 +104,9 @@ def main():
         orders.on_candle(candle)
         portfolio.refresh()
 
-        # Gate: no new strategy signals outside market hours (intraday only)
-        if config.product == "MIS":
+        # Gate: for intraday-frequency candles, block order placement outside market hours.
+        # For daily candles the signal fires at close — execution waits for next morning's open.
+        if config.candle_timeframe in _INTRADAY_TIMEFRAMES:
             ts = candle.get("timestamp")
             candle_time = ts.time() if ts is not None else None
             if candle_time is None or not (_MARKET_OPEN <= candle_time <= _MARKET_CLOSE):
@@ -117,7 +119,7 @@ def main():
             signal = strategy.on_candle(candle)
             if signal is None:
                 continue
-            order = risk.validate(signal)
+            order = risk.validate(signal, atr=signal.atr)
             if order is None:
                 continue
             order_id = orders.place(order)
@@ -172,7 +174,9 @@ def main():
     scheduler = Scheduler()
 
     # Warm up the timeframes needed by the active strategies
-    warmup_timeframes = ["5minute", "day"] if config.candle_minutes < 390 else ["day"]
+    warmup_timeframes = [config.candle_timeframe]
+    if config.candle_timeframe != "day":
+        warmup_timeframes.append("day")  # daily candles needed for day-level filters
 
     def pre_market():
         logger.info("Pre-market: warming up candle cache %s", warmup_timeframes)
@@ -193,22 +197,10 @@ def main():
             capital=config.total_capital,
         )
         risk.reset_day()
-        if config.product == "MIS":
-            risk.reset_positions()
-            logger.info("Post-market teardown complete")
-        else:
-            logger.info("Post-market update complete (positions held)")
+        logger.info("Post-market update complete (CNC positions held)")
 
     scheduler.on_pre_market(pre_market)
     scheduler.on_post_market(post_market)
-
-    if config.square_off_enabled:
-        def on_square_off():
-            logger.info("Square-off time reached — exiting all positions")
-            sq_orders = risk.square_off_all()
-            for sq_order in sq_orders:
-                orders.place(sq_order)
-        scheduler.on_square_off(on_square_off)
 
     # ------------------------------------------------------------------ #
     # Live feed                                                            #
@@ -226,8 +218,8 @@ def main():
     scheduler.start()
 
     logger.info(
-        "System ready | mode=%s | product=%s | instruments=%s | strategies=%d",
-        config.env, config.product, valid_watchlist, len(strategies),
+        "System ready | mode=%s | timeframe=%s | instruments=%s | strategies=%d",
+        config.env, config.candle_timeframe, valid_watchlist, len(strategies),
     )
     telegram.notify_startup(config.env, valid_watchlist, len(strategies))
 

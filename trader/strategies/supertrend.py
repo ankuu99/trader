@@ -36,6 +36,7 @@ class SupertrendStrategy(Strategy):
         self._lower: float | None = None   # final lower band
         self._supertrend: float | None = None
         self._trend: int = 1               # 1 = bullish, -1 = bearish
+        self._last_atr: float | None = None
 
     @property
     def name(self) -> str:
@@ -54,6 +55,7 @@ class SupertrendStrategy(Strategy):
             return None
 
         atr = self._calc_atr()
+        self._last_atr = atr
         mid = (max(self._highs) + min(self._lows)) / 2  # basic mid using window H/L
 
         raw_upper = mid + self._factor * atr
@@ -108,6 +110,7 @@ class SupertrendStrategy(Strategy):
                 signal_type=SignalType.ENTRY,
                 price_hint=close,
                 strategy=self.name,
+                atr=self._last_atr,
             )
 
         # Trend flipped to bearish → exit long

@@ -3,10 +3,12 @@ Run backtests for all configured strategies and instruments.
 
     python scripts/backtest.py [--config config/config_interday.yaml] \
                                [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--save]
+                               [--portfolio]
 
 Defaults to the last 90 days. Results are printed to stdout.
-Pass --save to also write per-strategy CSV trade logs to backtest_results/.
+Pass --save to also write trade CSV(s) to backtest_results/.
 Pass --config to use a different config file (e.g. interday).
+Pass --portfolio to run a single shared-capital backtest instead of isolated per-strategy runs.
 """
 
 import argparse
@@ -29,6 +31,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
 
 from trader.auth.session import create_kite
 from trader.backtest.engine import Backtest
+from trader.backtest.portfolio import PortfolioBacktest
 from trader.core.config import config
 from trader.core.logger import setup, get_logger
 from trader.data.historical import warm_up
@@ -49,6 +52,8 @@ def parse_args():
                         help="End date YYYY-MM-DD (default: today)")
     parser.add_argument("--save", action="store_true",
                         help="Save trade logs to backtest_results/")
+    parser.add_argument("--portfolio", action="store_true",
+                        help="Portfolio mode: shared capital + risk manager across all symbols")
     return parser.parse_args()
 
 
@@ -61,14 +66,12 @@ def main():
                else to_dt - timedelta(days=config.historical_cache_days))
     to_dt = to_dt.replace(hour=23, minute=59, second=59)
 
-    # Interday uses daily candles; intraday uses 5-minute candles
-    timeframe = "day" if config.product == "CNC" else "5minute"
-    reset_daily = config.product != "CNC"
+    timeframe = config.candle_timeframe
 
     print(f"\nBacktest period: {from_dt.date()} → {to_dt.date()}")
     print(f"Instruments    : {', '.join(config.watchlist)}")
     print(f"Capital        : ₹{config.total_capital:,.0f}")
-    print(f"Mode           : {'interday (CNC/daily)' if not reset_daily else 'intraday (MIS/5min)'}\n")
+    print(f"Timeframe      : {timeframe}\n")
 
     kite = create_kite()
     store = Store(config.db_path)
@@ -83,6 +86,15 @@ def main():
         out_dir = Path("backtest_results")
         out_dir.mkdir(exist_ok=True)
 
+    if args.portfolio:
+        _run_portfolio(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args)
+    else:
+        _run_per_symbol(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args)
+
+
+def _run_per_symbol(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args):
+    """Original isolated mode: each (symbol, strategy) gets full capital independently."""
+    out_dir = Path("backtest_results") if args.save else None
     all_reports = []
 
     for symbol in config.watchlist:
@@ -96,29 +108,50 @@ def main():
                 lookback_days=(to_dt - from_dt).days + 5)
 
         for strategy in build_strategies(symbol, config):
-            bt = Backtest(store, strategy, capital=config.total_capital,
-                          reset_daily=reset_daily)
+            bt = Backtest(store, strategy, capital=config.total_capital)
             report = bt.run(symbol, timeframe, from_dt, to_dt)
             report.print_summary()
             all_reports.append(report)
 
-            if args.save and report.trades:
+            if out_dir and report.trades:
                 fname = f"{out_dir}/{symbol.replace(':', '_')}_{strategy.name}.csv"
                 report.save_trades(fname)
                 print(f"  Trades saved → {fname}")
 
-    # Overall summary
     if all_reports:
         total_pnl = sum(r.total_pnl() for r in all_reports)
         total_trades = sum(r.total_trades() for r in all_reports)
         wins = sum(r.winning_trades() for r in all_reports)
         print("=" * 55)
-        print(f"  OVERALL SUMMARY")
+        print(f"  OVERALL SUMMARY  (isolated runs — not portfolio)")
         print(f"  Total P&L    : ₹{total_pnl:,.2f}")
         print(f"  Overall return: {total_pnl / config.total_capital:.2%}")
         print(f"  Total trades : {total_trades}")
         print(f"  Overall win% : {wins/total_trades:.1%}" if total_trades else "  No trades")
         print("=" * 55)
+
+
+def _run_portfolio(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args):
+    """Portfolio mode: shared capital + shared risk manager across all symbols."""
+    out_dir = Path("backtest_results") if args.save else None
+
+    for symbol in config.watchlist:
+        token = symbol_to_token.get(symbol)
+        if token is None:
+            print(f"  ⚠ {symbol} not found on NSE — skipping")
+            continue
+        print(f"Fetching historical data for {symbol}...")
+        warm_up(kite, store, token, symbol, timeframe,
+                lookback_days=(to_dt - from_dt).days + 5)
+
+    bt = PortfolioBacktest(store, capital=config.total_capital)
+    report = bt.run(config.watchlist, timeframe, from_dt, to_dt)
+    report.print_summary()
+
+    if out_dir and report.trades:
+        path = str(out_dir / "portfolio.csv")
+        report.save_trades(path)
+        print(f"  Trades saved → {path}")
 
 
 if __name__ == "__main__":

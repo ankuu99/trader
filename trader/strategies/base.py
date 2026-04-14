@@ -27,6 +27,8 @@ class Signal:
     signal_type: SignalType
     price_hint: float        # indicative price at signal time (LTP)
     strategy: str            # name of the strategy that generated this
+    atr: float | None = None          # ATR at signal time; used by RiskManager for SL and sizing
+    target_price: float | None = None # ENTRY only: intra-candle target; engine checks HIGH, live uses GTT OCO
 
 
 class Strategy(ABC):

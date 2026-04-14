@@ -35,6 +35,8 @@ from trader.strategies.base import Strategy
 from trader.strategies.group import StrategyGroup
 from trader.strategies.registry import FILTER_ONLY, GROUP_COMPOSITIONS, STRATEGY_CLASSES
 
+ALL_STRATEGIES: set[str] = (set(STRATEGY_CLASSES) | set(GROUP_COMPOSITIONS)) - set(FILTER_ONLY)
+
 
 # ------------------------------------------------------------------ #
 # Result dataclass                                                     #
@@ -210,7 +212,6 @@ class CalibrationRunner:
             bt = Backtest(
                 self._store, strategy,
                 capital=self._capital,
-                reset_daily=True,
             )
             report = bt.run(symbol, self._timeframe, self._from_dt, self._to_dt)
 

@@ -43,7 +43,7 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 - Place market, limit, SL, and SL-M orders
 - Support order types: regular, BO (bracket order), CO (cover order)
 - Support exchange segments: NSE, BSE, NFO, MCX
-- Support product types: CNC (delivery), MIS (intraday), NRML (F&O)
+- Support product types: CNC (delivery), ~~MIS (intraday)~~
 
 ### 3.2 Order Lifecycle
 - Modify open orders (price, quantity)
@@ -52,14 +52,14 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 
 ### 3.3 Order Logging
 - Log every order action with timestamp, instrument, type, quantity, price, and status
-- Persist order log to disk (SQLite or CSV)
+- Persist order log to disk (SQLite)
 
 ---
 
 ## 4. Portfolio & Position Tracking
 
 - Fetch current holdings (long-term positions / CNC)
-- Fetch intraday positions (MIS/NRML)
+~~- Fetch intraday positions (MIS/NRML)~~
 - Track unrealised and realised P&L
 - Display net position per instrument
 
@@ -79,12 +79,12 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ### 5.2 Built-in Strategies
 
 **Intraday (5-minute candles, MIS):**
-- **RSI Mean Reversion** — buy oversold, sell overbought on NSE equities
-- **Opening Range Breakout (ORB)** — trade breakout of first N minutes high/low (configurable)
-- **VWAP Reversion** — enter on VWAP deviation, exit on mean reversion
-- **Supertrend** — ATR-based trend filter; usable standalone or as a group filter
-- **Bollinger Band** — mean reversion at band extremes
-- **EMA Pullback** — enter on pullbacks to fast EMA in an uptrend
+~~- **RSI Mean Reversion** — buy oversold, sell overbought on NSE equities~~
+~~- **Opening Range Breakout (ORB)** — trade breakout of first N minutes high/low (configurable)~~
+~~- **VWAP Reversion** — enter on VWAP deviation, exit on mean reversion~~
+~~- **Supertrend** — ATR-based trend filter; usable standalone or as a group filter~~
+~~- **Bollinger Band** — mean reversion at band extremes~~
+~~- **EMA Pullback** — enter on pullbacks to fast EMA in an uptrend~~
 
 **Interday (daily candles, CNC):**
 - **EMA Crossover** — BUY on golden cross, EXIT on death cross
@@ -212,46 +212,6 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 
 ---
 
-## 16. Interday (Positional/Swing) Trading
-
-### Overview
-A separate execution mode for holding positions overnight or across multiple days. Shares all core infrastructure with the intraday system — only config and product type differ.
-
-### Execution Model
-- **Unified entry point:** `main.py --config config/config_interday.yaml` (or the convenience wrapper `main_interday.py`)
-- **Separate config:** `config/config_interday.yaml`
-- **Separate SQLite DB:** `data/market_interday.db` (avoids mixing candle timeframes)
-- **Shared:** all `trader/` modules — auth, data, orders, risk, portfolio, notifications, backtest
-
-### Key Differences from Intraday
-
-| Concern | Intraday | Interday |
-|---|---|---|
-| Product type | MIS (auto sq-off) | CNC (delivery) |
-| Candle timeframe | 5-minute | Daily |
-| Square-off | 3:15 PM daily | None (hold until signal) |
-| Daily P&L reset | Yes (post-market) | No (positions carry forward) |
-| Risk — loss limit | Daily | Weekly / per-trade only |
-| Strategies | RSI mean reversion, ORB | EMA crossover (initial) |
-| Backtest reset | Per calendar day | Never (hold overnight) |
-
-### Strategy
-- **EMA Crossover (initial):** Fast EMA (9) / Slow EMA (21) on daily candles. Buy on golden cross, exit on death cross.
-- Future: additional multi-day momentum and trend-following strategies
-
-### Risk Management Adjustments
-- No daily square-off enforced by the system (Zerodha CNC positions are never auto-closed)
-- Per-trade SL still mandatory
-- Weekly loss limit instead of daily (configurable)
-- Position sizing same formula: `max_risk_per_trade ÷ SL distance`
-
-### Scheduling
-- Pre-market: warm up 1-year daily candle cache
-- Post-market: refresh positions, log P&L — no reset of open positions
-- No square-off job
-
----
-
 ## 18. Out of Scope (for now)
 
 - Multi-user support
@@ -267,6 +227,5 @@ A separate execution mode for holding positions overnight or across multiple day
 1. **Strategies (initial):** RSI mean reversion and Opening Range Breakout (ORB) — equities only (NSE), no F&O
 2. **Paper trading:** 2 weeks, running in parallel with backtesting before going live
 3. **Starting capital:** ₹20,000. Per-trade risk: 1–2% (₹200–₹400 max loss per trade)
-4. **Telegram bot token:** Owner to set up via BotFather — deferred to notification phase
+4. **Telegram bot token:** already done
 5. **Historical data storage:** Single unified SQLite DB with instrument column. Migrate to Parquet if performance degrades.
-6. **Auto square-off:** System attempts square-off at 3:15 PM IST; Zerodha's 3:20 PM auto square-off acts as the hard backstop
