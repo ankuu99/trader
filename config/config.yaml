@@ -1,154 +1,49 @@
 env: paper
-candle_timeframe: 4hour
+candle_timeframe: 15minute
 capital:
-  total: 50000
-  max_risk_per_trade_pct: 3.0
-  daily_loss_limit_pct: 7.0
+  total: 100000
+  max_risk_per_trade_pct: 7.0
+  daily_loss_limit_pct: 10.0
 watchlist:
-- NSE:IDEA
-- NSE:INDHOTEL
-- NSE:APOLLO
-- NSE:INDIGO
-- NSE:ENKEI
-- NSE:GOODRICKE
-- NSE:SHRIGANG
-- NSE:ISL
-- NSE:AGI
-- NSE:SHELTER
-- NSE:VIVIDIND
-- NSE:ARCHITORG
-- NSE:MFL
-- NSE:DMCC
-- NSE:RAMAPHO
-- NSE:CEETA
-- NSE:NIRLON
-- NSE:MAYURUNIQ
-- NSE:PFIZER
-- NSE:TRANSCHEM
-- NSE:SCHNEIDER
-- NSE:GET&D
-- NSE:BOSCHLTD
-- NSE:SMITHS
-- NSE:KPT
-- NSE:SHIVATEX
-- NSE:SWIGGY
-- NSE:PAYTM
-- NSE:MEESHO
-- NSE:IDEA
-- NSE:JIOFIN
-- NSE:ETERNAL
-- NSE:NAUKRI
-- NSE:IRFC
-- NSE:POLICYBZR
-- NSE:IOB
-- NSE:IDFCFIRSTB
-- NSE:BIOCON
-- NSE:PNB
-- NSE:YESBANK
-- NSE:INDUSINDBK
-- NSE:DLF
-- NSE:GODREJPROP
-- NSE:HDFCLIFE
-- NSE:SHREECEM
-- NSE:IDBI
-- NSE:IOC
-- NSE:NHPC
-- NSE:GRASIM
-- NSE:HDFCBANK
-- NSE:PRESTIGE
+
+# - NSE:HEMIPROP
+# - NSE:BDL
+# - NSE:MRPL
+- NSE:JAMNAAUTO
+
 strategies:
   rsi:
     enabled: false
-    period: 21
+    period: 14
     oversold: 30
-    overbought: 65
-    timeframe: 5minute
-    midpoint: 50
-  orb:
-    enabled: false
-    range_minutes: 15
-    timeframe: 30minute
-    volume_filter: true
-    volume_lookback: 20
-    volume_multiplier: 1.5
-    gap_filter: true
-    gap_pct: 2.0
-  vwap:
-    enabled: false
-    min_deviation_pct: 0.75
-  vwap_pullback:
-    enabled: false
-    sma_period: 30
-    vwap_touch_tolerance_pct: 0.1
-  supertrend:
-    enabled: false
-    period: 7
-    factor: 3.0
-  bollinger:
-    enabled: false
-    period: 15
-    std: 3.0
-  ema_pullback:
-    enabled: false
-    fast: 12
-    slow: 100
   macd:
     enabled: false
-    fast: 10
-    slow: 30
-    signal: 12
-  macd_target:
-    enabled: true
-    rsi_period: 14
-    rsi_oversold: 25
     fast: 12
+    slow: 26
+    signal: 9
+  zlmtf_macd:
+    enabled: false
+    fast: 9
     slow: 18
     signal: 9
-    target_pct: 1
-  macd_rsi:
-    enabled: false
-    rsi_period: 14
-    rsi_oversold: 25
-    rsi_midpoint: 70
-    macd_fast: 9
-    macd_slow: 18
-    macd_signal: 7
-  orb_supertrend:
-    enabled: false
-  orb_adx:
-    enabled: false
-  orb_ema_pullback:
-    enabled: false
-  rsi_bollinger:
-    enabled: false
-  rsi_supertrend:
-    enabled: false
-  rsi_vwap:
-    enabled: false
-  vwap_pullback_adx:
-    enabled: false
-  ema_pullback_adx:
-    enabled: false
-  adx:
-    period: 20
-    threshold: 20
+    current_tf_minutes:  30
+    htf_minutes: 60
+    lookback_bars: 5
+  lr_extrema:
+    enabled: true
+    warmup_bars: 200
+    threshold: 0.90
+    profit_pct: 5.0
+    stop_pct: 2.0
+    hold_bars: 150
+    retrain_every: 50
+    extrema_order: 5
 risk:
-  max_open_positions: 10
-  default_sl_pct: 5.0
-  weekly_loss_limit_pct: 10
-  regime_filter:
-    enabled: false
-    index_symbol: NSE:NIFTY 50
-    dma_period: 200
-    max_drawdown_pct: 15.0
-  position_sizing:
-    atr_based: false
-    atr_multiplier: 2.0
-    max_position_pct: 20.0
-  trailing_stop:
-    enabled: false
-    period: 10
-    multiplier: 2.0
+  gtt_enabled: false
+  max_open_positions: 5
+  default_sl_pct: 2
+  risk_reward: 4
+  max_capital_per_stock_pct: 100.0
 data:
   db_path: data/market.db
   historical_cache_days: 90

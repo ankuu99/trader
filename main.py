@@ -1,22 +1,17 @@
 """
-Unified CNC trading entry point.
+Trader entry point.
 
-    python main.py                         # uses config/config.yaml
-    python main.py --config <path>         # uses alternate config file
-
-Config controls:
-    candle_timeframe : candle period for signal generation (5minute, 15minute, 30minute, day…)
-    env              : paper | live
-    risk.*           : loss limits, regime filter, position sizing, trailing stop
+    python main.py                   # uses config/config.yaml
+    python main.py --config <path>   # uses alternate config file
 """
 
 import argparse
 import os
 import sys
+import time
 from datetime import time as dtime
 from pathlib import Path
 
-# Parse --config early so TRADER_CONFIG is set before trader modules are imported
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--config", default=None)
 _pre_args, _ = _pre.parse_known_args()
@@ -39,40 +34,29 @@ from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
 from trader.risk.manager import RiskManager
 from trader.scheduler.jobs import Scheduler
-from trader.strategies.base import Direction, SignalType
 from trader.strategies.registry import build_strategies
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
 
-_MARKET_OPEN  = dtime(9, 15)
+_MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
-
-# Timeframes where order placement must be gated to market hours
 _INTRADAY_TIMEFRAMES = {"5minute", "15minute", "30minute", "60minute"}
 
 
 def main():
-    logger.info("Starting trader | env=%s | timeframe=%s", config.env, config.candle_timeframe)
     logger.info(
-        "Capital: %.0f | Max risk/trade: %.0f | Daily loss limit: %.0f",
-        config.total_capital,
-        config.max_risk_per_trade,
-        config.daily_loss_limit,
+        "Starting trader | env=%s | timeframe=%s | capital=%.0f",
+        config.env, config.candle_timeframe, config.total_capital,
     )
 
-    # ------------------------------------------------------------------ #
-    # Core components                                                    #
-    # ------------------------------------------------------------------ #
     kite = create_kite()
     store = Store(config.db_path)
     risk = RiskManager()
     orders = OrderManager(kite=kite, store=store, mode=config.env)
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
 
-    # ------------------------------------------------------------------ #
-    # Instrument token lookup                                            #
-    # ------------------------------------------------------------------ #
+    # Resolve instrument tokens
     instruments = kite.instruments("NSE")
     symbol_to_token = {
         f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
@@ -82,129 +66,86 @@ def main():
     if missing:
         logger.warning("Instruments not found on NSE: %s", missing)
 
-    # ------------------------------------------------------------------ #
-    # Strategies — one instance per instrument per strategy type         #
-    # ------------------------------------------------------------------ #
+    # Build strategies
     strategies = []
     for symbol in valid_watchlist:
         strategies.extend(build_strategies(symbol, config))
+    logger.info("Strategies loaded: %d", len(strategies))
 
-    # ------------------------------------------------------------------ #
-    # Signal → risk → order pipeline                                      #
-    # ------------------------------------------------------------------ #
+    # Order fill callback
+    def handle_order_update(update: dict):
+        if update.get("status") != "COMPLETE":
+            return
+        instrument = update["instrument"]
+        fill_price = update.get("fill_price") or update.get("price") or 0.0
+        quantity = update["quantity"]
+        direction = update["direction"]
+        strategy = update.get("strategy", "")
+        if direction == "BUY":
+            risk.on_order_filled(instrument, fill_price, quantity)
+        else:
+            risk.close_position(instrument)
+        portfolio.on_order_filled(instrument, direction, quantity, fill_price)
+        telegram.notify_order_filled(instrument, direction, quantity, fill_price,
+                                     strategy=strategy, mode=config.env)
+        for strat in strategies:
+            if strat.instrument == instrument:
+                strat.on_order_update(update)
+
+    orders.register_update_callback(handle_order_update)
+
+    # Candle handler
     def handle_candle(candle: dict):
-        # Resolve symbol first — needed for instrument-specific paper fills
         symbol = next(
             (s for s, t in symbol_to_token.items() if t == candle.get("instrument_token")),
             None,
         )
-        candle["_symbol"] = symbol  # injected for order manager
-
-        # Always fill pending paper orders (candle arrived regardless of time)
+        candle["_symbol"] = symbol
         orders.on_candle(candle)
-        portfolio.refresh()
 
-        # Gate: for intraday-frequency candles, block order placement outside market hours.
-        # For daily candles the signal fires at close — execution waits for next morning's open.
         if config.candle_timeframe in _INTRADAY_TIMEFRAMES:
             ts = candle.get("timestamp")
             candle_time = ts.time() if ts is not None else None
             if candle_time is None or not (_MARKET_OPEN <= candle_time <= _MARKET_CLOSE):
                 return
 
-        # Run all strategies for this instrument's candle
         for strategy in strategies:
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
             if signal is None:
                 continue
-            order = risk.validate(signal, atr=signal.atr)
+            order = risk.validate(signal)
             if order is None:
                 continue
-            order_id = orders.place(order)
-            logger.info("Order placed | id=%s | strategy=%s", order_id, signal.strategy)
+            orders.place(order)
 
-    def handle_order_update(update: dict):
-        status = update.get("status")
-        instrument = update["instrument"]
-        direction = update["direction"]
-        qty = update["quantity"]
-        fill_price = update.get("fill_price") or update.get("price") or 0.0
-        signal_type = update.get("signal_type", SignalType.ENTRY.value)
-
-        if status == "REJECTED":
-            telegram.notify_order_rejected(
-                instrument, direction,
-                reason=update.get("status_message", "unknown"),
-                mode=config.env,
-            )
-            return
-
-        if status != "COMPLETE":
-            return
-
-        risk.on_order_filled(
-            instrument, Direction(direction), qty, fill_price, SignalType(signal_type)
-        )
-        portfolio.on_order_filled(instrument, direction, qty, fill_price, signal_type)
-
-        for strategy in strategies:
-            if strategy.instrument == instrument:
-                strategy.on_order_update(update)
-
-        telegram.notify_order_filled(
-            instrument, direction, qty, fill_price,
-            strategy=update.get("strategy", ""),
-            mode=config.env,
-        )
-
-        if risk.is_halted():
-            telegram.notify_halt(
-                daily_pnl=risk.realised_pnl(),
-                limit=config.daily_loss_limit,
-                mode=config.env,
-            )
-
-    orders.register_update_callback(handle_order_update)
-
-    # ------------------------------------------------------------------ #
-    # Scheduler                                                            #
-    # ------------------------------------------------------------------ #
+    # Scheduler
     scheduler = Scheduler()
 
-    # Warm up the timeframes needed by the active strategies
-    warmup_timeframes = [config.candle_timeframe]
-    if config.candle_timeframe != "day":
-        warmup_timeframes.append("day")  # daily candles needed for day-level filters
-
     def pre_market():
-        logger.info("Pre-market: warming up candle cache %s", warmup_timeframes)
+        logger.info("Pre-market: warming up candle cache")
         for symbol in valid_watchlist:
             token = symbol_to_token[symbol]
-            for tf in warmup_timeframes:
-                warm_up(kite, store, token, symbol, tf,
-                        lookback_days=config.historical_cache_days)
+            warm_up(kite, store, token, symbol, config.candle_timeframe,
+                    config.historical_cache_days)
 
     def post_market():
         portfolio.log_summary()
-        snapshot = portfolio.snapshot()
+        positions = [p for p in portfolio._positions.values() if p.quantity != 0]
         telegram.notify_daily_pnl(
-            realised=snapshot.total_realised_pnl,
-            unrealised=snapshot.total_unrealised_pnl,
-            total_trades=len(snapshot.positions),
+            realised=sum(p.realised_pnl for p in positions),
+            unrealised=sum(p.unrealised_pnl for p in positions),
+            total_trades=len(positions),
             mode=config.env,
             capital=config.total_capital,
         )
         risk.reset_day()
-        logger.info("Post-market update complete (CNC positions held)")
 
     scheduler.on_pre_market(pre_market)
     scheduler.on_post_market(post_market)
 
-    # ------------------------------------------------------------------ #
-    # Live feed                                                            #
-    # ------------------------------------------------------------------ #
+    # Live feed
     tokens = [symbol_to_token[s] for s in valid_watchlist]
     feed = LiveFeed(
         api_key=config.kite_api_key,
@@ -214,30 +155,28 @@ def main():
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)
     feed.register_tick_handler(lambda _tick: None)
+    if config.env == "live":
+        feed.register_order_update_handler(orders.on_kite_order_update)
 
     scheduler.start()
+    pre_market()
+    feed.start(threaded=True)
 
     logger.info(
-        "System ready | mode=%s | timeframe=%s | instruments=%s | strategies=%d",
-        config.env, config.candle_timeframe, valid_watchlist, len(strategies),
+        "System ready | mode=%s | instruments=%s | strategies=%d",
+        config.env, valid_watchlist, len(strategies),
     )
     telegram.notify_startup(config.env, valid_watchlist, len(strategies))
 
-    pre_market()
-
-    feed.start(threaded=True)  # non-blocking so we can catch KeyboardInterrupt
-
     try:
-        import time
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.info("Shutdown requested (Ctrl+C)")
+        logger.info("Shutting down...")
     finally:
-        logger.info("Stopping feed and scheduler...")
         feed.stop()
         scheduler.stop()
-        logger.info("Trader stopped cleanly")
+        logger.info("Trader stopped")
 
 
 if __name__ == "__main__":

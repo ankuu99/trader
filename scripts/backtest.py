@@ -1,28 +1,18 @@
 """
-Run backtests for all configured strategies and instruments.
+Backtest runner — replays historical candles through the same pipeline as main.py.
 
-    python scripts/backtest.py [--config config/config_interday.yaml] \
-                               [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--save]
-                               [--portfolio]
+    python scripts/backtest.py --from 2025-01-01
+    python scripts/backtest.py --from 2025-01-01 --to 2025-12-31
 
-Defaults to the last 90 days. Results are printed to stdout.
-Pass --save to also write trade CSV(s) to backtest_results/.
-Pass --config to use a different config file (e.g. interday).
-Pass --portfolio to run a single shared-capital backtest instead of isolated per-strategy runs.
+Uses the same RiskManager, OrderManager (paper mode), and Strategy instances as live.
+The only backtest-specific addition is SL simulation: checks candle low against the
+stop-loss price placed with each order.
 """
 
 import argparse
-import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-
-# Parse --config early so TRADER_CONFIG is set before trader modules are imported
-_pre = argparse.ArgumentParser(add_help=False)
-_pre.add_argument("--config", default=None)
-_pre_args, _ = _pre.parse_known_args()
-if _pre_args.config:
-    os.environ["TRADER_CONFIG"] = _pre_args.config
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -30,128 +20,226 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
 
 from trader.auth.session import create_kite
-from trader.backtest.engine import Backtest
-from trader.backtest.portfolio import PortfolioBacktest
 from trader.core.config import config
-from trader.core.logger import setup, get_logger
-from trader.data.historical import warm_up
+from trader.core.logger import get_logger, setup
+from trader.data.historical import get_candles
 from trader.data.store import Store
+from trader.orders.manager import OrderManager
+from trader.risk.manager import RiskManager
 from trader.strategies.registry import build_strategies
 
-setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during backtest
+setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run backtests")
-    parser.add_argument("--config", default=None,
-                        help="Path to config file (default: config/config.yaml)")
-    parser.add_argument("--from", dest="from_dt", default=None,
-                        help="Start date YYYY-MM-DD (default: 90 days ago)")
-    parser.add_argument("--to", dest="to_dt", default=None,
-                        help="End date YYYY-MM-DD (default: today)")
-    parser.add_argument("--save", action="store_true",
-                        help="Save trade logs to backtest_results/")
-    parser.add_argument("--portfolio", action="store_true",
-                        help="Portfolio mode: shared capital + risk manager across all symbols")
-    return parser.parse_args()
-
-
-
 def main():
-    args = parse_args()
+    parser = argparse.ArgumentParser(description="Backtest strategies on historical data")
+    parser.add_argument("--from", dest="from_date", required=True, help="Start date YYYY-MM-DD")
+    parser.add_argument("--to", dest="to_date", default=datetime.now().strftime("%Y-%m-%d"),
+                        help="End date YYYY-MM-DD (default: today)")
+    args = parser.parse_args()
 
-    to_dt = datetime.strptime(args.to_dt, "%Y-%m-%d") if args.to_dt else datetime.now()
-    from_dt = (datetime.strptime(args.from_dt, "%Y-%m-%d") if args.from_dt
-               else to_dt - timedelta(days=config.historical_cache_days))
-    to_dt = to_dt.replace(hour=23, minute=59, second=59)
-
-    timeframe = config.candle_timeframe
-
-    print(f"\nBacktest period: {from_dt.date()} → {to_dt.date()}")
-    print(f"Instruments    : {', '.join(config.watchlist)}")
-    print(f"Capital        : ₹{config.total_capital:,.0f}")
-    print(f"Timeframe      : {timeframe}\n")
+    from_dt = datetime.strptime(args.from_date, "%Y-%m-%d")
+    to_dt = datetime.strptime(args.to_date, "%Y-%m-%d").replace(hour=23, minute=59)
 
     kite = create_kite()
     store = Store(config.db_path)
+    store.clear_backtest_data()
 
-    # Resolve instrument tokens
     instruments = kite.instruments("NSE")
     symbol_to_token = {
         f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
     }
+    valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
+    if not valid_watchlist:
+        print("No valid instruments in watchlist.")
+        return
 
-    if args.save:
-        out_dir = Path("backtest_results")
-        out_dir.mkdir(exist_ok=True)
+    risk = RiskManager()
+    # kite=None is safe: OrderManager never calls kite in paper mode
+    orders = OrderManager(kite=None, store=store, mode="paper")
 
-    if args.portfolio:
-        _run_portfolio(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args)
-    else:
-        _run_per_symbol(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args)
+    # Track open positions for SL simulation: { instrument: {entry, sl, qty, entry_date} }
+    open_positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    current_ts: list = [None]  # mutable container so the closure can read it
 
+    def handle_order_update(update: dict):
+        if update.get("status") != "COMPLETE":
+            return
+        instrument = update["instrument"]
+        fill_price = update.get("fill_price") or update.get("price") or 0.0
+        direction = update.get("direction", "BUY")
+        quantity = update["quantity"]
 
-def _run_per_symbol(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args):
-    """Original isolated mode: each (symbol, strategy) gets full capital independently."""
-    out_dir = Path("backtest_results") if args.save else None
-    all_reports = []
+        if direction == "SELL" and instrument in open_positions:
+            # Strategy-driven exit fill
+            pos = open_positions.pop(instrument)
+            pnl = (fill_price - pos["entry"]) * pos["qty"]
+            trades.append({
+                "instrument": instrument,
+                "entry": pos["entry"],
+                "exit": fill_price,
+                "qty": pos["qty"],
+                "pnl": pnl,
+                "reason": "STRATEGY",
+                "entry_date": pos["entry_date"],
+                "exit_date": current_ts[0],
+            })
+            risk.close_position(instrument)
+            logger.info("BT STRATEGY exit | %s | exit=%.2f | pnl=%.2f", instrument, fill_price, pnl)
+            return
 
-    for symbol in config.watchlist:
-        token = symbol_to_token.get(symbol)
-        if token is None:
-            print(f"  ⚠ {symbol} not found on NSE — skipping")
+        # BUY fill — open new position
+        sl_price = update.get("trigger_price") or 0.0
+        open_positions[instrument] = {
+            "entry": fill_price,
+            "sl": sl_price,
+            "target": round(fill_price + (fill_price - sl_price) * config.risk_reward, 2),
+            "qty": quantity,
+            "entry_date": current_ts[0],
+        }
+        risk.on_order_filled(instrument, fill_price, quantity)
+        logger.info(
+            "BT fill | %s x%d @ %.2f | SL=%.2f target=%.2f",
+            instrument, quantity, fill_price, sl_price, open_positions[instrument]["target"],
+        )
+
+    orders.register_update_callback(handle_order_update)
+
+    strategies = []
+    for symbol in valid_watchlist:
+        strategies.extend(build_strategies(symbol, config))
+
+    logger.info(
+        "Backtest | %s to %s | instruments=%s | strategies=%d",
+        args.from_date, args.to_date, valid_watchlist, len(strategies),
+    )
+
+    # Replay candles per instrument
+    for symbol in valid_watchlist:
+        token = symbol_to_token[symbol]
+        df = get_candles(kite, store, token, symbol, config.candle_timeframe, from_dt, to_dt)
+
+        if df.empty:
+            logger.warning("No candles for %s in range %s – %s", symbol, args.from_date, args.to_date)
             continue
 
-        print(f"Fetching historical data for {symbol}...")
-        warm_up(kite, store, token, symbol, timeframe,
-                lookback_days=(to_dt - from_dt).days + 5)
+        logger.info("Replaying %d candles for %s", len(df), symbol)
 
-        for strategy in build_strategies(symbol, config):
-            bt = Backtest(store, strategy, capital=config.total_capital)
-            report = bt.run(symbol, timeframe, from_dt, to_dt)
-            report.print_summary()
-            all_reports.append(report)
+        for _, row in df.iterrows():
+            current_ts[0] = row["timestamp"]
+            candle = {
+                "instrument_token": token,
+                "timestamp": row["timestamp"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["volume"]),
+                "_symbol": symbol,
+            }
 
-            if out_dir and report.trades:
-                fname = f"{out_dir}/{symbol.replace(':', '_')}_{strategy.name}.csv"
-                report.save_trades(fname)
-                print(f"  Trades saved → {fname}")
+            # Fill any pending entry orders at this candle's open
+            orders.on_candle(candle)
 
-    if all_reports:
-        total_pnl = sum(r.total_pnl() for r in all_reports)
-        total_trades = sum(r.total_trades() for r in all_reports)
-        wins = sum(r.winning_trades() for r in all_reports)
-        print("=" * 55)
-        print(f"  OVERALL SUMMARY  (isolated runs — not portfolio)")
-        print(f"  Total P&L    : ₹{total_pnl:,.2f}")
-        print(f"  Overall return: {total_pnl / config.total_capital:.2%}")
-        print(f"  Total trades : {total_trades}")
-        print(f"  Overall win% : {wins/total_trades:.1%}" if total_trades else "  No trades")
-        print("=" * 55)
+            # Simulate GTT OCO: check SL (low) and target (high) hits
+            if config.gtt_enabled and symbol in open_positions:
+                pos = open_positions[symbol]
+                sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
+                tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
+                if sl_hit or tgt_hit:
+                    # If both hit in same candle, assume SL (conservative)
+                    if sl_hit:
+                        exit_price, reason = pos["sl"], "SL"
+                    else:
+                        exit_price, reason = pos["target"], "TARGET"
+                    pnl = (exit_price - pos["entry"]) * pos["qty"]
+                    trades.append({
+                        "instrument": symbol,
+                        "entry": pos["entry"],
+                        "exit": exit_price,
+                        "qty": pos["qty"],
+                        "pnl": pnl,
+                        "reason": reason,
+                        "entry_date": pos["entry_date"],
+                        "exit_date": candle["timestamp"],
+                    })
+                    del open_positions[symbol]
+                    risk.close_position(symbol)
+                    logger.info("BT %s | %s | exit=%.2f | pnl=%.2f", reason, symbol, exit_price, pnl)
+
+            # Run strategies
+            for strategy in strategies:
+                if strategy.instrument != symbol:
+                    continue
+                signal = strategy.on_candle(candle)
+                if signal is None:
+                    continue
+                order = risk.validate(signal)
+                if order is None:
+                    continue
+                orders.place(order)
+
+    # Close any remaining open positions at last known price
+    for symbol, pos in list(open_positions.items()):
+        last_close = pos["entry"]  # fallback if we can't get last price
+        pnl = (last_close - pos["entry"]) * pos["qty"]  # 0 if same price
+        trades.append({
+            "instrument": symbol,
+            "entry": pos["entry"],
+            "exit": last_close,
+            "qty": pos["qty"],
+            "pnl": pnl,
+            "reason": "OPEN@END",
+            "entry_date": pos["entry_date"],
+            "exit_date": to_dt,
+        })
+
+    _print_summary(trades, args.from_date, args.to_date)
 
 
-def _run_portfolio(store, kite, symbol_to_token, from_dt, to_dt, timeframe, args):
-    """Portfolio mode: shared capital + shared risk manager across all symbols."""
-    out_dir = Path("backtest_results") if args.save else None
+def _print_summary(trades: list[dict], from_date: str, to_date: str):
+    print(f"\n{'='*55}")
+    print(f"  Backtest: {from_date}  →  {to_date}")
+    print(f"{'='*55}")
 
-    for symbol in config.watchlist:
-        token = symbol_to_token.get(symbol)
-        if token is None:
-            print(f"  ⚠ {symbol} not found on NSE — skipping")
-            continue
-        print(f"Fetching historical data for {symbol}...")
-        warm_up(kite, store, token, symbol, timeframe,
-                lookback_days=(to_dt - from_dt).days + 5)
+    if not trades:
+        print("  No trades executed.")
+        print(f"{'='*55}\n")
+        return
 
-    bt = PortfolioBacktest(store, capital=config.total_capital)
-    report = bt.run(config.watchlist, timeframe, from_dt, to_dt)
-    report.print_summary()
+    total_pnl = sum(t["pnl"] for t in trades)
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+    win_rate = len(wins) / len(trades) * 100
 
-    if out_dir and report.trades:
-        path = str(out_dir / "portfolio.csv")
-        report.save_trades(path)
-        print(f"  Trades saved → {path}")
+
+    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'P&L':>10} {'P&L%':>7}  Reason")
+    print(f"  {'-'*19} {'-'*19} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*10} {'-'*7}  ------")
+    for t in trades:
+        entry_date_str = str(t["entry_date"])[:19] if t["entry_date"] else "—"
+        exit_date_str  = str(t["exit_date"])[:19]
+        pnl_str = f"Rs.{t['pnl']:,.2f}"
+        cost = t["entry"] * t["qty"]
+        pnl_pct_str = f"{t['pnl'] / cost * 100:+.2f}%" if cost else "—"
+        print(
+            f"  {entry_date_str:<19} {exit_date_str:<19} {t['instrument']:<15} "
+            f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
+            f"{pnl_str:>12} {pnl_pct_str:>7}  {t['reason']}"
+        )
+    print(f"\n  Trades     : {len(trades)}  (W:{len(wins)}  L:{len(losses)})")
+    print(f"  Win rate   : {win_rate:.1f}%")
+    print(f"  Total P&L  : ₹{total_pnl:,.2f}")
+    print(f"  Return     : {total_pnl / config.total_capital * 100:.2f}%")
+
+    if wins:
+        avg_win = sum(t["pnl"] for t in wins) / len(wins)
+        print(f"  Avg win    : ₹{avg_win:,.2f}")
+    if losses:
+        avg_loss = sum(t["pnl"] for t in losses) / len(losses)
+        print(f"  Avg loss   : ₹{avg_loss:,.2f}")
+    print(f"{'='*55}\n")
 
 
 if __name__ == "__main__":

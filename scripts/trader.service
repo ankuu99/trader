@@ -1,0 +1,33 @@
+[Unit]
+Description=Python Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory=/opt/trader
+ExecStart=/opt/trader/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Kolkata
+
+MemoryMax=700M
+MemorySwapMax=0
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trader/data /opt/trader/logs /opt/trader/config
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trader
+
+[Install]
+WantedBy=multi-user.target

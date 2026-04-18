@@ -1,13 +1,9 @@
 """
 Scheduler — market-hours automation using APScheduler.
 
-Jobs
-----
-pre_market   : 09:00 IST — warm up data cache, validate token
-market_open  : 09:15 IST — start live feed, activate strategies
-post_market  : 15:35 IST — daily P&L report, reset state
-
-Only runs on weekdays. CNC positions are held indefinitely — no square-off job.
+Jobs:
+  pre_market  : 09:00 IST — warm up data cache
+  post_market : 15:35 IST — daily P&L report, reset state
 """
 
 from datetime import datetime
@@ -25,49 +21,26 @@ _IST = "Asia/Kolkata"
 class Scheduler:
     def __init__(self):
         self._scheduler = BackgroundScheduler(timezone=_IST)
-        self._hooks: dict[str, list] = {
-            "pre_market": [],
-            "market_open": [],
-            "post_market": [],
-        }
-
-    # ------------------------------------------------------------------ #
-    # Registration                                                         #
-    # ------------------------------------------------------------------ #
+        self._pre_market_hooks: list = []
+        self._post_market_hooks: list = []
 
     def on_pre_market(self, fn):
-        """Register a callable to run at 09:00 IST."""
-        self._hooks["pre_market"].append(fn)
-
-    def on_market_open(self, fn):
-        """Register a callable to run at 09:15 IST."""
-        self._hooks["market_open"].append(fn)
+        self._pre_market_hooks.append(fn)
 
     def on_post_market(self, fn):
-        """Register a callable to run at 15:35 IST."""
-        self._hooks["post_market"].append(fn)
-
-    # ------------------------------------------------------------------ #
-    # Start / stop                                                         #
-    # ------------------------------------------------------------------ #
+        self._post_market_hooks.append(fn)
 
     def start(self):
         self._scheduler.add_job(
-            lambda: self._run("pre_market"),
+            lambda: self._run(self._pre_market_hooks, "pre_market"),
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=_IST),
             id="pre_market",
         )
         self._scheduler.add_job(
-            lambda: self._run("market_open"),
-            CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=_IST),
-            id="market_open",
-        )
-        self._scheduler.add_job(
-            lambda: self._run("post_market"),
+            lambda: self._run(self._post_market_hooks, "post_market"),
             CronTrigger(day_of_week="mon-fri", hour=15, minute=35, timezone=_IST),
             id="post_market",
         )
-
         self._scheduler.start()
         logger.info("Scheduler started")
 
@@ -75,14 +48,10 @@ class Scheduler:
         self._scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped")
 
-    # ------------------------------------------------------------------ #
-    # Internal                                                             #
-    # ------------------------------------------------------------------ #
-
-    def _run(self, event: str):
-        logger.info("Scheduler event: %s | %s", event, datetime.now().strftime("%H:%M:%S"))
-        for fn in self._hooks[event]:
+    def _run(self, hooks: list, name: str):
+        logger.info("Scheduler: %s | %s", name, datetime.now().strftime("%H:%M:%S"))
+        for fn in hooks:
             try:
                 fn()
             except Exception:
-                logger.exception("Error in %s hook: %s", event, fn)
+                logger.exception("Error in %s hook", name)
