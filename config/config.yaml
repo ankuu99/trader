@@ -1,12 +1,12 @@
 env: paper
-candle_timeframe: 15minute
+candle_timeframe: 5minute
 capital:
   total: 100000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
 watchlist:
 
-# - NSE:HEMIPROP
+- NSE:ZOTA
 # - NSE:BDL
 # - NSE:MRPL
 - NSE:JAMNAAUTO
@@ -43,7 +43,7 @@ risk:
   max_open_positions: 5
   default_sl_pct: 2
   risk_reward: 4
-  max_capital_per_stock_pct: 100.0
+  max_capital_per_stock_pct: 25.0
 data:
   db_path: data/market.db
   historical_cache_days: 90

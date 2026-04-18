@@ -1,5 +1,17 @@
 # TODO
 
+## iPhone Token Refresh
+
+Currently `scripts/login.py` requires a Mac (opens a browser + listens on `localhost:8080`).
+
+**What needs to be built:**
+- New script `scripts/kite_auth_server.py` that runs on EC2 and temporarily listens on a public port (e.g. 8765) to catch the Kite OAuth callback directly
+- Change redirect URL in Kite developer console from `http://127.0.0.1:8080/callback` to `http://13.202.187.191:8765/callback`
+- Script exchanges the token, updates `.env`, restarts the trader service
+- From iPhone: SSH via Termius → run the script → open Kite login URL in Safari → done
+
+---
+
 ## Live Mode — Order Fill Tracking
 
 Currently, live mode places market orders and GTT stop-losses correctly via the Kite API,
