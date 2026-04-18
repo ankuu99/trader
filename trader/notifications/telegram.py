@@ -140,6 +140,15 @@ def notify_error(component: str, message: str):
     _send(text)
 
 
+def notify_token_reminder():
+    text = (
+        f"⏰ *Token Refresh Reminder*\n"
+        f"Run `~/scripts/refresh-token.sh` before 9:15 AM to authenticate today's session.\n"
+        f"Date : {datetime.now().strftime('%d %b %Y')}"
+    )
+    _send(text)
+
+
 def notify_startup(mode: str, instruments: list[str], strategies: int):
     tag = "[PAPER]" if mode == "paper" else "[LIVE]"
     text = (

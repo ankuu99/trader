@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from trader.core.logger import get_logger
+from trader.notifications.telegram import notify_token_reminder
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,11 @@ class Scheduler:
         self._post_market_hooks.append(fn)
 
     def start(self):
+        self._scheduler.add_job(
+            notify_token_reminder,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone=_IST),
+            id="token_reminder",
+        )
         self._scheduler.add_job(
             lambda: self._run(self._pre_market_hooks, "pre_market"),
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=_IST),
