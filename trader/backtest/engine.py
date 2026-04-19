@@ -1,0 +1,214 @@
+"""
+Backtest engine — core replay loop shared by backtest.py, calibrate.py, and screen.py.
+
+    from trader.backtest.engine import run_backtest, compute_metrics
+
+    trades = run_backtest(kite, store, symbols, symbol_to_token, params, from_dt, to_dt)
+    metrics = compute_metrics(trades, capital)
+"""
+
+import math
+from datetime import datetime
+
+from trader.core.config import config
+from trader.core.logger import get_logger
+from trader.data.historical import get_candles
+from trader.data.store import Store
+from trader.orders.manager import OrderManager
+from trader.risk.manager import RiskManager
+from trader.strategies.lr_extrema import LRExtremaStrategy
+
+logger = get_logger(__name__)
+
+
+def run_backtest(
+    kite,
+    store: Store,
+    symbols: list[str],
+    symbol_to_token: dict,
+    params: dict,
+    from_dt: datetime,
+    to_dt: datetime,
+) -> list[dict]:
+    """
+    Replay historical candles through LRExtremaStrategy and return the trades list.
+
+    Creates fresh RiskManager, OrderManager, and LRExtremaStrategy instances on
+    every call — no state leaks between runs.
+
+    Args:
+        kite:             Authenticated KiteConnect instance (or None for cached-only runs)
+        store:            Store instance for SQLite candle cache
+        symbols:          List of instrument strings e.g. ["NSE:RELIANCE"]
+        symbol_to_token:  Pre-built map from symbol string to Kite instrument token
+        params:           LRExtremaStrategy parameter dict (bypasses registry)
+        from_dt:          Backtest start datetime
+        to_dt:            Backtest end datetime
+
+    Returns:
+        List of trade dicts with keys:
+            instrument, entry, exit, qty, pnl, reason, entry_date, exit_date
+    """
+    risk = RiskManager()
+    orders = OrderManager(kite=None, store=store, mode="paper")
+
+    open_positions: dict[str, dict] = {}
+    trades: list[dict] = []
+    current_ts: list = [None]
+
+    def handle_order_update(update: dict):
+        if update.get("status") != "COMPLETE":
+            return
+        instrument = update["instrument"]
+        fill_price = update.get("fill_price") or update.get("price") or 0.0
+        direction = update.get("direction", "BUY")
+        quantity = update["quantity"]
+
+        if direction == "SELL" and instrument in open_positions:
+            pos = open_positions.pop(instrument)
+            pnl = (fill_price - pos["entry"]) * pos["qty"]
+            trades.append({
+                "instrument": instrument,
+                "entry": pos["entry"],
+                "exit": fill_price,
+                "qty": pos["qty"],
+                "pnl": pnl,
+                "reason": "STRATEGY",
+                "entry_date": pos["entry_date"],
+                "exit_date": current_ts[0],
+            })
+            risk.close_position(instrument)
+            return
+
+        # BUY fill — open new position
+        sl_price = update.get("trigger_price") or 0.0
+        open_positions[instrument] = {
+            "entry": fill_price,
+            "sl": sl_price,
+            "target": round(fill_price + (fill_price - sl_price) * config.risk_reward, 2),
+            "qty": quantity,
+            "entry_date": current_ts[0],
+        }
+        risk.on_order_filled(instrument, fill_price, quantity)
+
+    orders.register_update_callback(handle_order_update)
+
+    strategies = [LRExtremaStrategy(symbol, params) for symbol in symbols]
+
+    for symbol in symbols:
+        token = symbol_to_token.get(symbol)
+        if token is None:
+            logger.warning("No token for %s — skipping", symbol)
+            continue
+
+        df = get_candles(kite, store, token, symbol, config.candle_timeframe, from_dt, to_dt)
+        if df.empty:
+            logger.warning("No candles for %s in range %s – %s", symbol, from_dt.date(), to_dt.date())
+            continue
+
+        for _, row in df.iterrows():
+            current_ts[0] = row["timestamp"]
+            candle = {
+                "instrument_token": token,
+                "timestamp": row["timestamp"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["volume"]),
+                "_symbol": symbol,
+            }
+
+            orders.on_candle(candle)
+
+            # GTT simulation (only when gtt_enabled — off for LRExtremaStrategy)
+            if config.gtt_enabled and symbol in open_positions:
+                pos = open_positions[symbol]
+                sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
+                tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
+                if sl_hit or tgt_hit:
+                    if sl_hit:
+                        exit_price, reason = pos["sl"], "SL"
+                    else:
+                        exit_price, reason = pos["target"], "TARGET"
+                    pnl = (exit_price - pos["entry"]) * pos["qty"]
+                    trades.append({
+                        "instrument": symbol,
+                        "entry": pos["entry"],
+                        "exit": exit_price,
+                        "qty": pos["qty"],
+                        "pnl": pnl,
+                        "reason": reason,
+                        "entry_date": pos["entry_date"],
+                        "exit_date": candle["timestamp"],
+                    })
+                    del open_positions[symbol]
+                    risk.close_position(symbol)
+
+            for strategy in strategies:
+                if strategy.instrument != symbol:
+                    continue
+                signal = strategy.on_candle(candle)
+                if signal is None:
+                    continue
+                order = risk.validate(signal)
+                if order is None:
+                    continue
+                orders.place(order)
+
+    # Close any remaining open positions at last known price
+    for symbol, pos in list(open_positions.items()):
+        last_close = pos["entry"]
+        trades.append({
+            "instrument": symbol,
+            "entry": pos["entry"],
+            "exit": last_close,
+            "qty": pos["qty"],
+            "pnl": 0.0,
+            "reason": "OPEN@END",
+            "entry_date": pos["entry_date"],
+            "exit_date": to_dt,
+        })
+
+    return trades
+
+
+def compute_metrics(trades: list[dict], capital: float) -> dict:
+    """
+    Compute summary metrics from a trades list.
+
+    Returns dict with:
+        total_trades, wins, losses, win_rate (0-100),
+        total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy
+
+    sharpe_proxy = mean(pnl) / std(pnl) across trades — useful for relative
+    ranking only, not a true Sharpe ratio. Labelled "Sharpe*" in output.
+    """
+    if not trades:
+        return {
+            "total_trades": 0, "wins": 0, "losses": 0,
+            "win_rate": 0.0, "total_pnl": 0.0, "return_pct": 0.0,
+            "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
+        }
+
+    pnls = [t["pnl"] for t in trades]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    total_pnl = sum(pnls)
+
+    mean_pnl = total_pnl / len(pnls)
+    variance = sum((p - mean_pnl) ** 2 for p in pnls) / len(pnls)
+    std_pnl = math.sqrt(variance)
+    sharpe_proxy = mean_pnl / std_pnl if std_pnl > 0 else 0.0
+
+    return {
+        "total_trades": len(trades),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": len(wins) / len(trades) * 100,
+        "total_pnl": total_pnl,
+        "return_pct": total_pnl / capital * 100 if capital > 0 else 0.0,
+        "avg_win": sum(wins) / len(wins) if wins else 0.0,
+        "avg_loss": sum(losses) / len(losses) if losses else 0.0,
+        "sharpe_proxy": sharpe_proxy,
+    }

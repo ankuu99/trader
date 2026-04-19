@@ -20,13 +20,10 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
 
 from trader.auth.session import create_kite
+from trader.backtest.engine import run_backtest
 from trader.core.config import config
 from trader.core.logger import get_logger, setup
-from trader.data.historical import get_candles
 from trader.data.store import Store
-from trader.orders.manager import OrderManager
-from trader.risk.manager import RiskManager
-from trader.strategies.registry import build_strategies
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
@@ -55,147 +52,10 @@ def main():
         print("No valid instruments in watchlist.")
         return
 
-    risk = RiskManager()
-    # kite=None is safe: OrderManager never calls kite in paper mode
-    orders = OrderManager(kite=None, store=store, mode="paper")
+    logger.info("Backtest | %s to %s | instruments=%s", args.from_date, args.to_date, valid_watchlist)
 
-    # Track open positions for SL simulation: { instrument: {entry, sl, qty, entry_date} }
-    open_positions: dict[str, dict] = {}
-    trades: list[dict] = []
-    current_ts: list = [None]  # mutable container so the closure can read it
-
-    def handle_order_update(update: dict):
-        if update.get("status") != "COMPLETE":
-            return
-        instrument = update["instrument"]
-        fill_price = update.get("fill_price") or update.get("price") or 0.0
-        direction = update.get("direction", "BUY")
-        quantity = update["quantity"]
-
-        if direction == "SELL" and instrument in open_positions:
-            # Strategy-driven exit fill
-            pos = open_positions.pop(instrument)
-            pnl = (fill_price - pos["entry"]) * pos["qty"]
-            trades.append({
-                "instrument": instrument,
-                "entry": pos["entry"],
-                "exit": fill_price,
-                "qty": pos["qty"],
-                "pnl": pnl,
-                "reason": "STRATEGY",
-                "entry_date": pos["entry_date"],
-                "exit_date": current_ts[0],
-            })
-            risk.close_position(instrument)
-            logger.info("BT STRATEGY exit | %s | exit=%.2f | pnl=%.2f", instrument, fill_price, pnl)
-            return
-
-        # BUY fill — open new position
-        sl_price = update.get("trigger_price") or 0.0
-        open_positions[instrument] = {
-            "entry": fill_price,
-            "sl": sl_price,
-            "target": round(fill_price + (fill_price - sl_price) * config.risk_reward, 2),
-            "qty": quantity,
-            "entry_date": current_ts[0],
-        }
-        risk.on_order_filled(instrument, fill_price, quantity)
-        logger.info(
-            "BT fill | %s x%d @ %.2f | SL=%.2f target=%.2f",
-            instrument, quantity, fill_price, sl_price, open_positions[instrument]["target"],
-        )
-
-    orders.register_update_callback(handle_order_update)
-
-    strategies = []
-    for symbol in valid_watchlist:
-        strategies.extend(build_strategies(symbol, config))
-
-    logger.info(
-        "Backtest | %s to %s | instruments=%s | strategies=%d",
-        args.from_date, args.to_date, valid_watchlist, len(strategies),
-    )
-
-    # Replay candles per instrument
-    for symbol in valid_watchlist:
-        token = symbol_to_token[symbol]
-        df = get_candles(kite, store, token, symbol, config.candle_timeframe, from_dt, to_dt)
-
-        if df.empty:
-            logger.warning("No candles for %s in range %s – %s", symbol, args.from_date, args.to_date)
-            continue
-
-        logger.info("Replaying %d candles for %s", len(df), symbol)
-
-        for _, row in df.iterrows():
-            current_ts[0] = row["timestamp"]
-            candle = {
-                "instrument_token": token,
-                "timestamp": row["timestamp"],
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(row["volume"]),
-                "_symbol": symbol,
-            }
-
-            # Fill any pending entry orders at this candle's open
-            orders.on_candle(candle)
-
-            # Simulate GTT OCO: check SL (low) and target (high) hits
-            if config.gtt_enabled and symbol in open_positions:
-                pos = open_positions[symbol]
-                sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
-                tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
-                if sl_hit or tgt_hit:
-                    # If both hit in same candle, assume SL (conservative)
-                    if sl_hit:
-                        exit_price, reason = pos["sl"], "SL"
-                    else:
-                        exit_price, reason = pos["target"], "TARGET"
-                    pnl = (exit_price - pos["entry"]) * pos["qty"]
-                    trades.append({
-                        "instrument": symbol,
-                        "entry": pos["entry"],
-                        "exit": exit_price,
-                        "qty": pos["qty"],
-                        "pnl": pnl,
-                        "reason": reason,
-                        "entry_date": pos["entry_date"],
-                        "exit_date": candle["timestamp"],
-                    })
-                    del open_positions[symbol]
-                    risk.close_position(symbol)
-                    logger.info("BT %s | %s | exit=%.2f | pnl=%.2f", reason, symbol, exit_price, pnl)
-
-            # Run strategies
-            for strategy in strategies:
-                if strategy.instrument != symbol:
-                    continue
-                signal = strategy.on_candle(candle)
-                if signal is None:
-                    continue
-                order = risk.validate(signal)
-                if order is None:
-                    continue
-                orders.place(order)
-
-    # Close any remaining open positions at last known price
-    for symbol, pos in list(open_positions.items()):
-        last_close = pos["entry"]  # fallback if we can't get last price
-        pnl = (last_close - pos["entry"]) * pos["qty"]  # 0 if same price
-        trades.append({
-            "instrument": symbol,
-            "entry": pos["entry"],
-            "exit": last_close,
-            "qty": pos["qty"],
-            "pnl": pnl,
-            "reason": "OPEN@END",
-            "entry_date": pos["entry_date"],
-            "exit_date": to_dt,
-        })
-
+    params = config.strategy_config("lr_extrema")
+    trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt)
     _print_summary(trades, args.from_date, args.to_date)
 
 
