@@ -107,7 +107,8 @@ def main():
     warmup_bars = params.get("warmup_bars", 200)
 
     all_instruments = kite.instruments("NSE")
-    eq_instruments = [i for i in all_instruments if i["instrument_type"] == "EQ"]
+    # breakpoint()
+    eq_instruments = [i for i in all_instruments if i["instrument_type"] == "EQ" and i["segment"] == "NSE" and i["lot_size"] == 1]
     symbol_to_token = {
         f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in eq_instruments
     }

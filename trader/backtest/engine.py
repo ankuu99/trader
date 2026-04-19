@@ -118,23 +118,20 @@ def run_backtest(
 
     orders.register_update_callback(handle_order_update)
 
-    strategies = [LRExtremaStrategy(symbol, params) for symbol in symbols]
-
+    # --- Fetch all candles upfront, then merge into one chronological stream ---
+    symbol_candles: dict[str, list[dict]] = {}
     for symbol in symbols:
         token = symbol_to_token.get(symbol)
         if token is None:
             logger.warning("No token for %s — skipping", symbol)
             continue
-
         df = get_candles(kite, store, token, symbol, config.candle_timeframe, from_dt, to_dt)
         if df.empty:
             logger.warning("No candles for %s in range %s – %s", symbol, from_dt.date(), to_dt.date())
             continue
-
-        for _, row in df.iterrows():
-            current_ts[0] = row["timestamp"]
-            candle = {
-                "instrument_token": token,
+        symbol_candles[symbol] = [
+            {
+                "instrument_token": symbol_to_token[symbol],
                 "timestamp": row["timestamp"],
                 "open": float(row["open"]),
                 "high": float(row["high"]),
@@ -143,48 +140,58 @@ def run_backtest(
                 "volume": int(row["volume"]),
                 "_symbol": symbol,
             }
+            for _, row in df.iterrows()
+        ]
 
-            orders.on_candle(candle)
+    merged_candles = sorted(
+        (c for candles in symbol_candles.values() for c in candles),
+        key=lambda c: c["timestamp"],
+    )
 
-            # GTT simulation (only when gtt_enabled — off for LRExtremaStrategy)
-            if config.gtt_enabled and symbol in open_positions:
-                pos = open_positions[symbol]
-                sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
-                tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
-                if sl_hit or tgt_hit:
-                    if sl_hit:
-                        exit_price, reason = pos["sl"], "SL"
-                    else:
-                        exit_price, reason = pos["target"], "TARGET"
-                    net, cost, product = _net_pnl(
-                        pos["entry"], exit_price, pos["qty"],
-                        pos["entry_date"], candle["timestamp"]
-                    )
-                    trades.append({
-                        "instrument": symbol,
-                        "entry": pos["entry"],
-                        "exit": exit_price,
-                        "qty": pos["qty"],
-                        "pnl": net,
-                        "cost": cost,
-                        "product": product,
-                        "reason": reason,
-                        "entry_date": pos["entry_date"],
-                        "exit_date": candle["timestamp"],
-                    })
-                    del open_positions[symbol]
-                    risk.close_position(symbol)
+    strategy_map = {symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles}
 
-            for strategy in strategies:
-                if strategy.instrument != symbol:
-                    continue
-                signal = strategy.on_candle(candle)
-                if signal is None:
-                    continue
-                order = risk.validate(signal)
-                if order is None:
-                    continue
-                orders.place(order)
+    for candle in merged_candles:
+        symbol = candle["_symbol"]
+        current_ts[0] = candle["timestamp"]
+
+        orders.on_candle(candle)
+
+        # GTT simulation (only when gtt_enabled — off for LRExtremaStrategy)
+        if config.gtt_enabled and symbol in open_positions:
+            pos = open_positions[symbol]
+            sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
+            tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
+            if sl_hit or tgt_hit:
+                exit_price, reason = (pos["sl"], "SL") if sl_hit else (pos["target"], "TARGET")
+                net, cost, product = _net_pnl(
+                    pos["entry"], exit_price, pos["qty"],
+                    pos["entry_date"], candle["timestamp"]
+                )
+                trades.append({
+                    "instrument": symbol,
+                    "entry": pos["entry"],
+                    "exit": exit_price,
+                    "qty": pos["qty"],
+                    "pnl": net,
+                    "cost": cost,
+                    "product": product,
+                    "reason": reason,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": candle["timestamp"],
+                })
+                del open_positions[symbol]
+                risk.close_position(symbol)
+
+        strategy = strategy_map.get(symbol)
+        if strategy is None:
+            continue
+        signal = strategy.on_candle(candle)
+        if signal is None:
+            continue
+        order = risk.validate(signal)
+        if order is None:
+            continue
+        orders.place(order)
 
     # Close any remaining open positions at last known price
     for symbol, pos in list(open_positions.items()):

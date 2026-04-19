@@ -32,9 +32,15 @@ class Order:
 
 class RiskManager:
     def __init__(self):
-        self._open_positions: dict[str, int] = {}   # instrument → filled quantity
+        self._open_positions: dict[str, int] = {}     # instrument → filled quantity
+        self._position_values: dict[str, float] = {}  # instrument → entry_price * qty
+        self._capital_deployed: float = 0.0
         self._realised_pnl: float = 0.0
         self._halted: bool = False
+
+    @property
+    def capital_available(self) -> float:
+        return max(0.0, config.total_capital - self._capital_deployed)
 
     def validate(self, signal: Signal) -> Order | None:
         if self._halted:
@@ -80,10 +86,20 @@ class RiskManager:
             )
             quantity = max_qty_by_capital
 
+        # Cap quantity by available portfolio capital
+        max_qty_by_available = int(self.capital_available // price)
+        if quantity > max_qty_by_available:
+            logger.info(
+                "Quantity capped by available capital | %s | before=%d after=%d"
+                " (available=%.0f)",
+                signal.instrument, quantity, max_qty_by_available, self.capital_available,
+            )
+            quantity = max_qty_by_available
+
         if quantity <= 0:
             logger.warning(
-                "Quantity is 0 for %s — price %.2f exceeds max capital per stock %.0f",
-                signal.instrument, price, config.max_capital_per_stock,
+                "Quantity is 0 for %s — price %.2f vs available capital %.0f",
+                signal.instrument, price, self.capital_available,
             )
             return None
 
@@ -127,7 +143,14 @@ class RiskManager:
 
     def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
         self._open_positions[instrument] = quantity
-        logger.info("Position opened | %s x%d @ %.2f", instrument, quantity, fill_price)
+        deployed = fill_price * quantity
+        self._position_values[instrument] = deployed
+        self._capital_deployed += deployed
+        logger.info(
+            "Position opened | %s x%d @ %.2f | deployed=%.0f available=%.0f",
+            instrument, quantity, fill_price,
+            self._capital_deployed, self.capital_available,
+        )
 
     def is_halted(self) -> bool:
         return self._halted
@@ -138,6 +161,8 @@ class RiskManager:
     def close_position(self, instrument: str):
         """Remove a position from tracking (called when SL/exit is confirmed)."""
         self._open_positions.pop(instrument, None)
+        freed = self._position_values.pop(instrument, 0.0)
+        self._capital_deployed = max(0.0, self._capital_deployed - freed)
 
     def reset_day(self):
         self._realised_pnl = 0.0

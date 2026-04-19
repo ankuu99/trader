@@ -76,18 +76,25 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
 
 
     total_costs = sum(t.get("cost", 0.0) for t in trades)
-    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
-    print(f"  {'-'*19} {'-'*19} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
+    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
+    print(f"  {'-'*19} {'-'*19} {'-'*4} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
     for t in trades:
         entry_date_str = str(t["entry_date"])[:19] if t["entry_date"] else "—"
         exit_date_str  = str(t["exit_date"])[:19]
+        if t["entry_date"] and t["exit_date"]:
+            entry_dt = t["entry_date"] if isinstance(t["entry_date"], datetime) else datetime.fromisoformat(str(t["entry_date"])[:19])
+            exit_dt  = t["exit_date"]  if isinstance(t["exit_date"],  datetime) else datetime.fromisoformat(str(t["exit_date"])[:19])
+            hold_days = (exit_dt - entry_dt).days
+            hold_str = str(hold_days)
+        else:
+            hold_str = "—"
         cost_str = f"₹{t.get('cost', 0.0):,.2f}"
         pnl_str = f"₹{t['pnl']:,.2f}"
         invested = t["entry"] * t["qty"]
         pnl_pct_str = f"{t['pnl'] / invested * 100:+.2f}%" if invested else "—"
         prod = t.get("product", "CNC")
         print(
-            f"  {entry_date_str:<19} {exit_date_str:<19} {t['instrument']:<15} "
+            f"  {entry_date_str:<19} {exit_date_str:<19} {hold_str:>4} {t['instrument']:<15} "
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
             f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7}  {prod:<4}  {t['reason']}"
         )

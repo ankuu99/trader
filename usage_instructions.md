@@ -167,6 +167,90 @@ Sample output:
 
 ---
 
+## Calibration
+
+Find the best `LRExtremaStrategy` parameters systematically on your watchlist.
+
+```bash
+# Random search (default — 50 combinations, fast)
+python scripts/calibrate.py --from 2024-01-01
+
+# Random search with more iterations
+python scripts/calibrate.py --from 2024-01-01 --to 2025-01-01 --mode random --iterations 200
+
+# Full grid search (8,640 combinations — slow)
+python scripts/calibrate.py --from 2024-01-01 --mode grid
+```
+
+**How it works:**
+1. Pre-fetches candle data for all watchlist symbols once (subsequent calls hit SQLite cache)
+2. For each parameter combination, runs a full backtest and computes metrics
+3. Prints a ranked table sorted by return %
+
+**Parameter search space:**
+
+| Parameter | Values |
+|-----------|--------|
+| `warmup_bars` | 100, 150, 200, 300 |
+| `threshold` | 0.65, 0.70, 0.75, 0.80, 0.85, 0.90 |
+| `profit_pct` | 3.0, 4.0, 5.0, 6.0, 8.0 |
+| `stop_pct` | 1.5, 2.0, 2.5, 3.0 |
+| `hold_bars` | 50, 100, 150, 200 |
+| `retrain_every` | 25, 50, 100 |
+| `extrema_order` | 3, 5, 7 |
+
+**Output:**
+```
+Rank  warmup  threshold  profit  stop  hold  retrain  extrema  Trades  Win%   P&L       Return%  Sharpe*
+   1     150       0.80     5.0   2.0   100       50        5      12   67%   Rs.4,200    8.40%    1.24
+```
+
+After calibration, copy the best params into `config/config.yaml` under `strategies.lr_extrema`.
+
+---
+
+## Stock Screening
+
+Backtest `LRExtremaStrategy` against all ~2,000 NSE EQ stocks to find where it performs best. Uses the current `lr_extrema` params from `config.yaml` — run calibration first.
+
+```bash
+# Scan all NSE EQ stocks
+python scripts/screen.py --from 2025-01-01
+
+# Custom date range, minimum trades filter, output file
+python scripts/screen.py --from 2025-01-01 --to 2025-01-01 --min-trades 3 --output results.csv
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Backtest start date (YYYY-MM-DD) |
+| `--to` | today | Backtest end date |
+| `--min-trades` | 2 | Min trades to appear in final table |
+| `--output` | screen_results.csv | Output CSV path |
+
+**Resumable:** If interrupted, re-running the same command resumes from where it left off — already-processed symbols are read from the output CSV and skipped. Stocks that errored are retried; stocks with insufficient data are permanently skipped.
+
+**Rate limiting:** ~3 req/sec (0.35s sleep between stocks). Full scan of ~2,000 stocks takes roughly 12 minutes.
+
+**Terminal output during scan:**
+```
+[  42/2134] NSE:RELIANCE         Trades=8  Win=75%  Return=12.40%
+[  43/2134] NSE:INFY             SKIP (insufficient data: 45 candles, need 200)
+```
+
+**Final table** (sorted by return %, filtered by min-trades):
+```
+Instrument          Trades  Win%    P&L          Return%   Sharpe*
+NSE:RELIANCE            8   75%   Rs.12,400      12.40%     1.31
+NSE:TCS                 6   67%    Rs.8,200       8.20%     0.95
+```
+
+Add the top-performing instruments to your `watchlist` in `config.yaml`.
+
+---
+
 ## Strategies
 
 ### RSI
