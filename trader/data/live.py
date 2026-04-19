@@ -45,6 +45,10 @@ class LiveFeed:
         # { token: { open, high, low, close, volume, candle_start } }
         self._partials: dict[int, dict] = {}
         self._lock = Lock()
+        # Per-candle volume tracking: Kite sends cumulative day volume per tick.
+        # We compute delta = current_cumulative - cumulative_at_candle_start.
+        self._vol_baseline: dict[int, int] = {}  # token → cumulative vol at candle start
+        self._vol_last: dict[int, int] = {}      # token → last cumulative vol seen
 
         self._stopping = False
 
@@ -153,20 +157,28 @@ class LiveFeed:
                 if partial is not None:
                     self._emit_candle(token, partial)
 
+                # Baseline for this new candle = cumulative vol at its first tick.
+                # Using last seen cumulative (end of previous candle) handles the case
+                # where the first tick arrives with a non-zero cumulative.
+                # max(0, ...) guards against day-boundary resets (cumulative drops to 0).
+                last_cumulative = self._vol_last.get(token, 0)
+                self._vol_baseline[token] = last_cumulative
                 self._partials[token] = {
                     "candle_start": candle_start,
                     "open": ltp,
                     "high": ltp,
                     "low": ltp,
                     "close": ltp,
-                    "volume": volume,
+                    "volume": max(0, volume - last_cumulative),
                 }
             else:
                 # Update the current partial candle
                 partial["high"] = max(partial["high"], ltp)
                 partial["low"] = min(partial["low"], ltp)
                 partial["close"] = ltp
-                partial["volume"] = volume  # Kite sends cumulative volume
+                partial["volume"] = max(0, volume - self._vol_baseline.get(token, 0))
+
+            self._vol_last[token] = volume
 
     def _emit_candle(self, token: int, partial: dict):
         candle = {
@@ -184,6 +196,14 @@ class LiveFeed:
                 handler(candle)
             except Exception:
                 logger.exception("Error in candle handler")
+
+    def flush_partials(self):
+        """Force-emit all in-progress candles. Call at market close (15:30 IST)."""
+        with self._lock:
+            for token, partial in list(self._partials.items()):
+                logger.info("Force-flushing partial candle at market close | token=%d", token)
+                self._emit_candle(token, partial)
+            self._partials.clear()
 
     def _candle_bucket(self, ts: datetime) -> datetime:
         """Round a timestamp down to the nearest candle boundary."""

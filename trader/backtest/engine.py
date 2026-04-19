@@ -76,6 +76,9 @@ def run_backtest(
     open_positions: dict[str, dict] = {}
     trades: list[dict] = []
     current_ts: list = [None]
+    # Populated after candle fetch; closure captures by reference so handle_order_update
+    # sees the final map even though it is defined first.
+    strategy_map: dict[str, LRExtremaStrategy] = {}
 
     def handle_order_update(update: dict):
         if update.get("status") != "COMPLETE":
@@ -103,18 +106,28 @@ def run_backtest(
                 "exit_date": current_ts[0],
             })
             risk.close_position(instrument)
+            s = strategy_map.get(instrument)
+            if s:
+                s.on_order_update(update)
             return
 
         # BUY fill — open new position
         sl_price = update.get("trigger_price") or 0.0
+        target = (
+            update.get("target_price")
+            or round(fill_price + (fill_price - sl_price) * config.risk_reward, 2)
+        )
         open_positions[instrument] = {
             "entry": fill_price,
             "sl": sl_price,
-            "target": round(fill_price + (fill_price - sl_price) * config.risk_reward, 2),
+            "target": target,
             "qty": quantity,
             "entry_date": current_ts[0],
         }
         risk.on_order_filled(instrument, fill_price, quantity)
+        s = strategy_map.get(instrument)
+        if s:
+            s.on_order_update(update)
 
     orders.register_update_callback(handle_order_update)
 
@@ -148,7 +161,7 @@ def run_backtest(
         key=lambda c: c["timestamp"],
     )
 
-    strategy_map = {symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles}
+    strategy_map.update({symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles})
 
     for candle in merged_candles:
         symbol = candle["_symbol"]
@@ -156,13 +169,23 @@ def run_backtest(
 
         orders.on_candle(candle)
 
-        # GTT simulation (only when gtt_enabled — off for LRExtremaStrategy)
-        if config.gtt_enabled and symbol in open_positions:
+        # Intrabar SL/target simulation — always active in backtest.
+        # Checks candle low/high against stored SL/target prices so exits fire
+        # at the correct price rather than slipping to the next candle's open.
+        if symbol in open_positions:
             pos = open_positions[symbol]
             sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
             tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
             if sl_hit or tgt_hit:
-                exit_price, reason = (pos["sl"], "SL") if sl_hit else (pos["target"], "TARGET")
+                if sl_hit and tgt_hit:
+                    # Both levels spanned by this candle — use proximity to open as heuristic
+                    sl_dist = abs(candle["open"] - pos["sl"])
+                    tgt_dist = abs(candle["open"] - pos["target"])
+                    exit_price, reason = (pos["sl"], "SL") if sl_dist <= tgt_dist else (pos["target"], "TARGET")
+                elif sl_hit:
+                    exit_price, reason = pos["sl"], "SL"
+                else:
+                    exit_price, reason = pos["target"], "TARGET"
                 net, cost, product = _net_pnl(
                     pos["entry"], exit_price, pos["qty"],
                     pos["entry_date"], candle["timestamp"]
@@ -181,6 +204,18 @@ def run_backtest(
                 })
                 del open_positions[symbol]
                 risk.close_position(symbol)
+                # Sync strategy state so it doesn't attempt a duplicate exit
+                s = strategy_map.get(symbol)
+                if s:
+                    s.on_order_update({
+                        "status": "COMPLETE",
+                        "instrument": symbol,
+                        "direction": "SELL",
+                        "signal_type": "EXIT",
+                        "quantity": pos["qty"],
+                        "price": exit_price,
+                        "fill_price": exit_price,
+                    })
 
         strategy = strategy_map.get(symbol)
         if strategy is None:

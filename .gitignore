@@ -23,4 +23,4 @@ venv/
 
 # OS
 .DS_Store
-results.csv
+*.csv

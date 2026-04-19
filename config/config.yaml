@@ -1,15 +1,15 @@
 env: paper
-candle_timeframe: 5minute
+candle_timeframe: 60minute
 capital:
   total: 100000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
-watchlist:
+interested:
+- NSE:INDHOTEL
 
-- NSE:ZOTA
-# - NSE:BDL
-# - NSE:MRPL
-- NSE:JAMNAAUTO
+watchlist:
+- NSE:SUPREMEENG-BZ
+- NSE:OMKARCHEM-BZ
 
 strategies:
   rsi:
@@ -34,7 +34,7 @@ strategies:
     warmup_bars: 200
     threshold: 0.90
     profit_pct: 5.0
-    stop_pct: 2.0
+    stop_pct: 2.5
     hold_bars: 150
     retrain_every: 50
     extrema_order: 5
@@ -43,7 +43,7 @@ risk:
   max_open_positions: 5
   default_sl_pct: 2
   risk_reward: 4
-  max_capital_per_stock_pct: 25.0
+  max_capital_per_stock_pct: 10.0
 data:
   db_path: data/market.db
   historical_cache_days: 90

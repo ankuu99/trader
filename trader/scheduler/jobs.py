@@ -23,10 +23,14 @@ class Scheduler:
     def __init__(self):
         self._scheduler = BackgroundScheduler(timezone=_IST)
         self._pre_market_hooks: list = []
+        self._market_close_hooks: list = []
         self._post_market_hooks: list = []
 
     def on_pre_market(self, fn):
         self._pre_market_hooks.append(fn)
+
+    def on_market_close(self, fn):
+        self._market_close_hooks.append(fn)
 
     def on_post_market(self, fn):
         self._post_market_hooks.append(fn)
@@ -41,6 +45,11 @@ class Scheduler:
             lambda: self._run(self._pre_market_hooks, "pre_market"),
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=_IST),
             id="pre_market",
+        )
+        self._scheduler.add_job(
+            lambda: self._run(self._market_close_hooks, "market_close"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=_IST),
+            id="market_close",
         )
         self._scheduler.add_job(
             lambda: self._run(self._post_market_hooks, "post_market"),

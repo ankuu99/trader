@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from trader.core.config import config
 from trader.core.logger import get_logger
+from trader.notifications import telegram
 from trader.strategies.base import Direction, Signal, SignalType
 
 logger = get_logger(__name__)
@@ -28,6 +29,7 @@ class Order:
     target_price: float
     strategy: str
     mode: str
+    signal_type: SignalType = SignalType.ENTRY
 
 
 class RiskManager:
@@ -121,6 +123,7 @@ class RiskManager:
             target_price=target_price,
             strategy=signal.strategy,
             mode=config.env,
+            signal_type=signal.signal_type,
         )
 
     def _validate_exit(self, signal: Signal) -> Order | None:
@@ -139,6 +142,7 @@ class RiskManager:
             target_price=0.0,
             strategy=signal.strategy,
             mode=config.env,
+            signal_type=signal.signal_type,
         )
 
     def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
@@ -152,17 +156,48 @@ class RiskManager:
             self._capital_deployed, self.capital_available,
         )
 
+    def seed_from_kite(self, kite_positions: dict):
+        """Seed position state from broker on startup to survive restarts (live mode only)."""
+        for p in kite_positions.get("net", []):
+            if p["quantity"] <= 0:
+                continue
+            instrument = f"NSE:{p['tradingsymbol']}"
+            qty = p["quantity"]
+            avg = float(p["average_price"])
+            self._open_positions[instrument] = qty
+            self._position_values[instrument] = avg * qty
+            self._capital_deployed += avg * qty
+            logger.info(
+                "Seeded position from broker | %s x%d @ %.2f | deployed=%.0f",
+                instrument, qty, avg, self._capital_deployed,
+            )
+
     def is_halted(self) -> bool:
         return self._halted
 
     def realised_pnl(self) -> float:
         return self._realised_pnl
 
-    def close_position(self, instrument: str):
-        """Remove a position from tracking (called when SL/exit is confirmed)."""
-        self._open_positions.pop(instrument, None)
+    def close_position(self, instrument: str, exit_price: float = 0.0):
+        """Remove a position from tracking and accumulate realised P&L."""
+        qty = self._open_positions.pop(instrument, None)
         freed = self._position_values.pop(instrument, 0.0)
         self._capital_deployed = max(0.0, self._capital_deployed - freed)
+        if qty and exit_price and freed:
+            entry_price = freed / qty
+            pnl = (exit_price - entry_price) * qty
+            self._realised_pnl += pnl
+            logger.info(
+                "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f",
+                instrument, qty, entry_price, exit_price, pnl, self._realised_pnl,
+            )
+            if not self._halted and self._realised_pnl <= -config.daily_loss_limit:
+                self._halted = True
+                logger.warning(
+                    "Daily loss limit breached | daily_pnl=%.2f limit=%.2f — halting",
+                    self._realised_pnl, config.daily_loss_limit,
+                )
+                telegram.notify_halt(self._realised_pnl, config.daily_loss_limit, config.env)
 
     def reset_day(self):
         self._realised_pnl = 0.0

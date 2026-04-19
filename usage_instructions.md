@@ -134,6 +134,8 @@ In `env: paper`, no real orders are placed. Entry orders are simulated as fills 
 
 ## Backtesting
 
+### CLI
+
 ```bash
 # Backtest from a start date to today
 python scripts/backtest.py --from 2025-01-01
@@ -146,6 +148,26 @@ python scripts/backtest.py --from 2025-01-01 --to 2025-06-30
 - Historical data is fetched from Kite and cached locally on first run
 - Simulates GTT OCO: checks each candle's low (SL) and high (target)
 - If both are hit in the same candle, SL is assumed (conservative)
+
+### Visual UI (local, browser-based)
+
+```bash
+streamlit run scripts/ui.py
+```
+
+Opens at `http://localhost:8501`. Requires `streamlit` and `plotly` (`pip install streamlit plotly`).
+
+**What you get:**
+
+| Tab | Contents |
+|-----|----------|
+| **Portfolio** | Metric cards (trades, win rate, P&L, return, avg win/loss, Sharpe*), equity curve, sortable trade table |
+| **Stock Chart** | Interactive candlestick + volume chart with ▲ entry and ▼ exit markers; hover shows exit reason and P&L; per-stock equity subplot |
+| **Trade Breakdown** | P&L histogram, exit reason bar chart (SL / TARGET / STRATEGY / OPEN@END), hold duration vs P&L scatter, win rate by instrument |
+
+**Sidebar controls:** date range, instrument multi-select, all 7 LRExtrema strategy params — change any param and re-run without leaving the browser.
+
+**Cache-only mode:** if the Kite access token is expired, the UI falls back to SQLite-cached candles. Charts and strategy replay still work for already-fetched symbols — useful for evening/weekend analysis without logging in.
 
 Sample output:
 
@@ -313,7 +335,8 @@ trader/
 
 scripts/
   login.py          — daily token refresh
-  backtest.py       — historical replay
+  backtest.py       — historical replay (CLI, prints table)
+  ui.py             — backtest visualization UI (Streamlit, browser)
 
 data/
   market.db         — SQLite: candles, orders, signals (auto-created)

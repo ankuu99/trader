@@ -121,15 +121,19 @@ class LRExtremaStrategy(Strategy):
                             "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f",
                             self.instrument, p_min, self._threshold, close,
                         )
-                        self._entry_price = close
+                        self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                         self._held_bars = 0
                         self._candles_since_train += 1
+                        sl_hint = round(close * (1 - self._stop_pct / 100), 2)
+                        tgt_hint = round(close * (1 + self._profit_pct / 100), 2)
                         return Signal(
                             instrument=self.instrument,
                             direction=Direction.BUY,
                             signal_type=SignalType.ENTRY,
                             price_hint=close,
                             strategy=self.name,
+                            stop_loss_hint=sl_hint,
+                            target_price=tgt_hint,
                         )
 
         self._candles_since_train += 1
@@ -147,6 +151,14 @@ class LRExtremaStrategy(Strategy):
                 self._held_bars = 0
             elif signal_type == SignalType.EXIT:
                 self._entry_price = None
+        elif status in ("REJECTED", "CANCELLED"):
+            if signal_type == SignalType.ENTRY:
+                logger.warning(
+                    "LR-Extrema | %s | ENTRY order %s — clearing entry guard",
+                    self.instrument, status,
+                )
+                self._entry_price = None
+                self._held_bars = 0
 
     # ------------------------------------------------------------------
     # Training

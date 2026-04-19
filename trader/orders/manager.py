@@ -34,6 +34,10 @@ class OrderManager:
         self._pending_paper: dict[str, Order] = {}
         # Live mode: { order_id: Order } so we can enrich Kite's postback
         self._live_orders: dict[str, Order] = {}
+        # Live mode: { instrument: gtt_trigger_id } for cancellation on exit
+        self._gtt_ids: dict[str, int] = {}
+        # Live mode: { instrument: Order } so GTT fills can recover strategy context
+        self._instrument_orders: dict[str, Order] = {}
 
     def register_update_callback(self, cb: OrderUpdateCallback):
         self._callbacks.append(cb)
@@ -73,7 +77,9 @@ class OrderManager:
                 "Paper fill | %s x%d @ %.2f | strategy=%s",
                 order.instrument, order.quantity, fill_price, order.strategy,
             )
-            self._dispatch({**record, "fill_price": fill_price})
+            self._dispatch({**record, "fill_price": fill_price,
+                            "signal_type": order.signal_type,
+                            "target_price": order.target_price})
 
     def on_kite_order_update(self, kite_update: dict):
         """
@@ -86,15 +92,34 @@ class OrderManager:
             return  # ignore OPEN / PENDING / TRIGGER PENDING
 
         order_id = str(kite_update.get("order_id", ""))
-        original = self._live_orders.get(order_id)
-
         exchange = kite_update.get("exchange", "NSE")
         symbol = kite_update.get("tradingsymbol", "")
-        instrument = original.instrument if original else f"{exchange}:{symbol}"
+        instrument_fallback = f"{exchange}:{symbol}"
+
+        # Primary lookup by order_id; fall back to instrument map for GTT-triggered fills
+        original = self._live_orders.get(order_id)
+        if original is None:
+            original = self._instrument_orders.get(instrument_fallback)
+            if original is not None:
+                logger.info(
+                    "GTT fill detected | %s | recovered context from instrument map | strategy=%s",
+                    instrument_fallback, original.strategy,
+                )
+
+        instrument = original.instrument if original else instrument_fallback
         direction = kite_update.get("transaction_type", "")
         fill_price = float(kite_update.get("average_price") or 0)
         quantity = int(kite_update.get("filled_quantity") or 0)
         trigger_price = float(kite_update.get("trigger_price") or 0)
+
+        # GTT exits should be treated as EXIT signal_type so strategy state is reset
+        from trader.strategies.base import SignalType
+        if original is not None:
+            recovered_signal_type = original.signal_type
+        elif direction == "SELL":
+            recovered_signal_type = SignalType.EXIT
+        else:
+            recovered_signal_type = None
 
         record = {
             "order_id": order_id,
@@ -109,6 +134,7 @@ class OrderManager:
             "status": status,
             "mode": "live",
             "strategy": original.strategy if original else "",
+            "signal_type": recovered_signal_type,
         }
         self._store.upsert_order(record)
         logger.info(
@@ -117,9 +143,11 @@ class OrderManager:
             record["strategy"],
         )
         self._dispatch(record)
-        # Clean up completed/terminal orders from the in-flight map
+        # Clean up completed/terminal orders from in-flight maps
         if status in ("COMPLETE", "REJECTED", "CANCELLED"):
             self._live_orders.pop(order_id, None)
+            if status == "COMPLETE" and direction == "SELL":
+                self._instrument_orders.pop(instrument, None)
 
     # ------------------------------------------------------------------ #
     # Internal                                                             #
@@ -149,6 +177,8 @@ class OrderManager:
 
     def _place_live(self, order: Order) -> str:
         symbol = order.instrument.split(":")[-1]
+        if order.direction == Direction.SELL:
+            self._cancel_gtt(order.instrument)
         try:
             order_id = self._kite.place_order(
                 variety=KiteConnect.VARIETY_REGULAR,
@@ -173,6 +203,8 @@ class OrderManager:
             }
             self._store.upsert_order(record)
             self._live_orders[str(order_id)] = order
+            if order.direction == Direction.BUY:
+                self._instrument_orders[order.instrument] = order
             logger.info(
                 "Live order placed | %s x%d | id=%s | strategy=%s",
                 order.instrument, order.quantity, order_id, order.strategy,
@@ -208,12 +240,24 @@ class OrderManager:
                     },
                 ],
             )
+            trigger_id = result["trigger_id"]
+            self._gtt_ids[order.instrument] = trigger_id
             logger.info(
                 "GTT OCO placed | %s | SL=%.2f target=%.2f | gtt_id=%s",
-                symbol, order.stop_loss, order.target_price, result["trigger_id"],
+                symbol, order.stop_loss, order.target_price, trigger_id,
             )
         except Exception as e:
             logger.error("Failed to place GTT for %s: %s", symbol, e)
+
+    def _cancel_gtt(self, instrument: str):
+        trigger_id = self._gtt_ids.pop(instrument, None)
+        if trigger_id is None:
+            return
+        try:
+            self._kite.delete_gtt(trigger_id)
+            logger.info("GTT cancelled | %s | gtt_id=%s", instrument, trigger_id)
+        except Exception as e:
+            logger.error("Failed to cancel GTT for %s (gtt_id=%s): %s", instrument, trigger_id, e)
 
     def _dispatch(self, record: dict):
         for cb in self._callbacks:

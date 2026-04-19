@@ -46,6 +46,8 @@ class Store:
     def _init_schema(self):
         with self._conn() as conn:
             conn.executescript("""
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
                 CREATE TABLE IF NOT EXISTS candles (
                     instrument  TEXT    NOT NULL,
                     timeframe   TEXT    NOT NULL,

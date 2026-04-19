@@ -34,6 +34,7 @@ from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
 from trader.risk.manager import RiskManager
 from trader.scheduler.jobs import Scheduler
+from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
 
 setup(log_dir=config.log_dir, level=config.log_level)
@@ -61,6 +62,7 @@ def main():
     symbol_to_token = {
         f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
     }
+    token_to_symbol = {v: k for k, v in symbol_to_token.items()}
     valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
     missing = set(config.watchlist) - set(valid_watchlist)
     if missing:
@@ -72,19 +74,50 @@ def main():
         strategies.extend(build_strategies(symbol, config))
     logger.info("Strategies loaded: %d", len(strategies))
 
+    # Reconcile state from broker on live startup to avoid duplicate orders after restart
+    if config.env == "live":
+        kite_pos = kite.positions()
+        risk.seed_from_kite(kite_pos)
+        for p in kite_pos.get("net", []):
+            if p["quantity"] <= 0:
+                continue
+            instrument = f"NSE:{p['tradingsymbol']}"
+            synthetic_fill = {
+                "status": "COMPLETE",
+                "signal_type": SignalType.ENTRY,
+                "price": float(p["average_price"]),
+                "instrument": instrument,
+            }
+            for strat in strategies:
+                if strat.instrument == instrument:
+                    strat.on_order_update(synthetic_fill)
+
     # Order fill callback
     def handle_order_update(update: dict):
-        if update.get("status") != "COMPLETE":
-            return
+        status = update.get("status")
         instrument = update["instrument"]
+        direction = update.get("direction", "")
+
+        if status in ("REJECTED", "CANCELLED"):
+            telegram.notify_order_rejected(
+                instrument, direction,
+                update.get("status_message", status), config.env,
+            )
+            for strat in strategies:
+                if strat.instrument == instrument:
+                    strat.on_order_update(update)
+            return
+
+        if status != "COMPLETE":
+            return
+
         fill_price = update.get("fill_price") or update.get("price") or 0.0
         quantity = update["quantity"]
-        direction = update["direction"]
         strategy = update.get("strategy", "")
         if direction == "BUY":
             risk.on_order_filled(instrument, fill_price, quantity)
         else:
-            risk.close_position(instrument)
+            risk.close_position(instrument, fill_price)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
                                      strategy=strategy, mode=config.env)
@@ -96,10 +129,7 @@ def main():
 
     # Candle handler
     def handle_candle(candle: dict):
-        symbol = next(
-            (s for s, t in symbol_to_token.items() if t == candle.get("instrument_token")),
-            None,
-        )
+        symbol = token_to_symbol.get(candle.get("instrument_token"))
         candle["_symbol"] = symbol
         orders.on_candle(candle)
 
@@ -131,8 +161,9 @@ def main():
                     config.historical_cache_days)
 
     def post_market():
+        portfolio.refresh()  # fetch live P&L from Kite before summarising
         portfolio.log_summary()
-        positions = [p for p in portfolio._positions.values() if p.quantity != 0]
+        positions = list(portfolio._positions.values())
         telegram.notify_daily_pnl(
             realised=sum(p.realised_pnl for p in positions),
             unrealised=sum(p.unrealised_pnl for p in positions),
@@ -143,6 +174,7 @@ def main():
         risk.reset_day()
 
     scheduler.on_pre_market(pre_market)
+    scheduler.on_market_close(feed.flush_partials)
     scheduler.on_post_market(post_market)
 
     # Live feed

@@ -65,6 +65,11 @@ class Config:
     @property
     def watchlist(self) -> list[str]:
         return self._data.get("watchlist", [])
+    
+
+    @property
+    def interested(self) -> list[str]:
+        return self._data.get("interested", [])
 
     def strategy_config(self, name: str) -> dict:
         return self._data["strategies"].get(name, {})

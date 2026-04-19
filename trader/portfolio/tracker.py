@@ -35,6 +35,21 @@ class PortfolioTracker:
         if self._mode != "paper":
             return
         symbol = instrument.split(":")[-1]
+        if direction == "SELL":
+            existing = self._positions.get(symbol)
+            if existing and existing.quantity > 0:
+                pnl = (fill_price - existing.average_price) * existing.quantity
+                self._positions[symbol] = Position(
+                    instrument=symbol,
+                    quantity=0,
+                    average_price=existing.average_price,
+                    realised_pnl=pnl,
+                )
+                logger.info(
+                    "Paper position closed | %s | entry=%.2f exit=%.2f | pnl=%.2f",
+                    symbol, existing.average_price, fill_price, pnl,
+                )
+            return
         self._positions[symbol] = Position(
             instrument=symbol,
             quantity=quantity,
@@ -50,15 +65,15 @@ class PortfolioTracker:
             raw = self._kite.positions().get("net", [])
             self._positions = {}
             for p in raw:
-                if p["quantity"] == 0:
-                    continue
+                if p["quantity"] == 0 and p.get("realised", 0) == 0:
+                    continue  # skip positions never touched today
                 symbol = p["tradingsymbol"]
                 self._positions[symbol] = Position(
                     instrument=symbol,
                     quantity=p["quantity"],
                     average_price=p["average_price"],
-                    unrealised_pnl=p["unrealised"],
-                    realised_pnl=p["realised"],
+                    unrealised_pnl=p.get("unrealised", 0.0),
+                    realised_pnl=p.get("realised", 0.0),
                 )
         except Exception as e:
             logger.error("Failed to fetch positions: %s", e)
