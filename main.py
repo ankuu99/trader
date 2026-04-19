@@ -174,7 +174,6 @@ def main():
         risk.reset_day()
 
     scheduler.on_pre_market(pre_market)
-    scheduler.on_market_close(feed.flush_partials)
     scheduler.on_post_market(post_market)
 
     # Live feed
@@ -184,6 +183,7 @@ def main():
         access_token=config.kite_access_token,
         timeframe_minutes=config.candle_minutes,
     )
+    scheduler.on_market_close(feed.flush_partials)
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)
     feed.register_tick_handler(lambda _tick: None)
