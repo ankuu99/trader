@@ -12,6 +12,7 @@ from datetime import datetime
 
 from trader.core.config import config
 from trader.core.logger import get_logger
+from trader.costs import round_trip_cost
 from trader.data.historical import get_candles
 from trader.data.store import Store
 from trader.orders.manager import OrderManager
@@ -19,6 +20,26 @@ from trader.risk.manager import RiskManager
 from trader.strategies.lr_extrema import LRExtremaStrategy
 
 logger = get_logger(__name__)
+
+
+def _net_pnl(entry_price: float, exit_price: float, qty: int,
+             entry_date, exit_date) -> tuple[float, float, str]:
+    """
+    Returns (gross_pnl, cost, product) for a completed trade.
+
+    Product is MIS if entry and exit are on the same calendar date (same-day
+    square-off of a CNC position incurs intraday brokerage charges), otherwise CNC.
+    """
+    same_day = (
+        entry_date is not None
+        and exit_date is not None
+        and str(entry_date)[:10] == str(exit_date)[:10]
+    )
+    product = "MIS" if same_day else "CNC"
+    gross = (exit_price - entry_price) * qty
+    cost = round_trip_cost(product=product, quantity=qty,
+                           entry_price=entry_price, exit_price=exit_price)
+    return gross - cost, cost, product
 
 
 def run_backtest(
@@ -66,13 +87,17 @@ def run_backtest(
 
         if direction == "SELL" and instrument in open_positions:
             pos = open_positions.pop(instrument)
-            pnl = (fill_price - pos["entry"]) * pos["qty"]
+            net, cost, product = _net_pnl(
+                pos["entry"], fill_price, pos["qty"], pos["entry_date"], current_ts[0]
+            )
             trades.append({
                 "instrument": instrument,
                 "entry": pos["entry"],
                 "exit": fill_price,
                 "qty": pos["qty"],
-                "pnl": pnl,
+                "pnl": net,
+                "cost": cost,
+                "product": product,
                 "reason": "STRATEGY",
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
@@ -131,13 +156,18 @@ def run_backtest(
                         exit_price, reason = pos["sl"], "SL"
                     else:
                         exit_price, reason = pos["target"], "TARGET"
-                    pnl = (exit_price - pos["entry"]) * pos["qty"]
+                    net, cost, product = _net_pnl(
+                        pos["entry"], exit_price, pos["qty"],
+                        pos["entry_date"], candle["timestamp"]
+                    )
                     trades.append({
                         "instrument": symbol,
                         "entry": pos["entry"],
                         "exit": exit_price,
                         "qty": pos["qty"],
-                        "pnl": pnl,
+                        "pnl": net,
+                        "cost": cost,
+                        "product": product,
                         "reason": reason,
                         "entry_date": pos["entry_date"],
                         "exit_date": candle["timestamp"],
@@ -158,13 +188,18 @@ def run_backtest(
 
     # Close any remaining open positions at last known price
     for symbol, pos in list(open_positions.items()):
-        last_close = pos["entry"]
+        last_close = pos["entry"]  # conservative: assume no price change
+        net, cost, product = _net_pnl(
+            pos["entry"], last_close, pos["qty"], pos["entry_date"], to_dt
+        )
         trades.append({
             "instrument": symbol,
             "entry": pos["entry"],
             "exit": last_close,
             "qty": pos["qty"],
-            "pnl": 0.0,
+            "pnl": net,
+            "cost": cost,
+            "product": product,
             "reason": "OPEN@END",
             "entry_date": pos["entry_date"],
             "exit_date": to_dt,

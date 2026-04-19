@@ -75,22 +75,26 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     win_rate = len(wins) / len(trades) * 100
 
 
-    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'P&L':>10} {'P&L%':>7}  Reason")
-    print(f"  {'-'*19} {'-'*19} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*10} {'-'*7}  ------")
+    total_costs = sum(t.get("cost", 0.0) for t in trades)
+    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
+    print(f"  {'-'*19} {'-'*19} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
     for t in trades:
         entry_date_str = str(t["entry_date"])[:19] if t["entry_date"] else "—"
         exit_date_str  = str(t["exit_date"])[:19]
-        pnl_str = f"Rs.{t['pnl']:,.2f}"
-        cost = t["entry"] * t["qty"]
-        pnl_pct_str = f"{t['pnl'] / cost * 100:+.2f}%" if cost else "—"
+        cost_str = f"₹{t.get('cost', 0.0):,.2f}"
+        pnl_str = f"₹{t['pnl']:,.2f}"
+        invested = t["entry"] * t["qty"]
+        pnl_pct_str = f"{t['pnl'] / invested * 100:+.2f}%" if invested else "—"
+        prod = t.get("product", "CNC")
         print(
             f"  {entry_date_str:<19} {exit_date_str:<19} {t['instrument']:<15} "
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
-            f"{pnl_str:>12} {pnl_pct_str:>7}  {t['reason']}"
+            f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7}  {prod:<4}  {t['reason']}"
         )
     print(f"\n  Trades     : {len(trades)}  (W:{len(wins)}  L:{len(losses)})")
     print(f"  Win rate   : {win_rate:.1f}%")
-    print(f"  Total P&L  : ₹{total_pnl:,.2f}")
+    print(f"  Total cost : ₹{total_costs:,.2f}")
+    print(f"  Total P&L  : ₹{total_pnl:,.2f}  (net of costs)")
     print(f"  Return     : {total_pnl / config.total_capital * 100:.2f}%")
 
     if wins:
