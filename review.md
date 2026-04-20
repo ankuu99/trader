@@ -255,13 +255,337 @@ Token is validated once at startup. If the token expires or is invalidated durin
 
 ---
 
-## Summary
+## Round 1 Summary
+
+| Severity | Count | Status |
+|----------|-------|--------|
+| CRITICAL | 6 | All marked ✅ |
+| HIGH | 4 | All marked ✅ |
+| MEDIUM | 6 | 3 fixed, 3 remain (#12, #13, #15) |
+| LOW | 4 | 1 fixed, 3 remain (#17, #19, #20) |
+
+---
+---
+
+# Round 2 Review — Post-fix
+
+Reviewed all files in their current state after round 1 fixes were applied.
+Focus: interaction bugs, edge cases under live conditions, and incomplete fixes.
+
+---
+
+## CRITICAL — Must fix before going live
+
+### R2-1. ✅ GTT fill recovery assigns wrong `signal_type` — strategy stuck after GTT exit — FIXED
+**File:** `trader/orders/manager.py:113-118` — `on_kite_order_update()`
+
+When a GTT fires a SELL, the code recovers the original Order from `_instrument_orders`. But that Order is the original BUY ENTRY order, so `original.signal_type == SignalType.ENTRY`. The recovery code:
+
+```python
+if original is not None:
+    recovered_signal_type = original.signal_type   # ← ENTRY, not EXIT
+```
+
+This dispatches to `handle_order_update` → `strat.on_order_update()` with `signal_type=ENTRY` + `direction="SELL"`. In the base class (`base.py:87-88`):
+
+```python
+if signal_type == SignalType.ENTRY:
+    self.position = Direction(direction)   # ← sets self.position = Direction.SELL
+```
+
+In `lr_extrema.py:146-151`:
+
+```python
+if signal_type == SignalType.ENTRY:
+    fill_price = order.get("price") or order.get("average_price")
+    if fill_price:
+        self._entry_price = float(fill_price)   # ← set to the EXIT price
+```
+
+**After a GTT SELL fires:**
+- `self.position = Direction.SELL` (wrong — should be `None`)
+- `self._entry_price = exit_fill_price` (wrong — should be `None`)
+- `self.is_flat()` returns `False` forever
+- Strategy never enters or exits again — permanently stuck
+
+**Fix:** The recovery logic must override `signal_type` based on the fill direction. When `original` comes from `_instrument_orders` and the fill direction is `SELL`, force `recovered_signal_type = SignalType.EXIT`:
+
+```python
+if original is not None:
+    if direction == "SELL" and original.signal_type == SignalType.ENTRY:
+        recovered_signal_type = SignalType.EXIT
+    else:
+        recovered_signal_type = original.signal_type
+```
+
+---
+
+### R2-2. ✅ Volume baseline never resets at day boundary — all candle volumes become 0 after first day — FIXED
+**File:** `trader/data/live.py:160-172` — `_process_tick()`
+
+When the market opens the next day, Kite resets `volume_traded` to near-zero. But `_vol_last[token]` still holds yesterday's final cumulative volume (e.g. 50,000,000). The new candle's volume is computed as:
+
+```python
+last_cumulative = self._vol_last.get(token, 0)   # 50_000_000
+self._vol_baseline[token] = last_cumulative       # 50_000_000
+"volume": max(0, volume - last_cumulative)         # max(0, 1000 - 50_000_000) = 0
+```
+
+**Impact:** From day 2 onward, every candle has `volume = 0`. The LR Extrema model's volume feature is always 0, degrading predictions. This undoes the round 1 volume fix — the delta logic is correct within a single day, but fails across the overnight boundary.
+
+**Fix:** Detect the day boundary (when `volume < _vol_last[token]`, the cumulative has reset) and zero the baseline:
+
+```python
+last_cumulative = self._vol_last.get(token, 0)
+if volume < last_cumulative:
+    last_cumulative = 0   # day boundary: cumulative reset
+self._vol_baseline[token] = last_cumulative
+```
+
+---
+
+### R2-3. ✅ Strategies receive no historical candles — dead for 200+ bars after startup — FIXED
+**File:** `main.py:156-161` (pre_market) and `trader/strategies/lr_extrema.py:101`
+
+`pre_market()` calls `warm_up()` which caches historical candles in SQLite. But these candles are **never fed to the strategies**. The LR Extrema strategy only receives candles from the live WebSocket (starting at 09:15).
+
+With `warmup_bars=200` and `candle_timeframe=60minute` (~6 candles/day), the strategy needs **33+ trading days** before it can train its model and emit any signal.
+
+**Impact:** After every startup or restart, the strategy is completely silent for over a month. No entries, no exits, no signals of any kind.
+
+**Fix:** After building strategies, read the cached candles from the store and replay them through each strategy's `on_candle()` (without acting on any signals) to warm up internal state:
+
+```python
+for symbol in valid_watchlist:
+    df = store.read_candles(symbol, config.candle_timeframe, warmup_from, now)
+    for strat in strategies:
+        if strat.instrument == symbol:
+            for _, row in df.iterrows():
+                strat.on_candle(row.to_dict())  # warm up only, ignore signals
+```
+
+---
+
+### R2-4. ✅ Halt blocks EXIT signals — traps losing positions — FIXED
+**File:** `trader/risk/manager.py:47-50` — `validate()`
+
+```python
+if self._halted:
+    logger.warning("Signal rejected — daily halt | %s", signal.instrument)
+    return None
+```
+
+This rejects ALL signals including EXIT signals. When the daily loss limit is breached:
+- No new entries can be placed (correct)
+- No exits can be placed either (dangerous)
+- Open positions continue to lose money with no way to exit
+- GTT is the only safety net, but `gtt_enabled: false` in current config
+
+**Impact:** After a halt, losing positions are trapped until GTT fires (if enabled) or until the next day's reset. This directly contradicts the purpose of a daily loss limit.
+
+**Fix:** Allow EXIT signals through even when halted:
+
+```python
+if self._halted:
+    if signal.signal_type == SignalType.EXIT:
+        return self._validate_exit(signal)   # exits must always be allowed
+    logger.warning("Signal rejected — daily halt | %s", signal.instrument)
+    return None
+```
+
+---
+
+### R2-5. ✅ `_place_live` exception leaves strategy permanently stuck — FIXED
+**File:** `trader/orders/manager.py:215-217` and `trader/strategies/lr_extrema.py:124`
+
+When `kite.place_order()` raises (network error, API down, rate limit), the exception propagates up through `orders.place()` → `handle_candle()` → `LiveFeed._emit_candle()` which catches it silently.
+
+At this point the strategy has already set `_entry_price = close` (line 124 of lr_extrema.py), but:
+- No order was placed, so no fill callback will arrive
+- No REJECTED status will be dispatched (the order never reached Kite)
+- `_entry_price` stays set permanently, blocking all future entries
+
+This is the same class of bug as round 1 #3, but triggered via exception rather than rejection.
+
+**Fix:** Either wrap `orders.place()` in `handle_candle` with a try/except that dispatches a synthetic REJECTED update to the strategy, or have `_place_live` catch the exception internally and dispatch a REJECTED record before re-raising.
+
+---
+
+## HIGH — Significant logic issues
+
+### R2-6. ✅ Paper-mode P&L lost when same instrument is re-bought — FIXED
+**File:** `trader/portfolio/tracker.py:38-57`
+
+If you BUY RELIANCE (position created with `realised_pnl=0`), then SELL (position updated with `realised_pnl=500`), then BUY RELIANCE again:
+
+```python
+self._positions[symbol] = Position(
+    instrument=symbol, quantity=quantity,
+    average_price=fill_price,
+)   # realised_pnl defaults to 0.0 — overwrites the previous 500
+```
+
+The `post_market` P&L sum will miss the first trade's realised P&L.
+
+**Impact:** Paper-mode daily P&L Telegram notification understates actual performance. Only the last trade per instrument is reflected.
+
+**Fix:** Accumulate realised P&L across trades. Either keep a running total separate from the Position, or add to the existing `realised_pnl` rather than overwriting:
+
+```python
+prior_pnl = self._positions.get(symbol)
+prior_realised = prior_pnl.realised_pnl if prior_pnl else 0.0
+self._positions[symbol] = Position(
+    ..., realised_pnl=prior_realised,
+)
+```
+
+---
+
+### R2-7. ✅ `close_position` silently skips P&L when `exit_price` is 0 — FIXED
+**File:** `trader/risk/manager.py:185-186`
+
+```python
+if qty and exit_price and freed:
+```
+
+`exit_price` is `0.0` by default. In `main.py:114`:
+
+```python
+fill_price = update.get("fill_price") or update.get("price") or 0.0
+```
+
+If both `fill_price` and `price` are missing or zero in the update dict (e.g. a Kite API edge case where `average_price` is 0 during a partial fill), `close_position` is called with `exit_price=0.0`. The condition `exit_price and freed` is `False`, so:
+- Realised P&L is not computed
+- Daily loss limit check is skipped
+- Capital is freed but the loss is invisible
+
+Additionally, the backtest engine calls `risk.close_position(symbol)` (without exit_price) at lines 108 and 206, so the risk manager's daily halt logic is never exercised during backtests. Backtest results don't simulate mid-day halts.
+
+**Impact:** A real losing trade can silently bypass the daily loss limit if the fill price field is missing.
+
+---
+
+### R2-8. RSI and MACD strategies have no exit mechanism and no `stop_loss_hint`
+**File:** `trader/strategies/rsi.py` and `trader/strategies/macd.py`
+
+Both strategies emit ENTRY signals only — they never emit EXIT signals. They also don't provide `stop_loss_hint` or `target_price` in their signals.
+
+In live mode with `gtt_enabled: false` (current config):
+- Positions entered by RSI/MACD have **no exit path at all**
+- The RiskManager computes SL/target from config defaults, but those are only used in the Order — nothing acts on them
+- The position stays open until process restart
+
+With `gtt_enabled: true`:
+- GTT provides SL/target exits, but the strategy's `position` state is never reset (no EXIT `on_order_update` from GTT, same as R2-1)
+
+Currently mitigated because both strategies are `enabled: false` in config. But if either is ever enabled, positions will accumulate without exits.
+
+---
+
+## MEDIUM — Should fix
+
+### R2-9. `flush_partials` at 15:30 races with the 60-minute candle boundary
+**File:** `trader/data/live.py:200-206` and `trader/scheduler/jobs.py:49-53`
+
+With `candle_timeframe: 60minute`, candle boundaries are at 09:00, 10:00, ..., 15:00. The 15:00–16:00 candle is in progress when `flush_partials` fires at 15:30.
+
+This flushes a partial 30-minute candle (15:00–15:30) as if it were a full 60-minute candle. The strategy sees a candle with only half the normal trading volume and a truncated price range. The LR model's slope features will be computed on this shorter window, potentially generating spurious signals.
+
+**Fix:** Either move `flush_partials` to 15:35 (after post-market, giving a more complete candle) or tag the flushed candle so the strategy can identify it as partial.
+
+---
+
+### R2-10. `_candle_bucket` produces wrong boundaries for 60-minute candles
+**File:** `trader/data/live.py:208-211`
+
+```python
+def _candle_bucket(self, ts: datetime) -> datetime:
+    minute = (ts.minute // self._timeframe) * self._timeframe
+    return ts.replace(minute=minute, second=0, microsecond=0)
+```
+
+For `timeframe=60`, `ts.minute // 60 == 0` for any valid minute (0–59). So `minute` is always 0 and `candle_start` is always `XX:00:00`. The candle boundary advances only when the **hour** changes (via the `ts` itself), which happens to be correct for 60-minute candles.
+
+But: at 10:30 AM, `candle_start = 10:00`. At 11:00 AM, `candle_start = 11:00`. So `10:00 < 11:00` triggers a new candle. This means the 60-minute candles are actually aligned to clock hours (09:00–10:00, 10:00–11:00, ...), which matches NSE's session structure. This works correctly by coincidence.
+
+However, this would break for any `timeframe > 60` (e.g. 120 minutes or 240 minutes), since `minute // 120 == 0` always, and the boundary never advances within the same hour. Currently not an issue since only 60-minute is used, but worth noting.
+
+---
+
+### R2-11. No deduplication of GTT order updates
+**File:** `trader/orders/manager.py:84-150` — `on_kite_order_update()`
+
+Kite can send multiple order updates for the same order (e.g., OPEN → COMPLETE). The COMPLETE status is processed. But if Kite sends duplicate COMPLETE callbacks (network retry, WebSocket reconnect), the same fill is processed twice:
+- `risk.close_position()` called twice — second call finds nothing (instrument already popped), logs a warning but is benign
+- `handle_order_update` in main.py sends duplicate Telegram notifications
+- `strat.on_order_update()` called twice — second call is a no-op (already cleared)
+
+**Impact:** Duplicate Telegram messages and confusing logs. Not dangerous but noisy.
+
+**Fix:** Track processed order IDs in a set and skip duplicates.
+
+---
+
+### R2-12. `post_market` sends `total_trades=len(positions)` — not the actual trade count
+**File:** `main.py:170`
+
+```python
+total_trades=len(positions),
+```
+
+`positions` is the number of entries in `portfolio._positions` (unique instruments), not the number of trades executed today. If you traded RELIANCE twice and INFY once, this reports 2 (instruments), not 3 (trades).
+
+In live mode, `portfolio.refresh()` includes all positions from Kite (which could include positions from previous days), further inflating the count.
+
+---
+
+### R2-13. Startup reconciliation doesn't set `_held_bars` for seeded positions
+**File:** `main.py:85-93`
+
+The synthetic fill sent to strategies during live startup sets `_entry_price` via `on_order_update`, but `_held_bars` is reset to 0. If the position has been held for 100 bars before the restart, the strategy resets the hold counter. It will now hold for another 150 bars (full `hold_bars`) instead of the remaining 50.
+
+**Impact:** Max-hold exits fire later than they should after a restart. Positions could be held much longer than intended.
+
+---
+
+## LOW — Minor issues
+
+### R2-14. `_candles` list in LRExtremaStrategy grows unbounded
+**File:** `trader/strategies/lr_extrema.py:67`
+
+`self._candles.append(candle)` never trims old candles. Over months of running, this list grows continuously. Retraining iterates all candles to find extrema (O(n)) and computes features per extremum. Not a memory issue at 60-minute candles (~1500/year), but retraining time grows linearly.
+
+---
+
+### R2-15. Backtest engine doesn't pass `exit_price` to `risk.close_position()`
+**File:** `trader/backtest/engine.py:108, 206`
+
+```python
+risk.close_position(instrument)    # no exit_price
+risk.close_position(symbol)        # no exit_price
+```
+
+This means the risk manager's daily halt logic is never exercised during backtests. A strategy that passes calibration could be halted repeatedly in live trading due to sequential intraday losses that the backtest never simulated.
+
+---
+
+### R2-16. NSE holidays not handled by scheduler
+**File:** `trader/scheduler/jobs.py`
+
+Scheduler fires on all weekdays including NSE holidays (Republic Day, Diwali, etc.). On holidays:
+- `pre_market` runs warm_up (benign but wasteful)
+- `flush_partials` runs at 15:30 (nothing to flush — no ticks)
+- `post_market` sends a P&L notification showing ₹0.00 (misleading)
+
+---
+
+## Round 2 Summary
 
 | Severity | Count | Key theme |
 |----------|-------|-----------|
-| CRITICAL | 6 | Loss limit unenforced, GTT orphaning, stuck strategy state, missing candles |
-| HIGH | 4 | Volume skew, backtest bias, silent rejections, no state recovery |
-| MEDIUM | 6 | Config risk, concurrency, P&L reporting |
-| LOW | 4 | Logging, minor inefficiency, naming |
+| CRITICAL | 5 | GTT signal_type wrong, volume day-boundary, no strategy warmup, halt traps exits, exception-stuck strategy |
+| HIGH | 3 | Paper P&L overwrite, silent zero-price close, entry-only strategies have no exit |
+| MEDIUM | 5 | Flush timing, 60min coincidence, duplicate callbacks, trade count, held_bars reset |
+| LOW | 3 | Unbounded candle list, backtest halt gap, holiday noise |
 
-**Verdict:** The system is well-structured and works correctly in paper/backtest mode. However, it is **not ready for live trading** without fixing the 6 critical issues — particularly the unenforced daily loss limit (#1), orphaned GTTs (#2), and stuck strategy state after rejection (#3, #4). These can cause unbounded losses or missed trades in production.
+**Verdict:** The round 1 fixes addressed the original issues, but introduced a new critical bug in the GTT recovery path (R2-1) and left a day-boundary hole in the volume fix (R2-2). The most impactful gap for live readiness is the absence of strategy warm-up (R2-3) — without it, the system is functionally inert for a month after every startup. Fix R2-1 through R2-5 before going live.

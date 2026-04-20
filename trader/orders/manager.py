@@ -112,10 +112,15 @@ class OrderManager:
         quantity = int(kite_update.get("filled_quantity") or 0)
         trigger_price = float(kite_update.get("trigger_price") or 0)
 
-        # GTT exits should be treated as EXIT signal_type so strategy state is reset
+        # GTT exits should be treated as EXIT signal_type so strategy state is reset.
+        # _instrument_orders stores the original BUY ENTRY order — if the fill is a
+        # SELL, we must override to EXIT regardless of what the original order says.
         from trader.strategies.base import SignalType
         if original is not None:
-            recovered_signal_type = original.signal_type
+            if direction == "SELL" and original.signal_type == SignalType.ENTRY:
+                recovered_signal_type = SignalType.EXIT
+            else:
+                recovered_signal_type = original.signal_type
         elif direction == "SELL":
             recovered_signal_type = SignalType.EXIT
         else:
@@ -214,6 +219,22 @@ class OrderManager:
             return str(order_id)
         except Exception as e:
             logger.error("Failed to place order for %s: %s", order.instrument, e)
+            # Dispatch a synthetic REJECTED so the strategy clears _entry_price.
+            # Without this, the strategy is permanently stuck — no fill will ever arrive.
+            self._dispatch({
+                "order_id": "FAILED",
+                "instrument": order.instrument,
+                "direction": order.direction.value,
+                "quantity": order.quantity,
+                "price": 0.0,
+                "fill_price": 0.0,
+                "trigger_price": 0.0,
+                "status": "REJECTED",
+                "mode": "live",
+                "strategy": order.strategy,
+                "signal_type": order.signal_type,
+                "status_message": str(e),
+            })
             raise
 
     def _place_gtt_sl(self, order: Order, symbol: str):

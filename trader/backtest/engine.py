@@ -105,7 +105,7 @@ def run_backtest(
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
             })
-            risk.close_position(instrument)
+            risk.close_position(instrument, fill_price)
             s = strategy_map.get(instrument)
             if s:
                 s.on_order_update(update)
@@ -203,7 +203,7 @@ def run_backtest(
                     "exit_date": candle["timestamp"],
                 })
                 del open_positions[symbol]
-                risk.close_position(symbol)
+                risk.close_position(symbol, exit_price)
                 # Sync strategy state so it doesn't attempt a duplicate exit
                 s = strategy_map.get(symbol)
                 if s:

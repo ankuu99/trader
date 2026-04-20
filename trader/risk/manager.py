@@ -46,6 +46,8 @@ class RiskManager:
 
     def validate(self, signal: Signal) -> Order | None:
         if self._halted:
+            if signal.signal_type == SignalType.EXIT:
+                return self._validate_exit(signal)  # exits always allowed, even when halted
             logger.warning("Signal rejected — daily halt | %s", signal.instrument)
             return None
 
@@ -183,6 +185,11 @@ class RiskManager:
         qty = self._open_positions.pop(instrument, None)
         freed = self._position_values.pop(instrument, 0.0)
         self._capital_deployed = max(0.0, self._capital_deployed - freed)
+        if qty and freed and not exit_price:
+            logger.warning(
+                "close_position called with exit_price=0 for %s — P&L and halt check skipped",
+                instrument,
+            )
         if qty and exit_price and freed:
             entry_price = freed / qty
             pnl = (exit_price - entry_price) * qty

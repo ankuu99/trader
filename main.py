@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
 
@@ -91,6 +92,19 @@ def main():
             for strat in strategies:
                 if strat.instrument == instrument:
                     strat.on_order_update(synthetic_fill)
+
+    # Warm up strategies from cached historical candles so they don't need
+    # 200+ live candles (33+ trading days) before emitting any signal.
+    warmup_from = datetime.now() - timedelta(days=config.historical_cache_days)
+    for symbol in valid_watchlist:
+        df = store.read_candles(symbol, config.candle_timeframe, warmup_from, datetime.now())
+        strats_for_symbol = [s for s in strategies if s.instrument == symbol]
+        for _, row in df.iterrows():
+            candle = row.to_dict()
+            candle["_symbol"] = symbol
+            for strat in strats_for_symbol:
+                strat.on_candle(candle)  # warm-up only — signals discarded
+    logger.info("Strategy warm-up complete")
 
     # Order fill callback
     def handle_order_update(update: dict):

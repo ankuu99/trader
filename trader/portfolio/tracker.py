@@ -50,10 +50,12 @@ class PortfolioTracker:
                     symbol, existing.average_price, fill_price, pnl,
                 )
             return
+        prior_realised = self._positions[symbol].realised_pnl if symbol in self._positions else 0.0
         self._positions[symbol] = Position(
             instrument=symbol,
             quantity=quantity,
             average_price=fill_price,
+            realised_pnl=prior_realised,
         )
         logger.info("Paper position | %s x%d @ %.2f", symbol, quantity, fill_price)
 

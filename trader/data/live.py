@@ -157,11 +157,12 @@ class LiveFeed:
                 if partial is not None:
                     self._emit_candle(token, partial)
 
-                # Baseline for this new candle = cumulative vol at its first tick.
-                # Using last seen cumulative (end of previous candle) handles the case
-                # where the first tick arrives with a non-zero cumulative.
-                # max(0, ...) guards against day-boundary resets (cumulative drops to 0).
+                # Baseline for this new candle = cumulative vol at candle start.
+                # If volume < last_cumulative, the day has rolled over and Kite has
+                # reset the cumulative — zero the baseline so deltas are correct.
                 last_cumulative = self._vol_last.get(token, 0)
+                if volume < last_cumulative:
+                    last_cumulative = 0  # day boundary reset detected
                 self._vol_baseline[token] = last_cumulative
                 self._partials[token] = {
                     "candle_start": candle_start,
