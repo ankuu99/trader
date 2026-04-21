@@ -75,26 +75,17 @@ def main():
         strategies.extend(build_strategies(symbol, config))
     logger.info("Strategies loaded: %d", len(strategies))
 
-    # Reconcile state from broker on live startup to avoid duplicate orders after restart
-    if config.env == "live":
-        kite_pos = kite.positions()
-        risk.seed_from_kite(kite_pos)
-        for p in kite_pos.get("net", []):
-            if p["quantity"] <= 0:
-                continue
-            instrument = f"NSE:{p['tradingsymbol']}"
-            synthetic_fill = {
-                "status": "COMPLETE",
-                "signal_type": SignalType.ENTRY,
-                "price": float(p["average_price"]),
-                "instrument": instrument,
-            }
-            for strat in strategies:
-                if strat.instrument == instrument:
-                    strat.on_order_update(synthetic_fill)
+    # Refresh candle cache before warm-up so strategies train on current data.
+    logger.info("Refreshing candle cache before strategy warm-up")
+    for symbol in valid_watchlist:
+        token = symbol_to_token[symbol]
+        warm_up(kite, store, token, symbol, config.candle_timeframe,
+                config.historical_cache_days)
 
     # Warm up strategies from cached historical candles so they don't need
     # 200+ live candles (33+ trading days) before emitting any signal.
+    # NOTE: reconciliation must come AFTER warm-up so warm-up candles don't
+    # override the reconciled position state (R3-2).
     warmup_from = datetime.now() - timedelta(days=config.historical_cache_days)
     for symbol in valid_watchlist:
         df = store.read_candles(symbol, config.candle_timeframe, warmup_from, datetime.now())
@@ -102,9 +93,47 @@ def main():
         for _, row in df.iterrows():
             candle = row.to_dict()
             candle["_symbol"] = symbol
+            candle["instrument_token"] = symbol_to_token.get(symbol)
             for strat in strats_for_symbol:
                 strat.on_candle(candle)  # warm-up only — signals discarded
     logger.info("Strategy warm-up complete")
+
+    # Clear any phantom entry state left by warm-up signal triggers that never
+    # received a fill callback (position=None but _entry_price set).
+    for strat in strategies:
+        if getattr(strat, "_entry_price", None) is not None and strat.position is None:
+            logger.info("Clearing phantom warm-up entry state | %s", strat.instrument)
+            strat._entry_price = None
+            if hasattr(strat, "_held_bars"):
+                strat._held_bars = 0
+
+    # Reconcile state from broker after warm-up — overrides any position state
+    # set during warm-up with the actual broker reality.
+    if config.env == "live":
+        kite_pos = kite.positions()
+        risk.seed_from_kite(kite_pos)
+        open_instruments = {
+            f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", []) if p["quantity"] > 0
+        }
+        for p in kite_pos.get("net", []):
+            if p["quantity"] <= 0:
+                continue
+            instrument = f"NSE:{p['tradingsymbol']}"
+            synthetic_fill = {
+                "status": "COMPLETE",
+                "signal_type": SignalType.ENTRY,
+                "direction": "BUY",
+                "price": float(p["average_price"]),
+                "instrument": instrument,
+            }
+            for strat in strategies:
+                if strat.instrument == instrument:
+                    strat.on_order_update(synthetic_fill)
+        # Clear residual phantom state for instruments not held in Kite
+        for strat in strategies:
+            if strat.instrument not in open_instruments:
+                strat._entry_price = None
+                strat.position = None
 
     # Order fill callback
     def handle_order_update(update: dict):
@@ -176,6 +205,21 @@ def main():
 
     def post_market():
         portfolio.refresh()  # fetch live P&L from Kite before summarising
+        # Evict phantom positions from risk tracker that were closed by GTT
+        # but whose order updates were never received (known edge case).
+        if config.env == "live":
+            try:
+                kite_pos = kite.positions()
+                live_instruments = {
+                    f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", [])
+                    if p["quantity"] > 0
+                }
+                stale = set(risk._open_positions.keys()) - live_instruments
+                for inst in stale:
+                    logger.warning("Removing stale position from risk tracker | %s", inst)
+                    risk.close_position(inst, 0.0)
+            except Exception as e:
+                logger.error("Failed to reconcile positions in post_market: %s", e)
         portfolio.log_summary()
         positions = list(portfolio._positions.values())
         telegram.notify_daily_pnl(

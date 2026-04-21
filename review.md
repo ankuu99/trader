@@ -589,3 +589,322 @@ Scheduler fires on all weekdays including NSE holidays (Republic Day, Diwali, et
 | LOW | 3 | Unbounded candle list, backtest halt gap, holiday noise |
 
 **Verdict:** The round 1 fixes addressed the original issues, but introduced a new critical bug in the GTT recovery path (R2-1) and left a day-boundary hole in the volume fix (R2-2). The most impactful gap for live readiness is the absence of strategy warm-up (R2-3) — without it, the system is functionally inert for a month after every startup. Fix R2-1 through R2-5 before going live.
+
+---
+---
+
+# Round 3 Review — Post-fix
+
+Reviewed all files in their current state after round 2 fixes were applied.
+Focus: interaction bugs between fixes, startup sequencing, and remaining state inconsistencies.
+
+---
+
+## CRITICAL — Must fix before going live
+
+### R3-1. ✅ Synthetic fill missing `direction` field — crashes live startup — FIXED
+**File:** `main.py:86-94` and `trader/strategies/base.py:84-88`
+
+The live reconciliation loop sends a synthetic fill to strategies:
+
+```python
+synthetic_fill = {
+    "status": "COMPLETE",
+    "signal_type": SignalType.ENTRY,
+    "price": float(p["average_price"]),
+    "instrument": instrument,
+    # NO "direction" key
+}
+strat.on_order_update(synthetic_fill)
+```
+
+In `base.py:84-88`:
+
+```python
+direction = order.get("direction")       # → None
+if signal_type == SignalType.ENTRY:
+    self.position = Direction(direction)  # → Direction(None) → ValueError!
+```
+
+`Direction` is a `str, Enum`. Calling `Direction(None)` raises `ValueError: None is not a valid Direction`.
+
+**Impact:** The system crashes on startup whenever there are open positions in Kite. This is exactly the scenario where reconciliation is most needed (restart during live trading).
+
+**Fix:** Add `"direction": "BUY"` to the synthetic fill dict:
+
+```python
+synthetic_fill = {
+    "status": "COMPLETE",
+    "signal_type": SignalType.ENTRY,
+    "direction": "BUY",
+    "price": float(p["average_price"]),
+    "instrument": instrument,
+}
+```
+
+---
+
+### R3-2. ✅ Reconciliation before warm-up — warm-up overrides reconciled position state — FIXED
+**File:** `main.py:78-107`
+
+The startup sequence is:
+
+1. **Line 79-94:** Live reconciliation — sets `_entry_price` on strategies for open positions
+2. **Line 96-107:** Warm-up — replays ALL cached candles through `on_candle()`
+
+During warm-up, `on_candle()` executes the full entry/exit logic. If any historical candle triggers an exit condition against the reconciled `_entry_price`, the strategy clears `_entry_price` and emits an EXIT signal (discarded by the warm-up loop).
+
+**After warm-up:** strategy is flat (`_entry_price = None`) but a real position exists in Kite and RiskManager. Consequences:
+- Strategy emits a NEW entry signal for the same instrument
+- RiskManager correctly rejects it ("already in position")
+- Strategy's `_entry_price` is set to the new signal price (line 124 of lr_extrema.py) — never cleared because order is rejected before `on_order_update` fires
+- Strategy is now stuck with a phantom `_entry_price` that blocks all future entries AND has wrong price for exit calculations
+
+**Fix:** Move reconciliation AFTER warm-up. The warm-up builds the model and indicator state; reconciliation then overrides position state to match reality:
+
+```python
+# 1. Warm-up (model + indicators only)
+for symbol in valid_watchlist:
+    df = store.read_candles(...)
+    for _, row in df.iterrows():
+        for strat in strats_for_symbol:
+            strat.on_candle(candle)
+
+# 2. Reconcile (override position state)
+if config.env == "live":
+    kite_pos = kite.positions()
+    risk.seed_from_kite(kite_pos)
+    for p in kite_pos.get("net", []):
+        ...
+        strat.on_order_update(synthetic_fill)
+```
+
+Additionally, after reconciliation, explicitly clear `_entry_price` for strategies whose instruments do NOT have open positions (to clean up any phantom state from warm-up entries):
+
+```python
+open_instruments = {f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", []) if p["quantity"] > 0}
+for strat in strategies:
+    if strat.instrument not in open_instruments:
+        strat._entry_price = None
+        strat.position = None
+```
+
+---
+
+## HIGH — Significant logic issues
+
+### R3-3. ✅ Warm-up runs before cache refresh — strategies train on stale data — FIXED
+**File:** `main.py:96-107` and `main.py:208`
+
+Startup sequence:
+
+1. **Line 96-107:** Warm-up reads candles from SQLite cache
+2. **Line 208:** `pre_market()` calls `warm_up()` which fetches fresh candles from Kite API into SQLite
+
+If the system was stopped for several days and restarts, the warm-up at step 1 uses stale cached data (missing the last N days of candles). The fresh data fetched at step 2 is never replayed through the strategies.
+
+**Impact:** The LR Extrema model is trained on an incomplete dataset. More critically, the model's most recent features (slopes, volume) are computed from outdated candles, potentially making inaccurate predictions for the first `retrain_every` live candles.
+
+**Fix:** Swap the order — call the cache refresh before warm-up:
+
+```python
+# Refresh cache first
+for symbol in valid_watchlist:
+    token = symbol_to_token[symbol]
+    warm_up(kite, store, token, symbol, config.candle_timeframe,
+            config.historical_cache_days)
+
+# Then warm up strategies from fresh cache
+for symbol in valid_watchlist:
+    df = store.read_candles(symbol, config.candle_timeframe, warmup_from, datetime.now())
+    ...
+```
+
+---
+
+### R3-4. ✅ Paper-mode SELL path doesn't accumulate prior `realised_pnl` — R2-6 fix incomplete — FIXED
+**File:** `trader/portfolio/tracker.py:38-47`
+
+The R2-6 fix correctly preserves `prior_realised` on the BUY path (line 53). But the SELL path overwrites it:
+
+```python
+if direction == "SELL":
+    existing = self._positions.get(symbol)
+    if existing and existing.quantity > 0:
+        pnl = (fill_price - existing.average_price) * existing.quantity
+        self._positions[symbol] = Position(
+            instrument=symbol,
+            quantity=0,
+            average_price=existing.average_price,
+            realised_pnl=pnl,    # ← should be: existing.realised_pnl + pnl
+        )
+```
+
+Scenario: BUY RELIANCE → SELL (+500) → BUY RELIANCE (preserves 500) → SELL (+300):
+- After second SELL: `realised_pnl = 300` (should be `800`)
+- The 500 from the first round-trip was preserved on BUY but lost on SELL
+
+**Impact:** Paper-mode daily P&L notification understates cumulative performance when the same instrument is traded multiple times in one day.
+
+**Fix:**
+```python
+realised_pnl=existing.realised_pnl + pnl,
+```
+
+---
+
+### R3-5. ✅ No guard against `fill_price=0` on BUY fill — capital tracking broken — FIXED
+**File:** `main.py:128-132` and `trader/risk/manager.py:150-154`
+
+```python
+# main.py
+fill_price = update.get("fill_price") or update.get("price") or 0.0
+if direction == "BUY":
+    risk.on_order_filled(instrument, fill_price, quantity)  # fill_price could be 0.0
+```
+
+```python
+# risk/manager.py
+def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+    deployed = fill_price * quantity   # 0.0 if fill_price is 0
+    self._position_values[instrument] = deployed  # 0.0
+    self._capital_deployed += deployed  # unchanged
+```
+
+If fill_price is 0 (API edge case, partial fill, or deserialization bug):
+- Position is registered with 0 deployed capital
+- `capital_available` is not reduced → system can over-deploy on next entry
+- When later closed: `freed = 0.0`, so `if qty and exit_price and freed` is False — P&L not computed, daily loss limit not checked
+
+**Impact:** A single corrupt fill silently disables capital tracking and loss limits for that position.
+
+**Fix:** Guard in `on_order_filled`:
+```python
+def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+    if fill_price <= 0:
+        logger.error("BUY fill with price=0 for %s — cannot track capital", instrument)
+        return
+    ...
+```
+
+---
+
+## MEDIUM — Should fix
+
+### R3-6. ✅ Post warm-up phantom position — strategy blocked for up to `hold_bars` candles — FIXED (folded into R3-2)
+**File:** `trader/strategies/lr_extrema.py:110-137` (entry logic during warm-up)
+
+During warm-up, signals are discarded but `_entry_price` is still set inside `on_candle()` at line 124 when the model triggers an entry. Exit conditions (profit/stop/hold) may clear it on subsequent warm-up candles. But if an entry fires in the **last few candles** of warm-up and no exit triggers before warm-up ends:
+
+- `_entry_price` is set, `position` is `None` (no `on_order_update` called)
+- Live candles arrive → exit management runs (line 71: `self._entry_price is not None`)
+- Max hold: strategy waits up to 150 candles (~25 trading days at 60min) before clearing
+
+During this time, no new entries can fire (line 110 requires `self._entry_price is None`).
+
+**Impact:** After startup, strategy may be silently blocked for up to 25 trading days. In paper mode this is a missed opportunity; in live mode (with R3-2 fixed by moving reconciliation after warm-up) it means the reconciliation will override this, making it benign in live mode but still problematic in paper mode.
+
+**Fix:** After warm-up completes, clear ephemeral entry state for strategies that don't have a real broker position:
+
+```python
+# After warm-up, clear phantom entries (paper mode or instruments not in Kite positions)
+for strat in strategies:
+    if strat._entry_price is not None and strat.position is None:
+        logger.info("Clearing phantom entry state after warm-up | %s", strat.instrument)
+        strat._entry_price = None
+        strat._held_bars = 0
+```
+
+---
+
+### R3-7. ✅ `risk.reset_day()` clears halt but not `_open_positions` — stale positions accumulate — FIXED
+**File:** `trader/risk/manager.py:209-212` and `main.py:188`
+
+```python
+def reset_day(self):
+    self._realised_pnl = 0.0
+    self._halted = False
+```
+
+Called by `post_market()` at 15:35 IST. Resets P&L and halt flag but does NOT clear `_open_positions` or `_capital_deployed`.
+
+In CNC (delivery) mode, positions carry over to the next day, so not clearing `_open_positions` is correct for held-overnight positions. But positions that were closed via GTT during the day (when the GTT fires on Kite's side but the order update was missed — documented edge case in CLAUDE.md) will remain as phantom entries in `_open_positions` forever.
+
+**Impact:** Over time, `_open_positions` accumulates stale instruments. `max_open_positions` check eventually prevents all new entries even though those positions no longer exist.
+
+**Fix:** In live mode, cross-reference `_open_positions` with broker state during `post_market`:
+
+```python
+def post_market():
+    portfolio.refresh()
+    # Reconcile risk manager with actual broker positions
+    if config.env == "live":
+        kite_pos = kite.positions()
+        live_instruments = {f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", []) if p["quantity"] > 0}
+        stale = set(risk._open_positions.keys()) - live_instruments
+        for inst in stale:
+            logger.warning("Removing stale position from risk tracker | %s", inst)
+            risk.close_position(inst, 0.0)
+    ...
+```
+
+---
+
+### R3-8. ✅ Warm-up candle dict missing `instrument_token` key — FIXED
+**File:** `main.py:102-106`
+
+```python
+for _, row in df.iterrows():
+    candle = row.to_dict()
+    candle["_symbol"] = symbol
+    for strat in strats_for_symbol:
+        strat.on_candle(candle)
+```
+
+`store.read_candles()` returns columns: `timestamp, open, high, low, close, volume`. There is no `instrument_token` column. The warm-up candle dict is missing this key.
+
+`LRExtremaStrategy.on_candle()` does not use `instrument_token`, so this is currently benign. But `OrderManager.on_candle()` (which processes these same candles in the backtest engine) expects `_symbol` for matching. If any future strategy or handler requires `instrument_token`, it will fail silently (returning None from `.get()`).
+
+**Impact:** Currently benign. Potential source of silent bugs if the candle contract is assumed to include `instrument_token` elsewhere.
+
+---
+
+## LOW — Minor issues
+
+### R3-9. `handle_candle` doesn't guard against `symbol=None`
+**File:** `main.py:146-148`
+
+```python
+def handle_candle(candle: dict):
+    symbol = token_to_symbol.get(candle.get("instrument_token"))
+    candle["_symbol"] = symbol   # could be None
+    orders.on_candle(candle)     # _symbol=None → no paper fills match (benign)
+```
+
+If a tick arrives for a token not in `token_to_symbol` (shouldn't happen normally, but could if the instrument list is refreshed mid-session or Kite sends ticks for indices), `symbol` is None. The candle is passed to `orders.on_candle()` (which compares against instrument names — no match, benign) and then to strategies (the loop `strategy.instrument != symbol` skips all, also benign).
+
+**Impact:** Silent no-op. The candle is processed without error but does nothing useful. A debug log would help identify phantom tokens.
+
+---
+
+### R3-10. `pre_market` warm-up runs daily at 09:00 but also called at startup (line 208)
+**File:** `main.py:208` and scheduler at 09:00
+
+If the system starts before 09:00, `pre_market()` runs immediately at startup (line 208) and then again at 09:00 via the scheduler — duplicating the Kite API calls. With ~20 symbols and rate limits of ~3 req/sec, this adds ~7 seconds of redundant API calls.
+
+If the system starts after 09:00 (e.g., mid-day restart), the scheduler won't fire `pre_market` until the next day, but the startup call at line 208 ensures the cache is refreshed.
+
+**Impact:** Minor redundancy. Not harmful but wasteful of Kite API quota.
+
+---
+
+## Round 3 Summary
+
+| Severity | Count | Key theme |
+|----------|-------|-----------|
+| CRITICAL | 2 | Synthetic fill crash, reconciliation/warm-up ordering |
+| HIGH | 3 | Stale warm-up data, P&L accumulation, fill_price=0 |
+| MEDIUM | 3 | Phantom entry, stale positions, missing candle key |
+| LOW | 2 | None guard, duplicate pre_market |
+
+**Verdict:** The most urgent fix is R3-1 (Direction(None) crash) which makes live startup impossible when positions exist. R3-2 (reconciliation ordering) is the most architecturally significant — without it, the warm-up and reconciliation fixes from R2-3 actively fight each other. R3-3 (cache before warm-up) ensures the model trains on current data. These three form a coherent startup-sequencing fix: refresh cache → warm up strategies → reconcile from broker. The remaining issues are correctness improvements that reduce edge-case risk.

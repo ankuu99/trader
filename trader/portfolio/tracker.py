@@ -43,7 +43,7 @@ class PortfolioTracker:
                     instrument=symbol,
                     quantity=0,
                     average_price=existing.average_price,
-                    realised_pnl=pnl,
+                    realised_pnl=existing.realised_pnl + pnl,
                 )
                 logger.info(
                     "Paper position closed | %s | entry=%.2f exit=%.2f | pnl=%.2f",

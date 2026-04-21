@@ -148,6 +148,12 @@ class RiskManager:
         )
 
     def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+        if fill_price <= 0:
+            logger.error(
+                "BUY fill with price=0 for %s qty=%d — skipping capital tracking",
+                instrument, quantity,
+            )
+            return
         self._open_positions[instrument] = quantity
         deployed = fill_price * quantity
         self._position_values[instrument] = deployed
