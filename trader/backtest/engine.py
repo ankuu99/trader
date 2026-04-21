@@ -8,7 +8,7 @@ Backtest engine — core replay loop shared by backtest.py, calibrate.py, and sc
 """
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from trader.core.config import config
 from trader.core.logger import get_logger
@@ -131,7 +131,47 @@ def run_backtest(
 
     orders.register_update_callback(handle_order_update)
 
-    # --- Fetch all candles upfront, then merge into one chronological stream ---
+    # Pre-warmup window: enough history before from_dt to fully train the model.
+    # Must be fetched BEFORE the main [from_dt, to_dt] fetch so the cache is
+    # populated in chronological order — otherwise get_candles sees cached_latest
+    # pointing past from_dt and skips the pre-warmup range entirely.
+    warmup_bars = params.get("warmup_bars", 200)
+    candles_per_day = max(1.0, 375.0 / config.candle_minutes)
+    pre_warmup_days = math.ceil(warmup_bars / candles_per_day) * 2  # 2× buffer for weekends/holidays
+    pre_warmup_from = from_dt - timedelta(days=pre_warmup_days)
+
+    # --- Fetch pre-warmup candles first (DB empty at this point) ---
+    pre_warmup_candles: dict[str, list[dict]] = {}
+    for symbol in symbols:
+        token = symbol_to_token.get(symbol)
+        if token is None:
+            continue
+        pre_df = get_candles(
+            kite, store, token, symbol, config.candle_timeframe,
+            pre_warmup_from, from_dt - timedelta(minutes=1),
+        )
+        if pre_df.empty:
+            logger.warning("No pre-warmup candles for %s before %s — model will be cold", symbol, from_dt.date())
+            continue
+        pre_warmup_candles[symbol] = [
+            {
+                "instrument_token": token,
+                "timestamp": row["timestamp"],
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["volume"]),
+                "_symbol": symbol,
+            }
+            for _, row in pre_df.iterrows()
+        ]
+        logger.info(
+            "Pre-warmup fetched | %s | %d candles over %d days before %s",
+            symbol, len(pre_df), pre_warmup_days, from_dt.date(),
+        )
+
+    # --- Fetch main backtest candles (cache now has pre-warmup data) ---
     symbol_candles: dict[str, list[dict]] = {}
     for symbol in symbols:
         token = symbol_to_token.get(symbol)
@@ -162,6 +202,14 @@ def run_backtest(
     )
 
     strategy_map.update({symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles})
+
+    # Replay pre-warmup candles through each strategy (no trade recording)
+    for symbol, strategy in strategy_map.items():
+        warmup_feed = pre_warmup_candles.get(symbol, [])
+        for candle in warmup_feed:
+            strategy.on_candle(candle)
+        if warmup_feed:
+            logger.info("Pre-warmup complete | %s | %d candles", symbol, len(warmup_feed))
 
     for candle in merged_candles:
         symbol = candle["_symbol"]

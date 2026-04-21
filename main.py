@@ -97,6 +97,14 @@ def main():
             for strat in strats_for_symbol:
                 strat.on_candle(candle)  # warm-up only — signals discarded
     logger.info("Strategy warm-up complete")
+    for strat in strategies:
+        candle_count = len(getattr(strat, "_candles", []))
+        trained = getattr(strat, "_trained", None)
+        status = "TRAINED" if trained else ("WARMING_UP" if trained is not None else "N/A")
+        logger.info(
+            "Warm-up status | %s | %s | candles=%d",
+            strat.instrument, status, candle_count,
+        )
 
     # Clear any phantom entry state left by warm-up signal triggers that never
     # received a fill callback (position=None but _entry_price set).

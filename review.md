@@ -908,3 +908,247 @@ If the system starts after 09:00 (e.g., mid-day restart), the scheduler won't fi
 | LOW | 2 | None guard, duplicate pre_market |
 
 **Verdict:** The most urgent fix is R3-1 (Direction(None) crash) which makes live startup impossible when positions exist. R3-2 (reconciliation ordering) is the most architecturally significant — without it, the warm-up and reconciliation fixes from R2-3 actively fight each other. R3-3 (cache before warm-up) ensures the model trains on current data. These three form a coherent startup-sequencing fix: refresh cache → warm up strategies → reconcile from broker. The remaining issues are correctness improvements that reduce edge-case risk.
+
+---
+---
+
+# Round 4 Review — Post-fix
+
+Reviewed all files in their current state after round 3 fixes were applied.
+Focus: concurrency, state integrity under edge cases, and remaining correctness gaps.
+
+---
+
+## HIGH — Significant logic issues
+
+### R4-1. Thread safety: scheduler jobs race with WebSocket callbacks on shared mutable state
+**File:** `main.py:206-232` (post_market), `trader/scheduler/jobs.py:66-72` (_run), `trader/data/live.py:103-105` (_on_ticks)
+
+Three threads touch the same objects without synchronization:
+
+| Thread | Accesses |
+|--------|----------|
+| KiteTicker WebSocket | `risk.validate()`, `risk.on_order_filled()`, `risk.close_position()`, `portfolio.on_order_filled()`, `strategy.on_candle()`, `strategy.on_order_update()` |
+| APScheduler (15:35) | `risk._open_positions` (read, line 217), `risk.close_position()` (write, line 220), `risk.reset_day()` (write, line 232), `portfolio.refresh()` (write), `portfolio._positions` (read) |
+| APScheduler (15:30) | `feed.flush_partials()` → `_emit_candle()` → `handle_candle()` → `risk.validate()`, `strategy.on_candle()`, `orders.place()` |
+
+The `flush_partials` call at 15:30 runs `handle_candle` on the **scheduler thread** while the WebSocket thread may still be processing late ticks that also call `handle_candle`. LiveFeed's `self._lock` serializes candle emission, but `handle_candle` itself (and everything it calls — strategy, risk, orders) is not protected by any lock.
+
+At 15:35, `post_market` mutates `risk._open_positions` and `risk._realised_pnl` while a late order update on the WebSocket thread might be doing the same.
+
+**Impact:** Race conditions can corrupt `_capital_deployed`, `_realised_pnl`, or `_open_positions`. Worst case: daily loss limit check reads a stale `_realised_pnl` and doesn't trigger halt; or `reset_day()` zeroes `_realised_pnl` while `close_position` is mid-write, losing the P&L delta.
+
+**Fix:** Add a threading lock that guards all shared state mutations. The simplest approach is a single global lock acquired in `handle_candle`, `handle_order_update`, and each scheduler hook:
+
+```python
+import threading
+_state_lock = threading.Lock()
+
+def handle_candle(candle: dict):
+    with _state_lock:
+        ...  # existing body
+
+def handle_order_update(update: dict):
+    with _state_lock:
+        ...  # existing body
+
+def post_market():
+    with _state_lock:
+        ...  # existing body
+```
+
+---
+
+### R4-2. Duplicate BUY COMPLETE order updates double-count `_capital_deployed`
+**File:** `trader/risk/manager.py:150-165` and `trader/orders/manager.py:152-155`
+
+If Kite sends duplicate COMPLETE callbacks for the same BUY order (network retry, WebSocket reconnect), both are dispatched to `handle_order_update`:
+
+1. First COMPLETE: `on_kite_order_update` finds `original` in `_live_orders`, dispatches, pops from `_live_orders` (line 153).
+2. Second COMPLETE (same order_id): `_live_orders.get(order_id)` → None. Falls back to `_instrument_orders.get(instrument)` → finds the original (BUY entry still there). Dispatches again.
+
+Both trigger `risk.on_order_filled(instrument, fill_price, quantity)`:
+
+```python
+def on_order_filled(self, instrument, fill_price, quantity):
+    self._open_positions[instrument] = quantity     # overwrite — OK
+    deployed = fill_price * quantity
+    self._position_values[instrument] = deployed    # overwrite — OK
+    self._capital_deployed += deployed               # ADDITIVE — doubled!
+```
+
+`_capital_deployed` accumulates `deployed` twice. `capital_available` is now understated by the position's value, potentially blocking the next entry with "Quantity is 0 — available capital ₹0".
+
+**Impact:** A single duplicate order update can consume the entire portfolio's capital headroom. New entries are rejected until `post_market` or `close_position` frees capital.
+
+**Fix:** Guard against re-adding an instrument already in `_open_positions`:
+
+```python
+def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+    if fill_price <= 0:
+        logger.error(...)
+        return
+    if instrument in self._open_positions:
+        logger.warning("Duplicate fill for %s — ignoring", instrument)
+        return
+    self._open_positions[instrument] = quantity
+    ...
+```
+
+---
+
+## MEDIUM — Should fix
+
+### R4-3. OPEN@END backtest trades always show negative P&L due to costs
+**File:** `trader/backtest/engine.py:231-248`
+
+```python
+last_close = pos["entry"]  # conservative: assume no price change
+net, cost, product = _net_pnl(pos["entry"], last_close, pos["qty"], ...)
+```
+
+When the backtest ends with open positions, exit price is set to entry price. Gross P&L is zero, but `_net_pnl` deducts round-trip transaction costs (~0.22% for CNC). Every OPEN@END trade has a guaranteed loss.
+
+In calibration (`calibrate.py`), strategies that hold fewer trades to maturity look worse because their OPEN@END trades accumulate phantom transaction costs. This biases calibration toward strategies that close positions quickly, penalising longer-hold strategies.
+
+**Fix:** Use the last candle's close price for each symbol:
+
+```python
+# Track last close per symbol during replay
+last_closes: dict[str, float] = {}
+for candle in merged_candles:
+    last_closes[candle["_symbol"]] = candle["close"]
+    ...
+
+# Use actual last close for OPEN@END
+for symbol, pos in list(open_positions.items()):
+    last_close = last_closes.get(symbol, pos["entry"])
+    ...
+```
+
+---
+
+### R4-4. Startup cache refresh is duplicated — 40+ redundant API calls
+**File:** `main.py:78-83` and `main.py:252`
+
+The startup sequence:
+1. **Lines 78-83:** Loop over all symbols, call `warm_up()` → fetches from Kite API, writes to SQLite
+2. **Line 252:** `pre_market()` → same loop, same `warm_up()` calls
+
+The second pass at line 252 checks `cached_latest` and mostly skips fetching (cache is fresh from step 1). But it still opens a SQLite connection per symbol, queries `MAX(timestamp)`, and compares — ~20 redundant queries.
+
+**Fix:** Remove the explicit cache refresh at lines 78-83 and call `pre_market()` before warm-up instead:
+
+```python
+pre_market()  # refresh cache once
+
+# Then warm up strategies from fresh cache
+warmup_from = datetime.now() - timedelta(days=config.historical_cache_days)
+for symbol in valid_watchlist:
+    ...
+```
+
+This also eliminates the separate `pre_market()` call at line 252.
+
+---
+
+### R4-5. `log_summary` excludes closed positions — paper-mode P&L log is always zero
+**File:** `trader/portfolio/tracker.py:83-94`
+
+```python
+def log_summary(self):
+    positions = [p for p in self._positions.values() if p.quantity != 0]
+    total_realised = sum(p.realised_pnl for p in positions)
+```
+
+After a SELL, the position has `quantity=0` and `realised_pnl=trade_pnl`. The filter `quantity != 0` excludes it. So `total_realised` only includes realised P&L from **open** positions (which is always 0 since no partial fills occur in this system).
+
+Meanwhile, `post_market` in main.py uses `list(portfolio._positions.values())` **without** the quantity filter for the Telegram notification. So the Telegram message shows correct P&L, but the log shows ₹0.00.
+
+**Impact:** Log files show `realised=0.00` every day even when trades were profitable. Misleading for debugging without Telegram access (e.g., reviewing EC2 logs).
+
+**Fix:** Remove the quantity filter for the realised sum, or sum all positions:
+
+```python
+all_positions = list(self._positions.values())
+open_positions = [p for p in all_positions if p.quantity != 0]
+total_unrealised = sum(p.unrealised_pnl for p in open_positions)
+total_realised = sum(p.realised_pnl for p in all_positions)
+```
+
+---
+
+### R4-6. `on_order_filled` guard (R3-5) creates orphan position in strategy with no risk tracking
+**File:** `trader/risk/manager.py:150-156` and `main.py:160-169`
+
+When `fill_price <= 0`, `on_order_filled` returns early. But `handle_order_update` continues:
+
+```python
+if direction == "BUY":
+    risk.on_order_filled(instrument, fill_price, quantity)  # returns early
+portfolio.on_order_filled(...)   # tracks position
+strat.on_order_update(update)    # sets position = BUY, _entry_price = 0
+```
+
+After this:
+- Strategy has `position = Direction.BUY` and `_entry_price = 0.0` (or fill_price if 0)
+- RiskManager has NO record of this instrument in `_open_positions`
+- Strategy exit check: `pct = (close - 0.0) / 0.0` → **ZeroDivisionError** crash
+
+Even if `_entry_price` is not exactly 0.0 (the `or` chain yields 0.0), the strategy's percentage calculation at `lr_extrema.py:75` divides by `_entry_price`:
+
+```python
+pct = (close - self._entry_price) / self._entry_price * 100.0
+```
+
+**Impact:** If a BUY fill with price=0 reaches the strategy, the process crashes on the next candle with `ZeroDivisionError`.
+
+**Fix:** Guard at the `handle_order_update` level — reject the fill entirely if price is invalid:
+
+```python
+fill_price = update.get("fill_price") or update.get("price") or 0.0
+if status == "COMPLETE" and fill_price <= 0:
+    logger.error("Fill with price=0 for %s — treating as REJECTED", instrument)
+    for strat in strategies:
+        if strat.instrument == instrument:
+            strat.on_order_update({**update, "status": "REJECTED"})
+    return
+```
+
+---
+
+## LOW — Minor issues
+
+### R4-7. BZ/BE stocks remain in watchlist — trade-to-trade and limited liquidity
+**File:** `config/config.yaml:24,30` (BZ) and lines `19,26,27,32,33` (BE)
+
+Active BZ stocks: `NSE:FEL-BZ`, `NSE:SHRENIK-BZ`. Active BE stocks: `NSE:MAHASTEEL-BE`, `NSE:SEYAIND-BE`, `NSE:EQUIPPP-BE`, `NSE:ORTINGLOBE-BE`, `NSE:ARTNIRMAN-BE`.
+
+BZ (trade-to-trade) stocks require compulsory delivery — no intraday square-off. This system uses CNC/delivery so that's compatible. But BZ stocks typically have very low liquidity: wide bid-ask spreads mean market orders can fill significantly away from the signal's `price_hint`, eroding the 2.5% stop distance.
+
+BE stocks have periodic surveillance restrictions (additional margin, price bands). Orders may be rejected during restriction periods with no automatic recovery.
+
+**Impact:** Not a bug — operational risk. Market orders on illiquid stocks can slip 1-3%, eating most of the 5% profit target.
+
+---
+
+### R4-8. Late ticks after `flush_partials` create a phantom mini-candle
+**File:** `trader/data/live.py:201-207` and `134-182`
+
+After `flush_partials` clears `_partials` at 15:30, Kite may deliver a few trailing ticks (post-close or auction data). These create a new partial candle entry. When the next day's first tick arrives at 09:15, this phantom partial is emitted as a complete candle covering 15:30 to ~09:15 — a ~17.5-hour candle with 1-2 ticks of data.
+
+The strategy processes this as a regular candle, but its OHLCV is meaningless (essentially a single-tick candle). The volume is near-zero. The close price is the last post-close tick, which may differ from the actual settlement price.
+
+**Impact:** One garbage candle per day per instrument. The LR model's slope features are slightly distorted. The model retrains periodically, diluting the impact over time. LOW severity in practice.
+
+---
+
+## Round 4 Summary
+
+| Severity | Count | Key theme |
+|----------|-------|-----------|
+| HIGH | 2 | Thread safety race, duplicate fill capital double-count |
+| MEDIUM | 4 | OPEN@END cost bias, duplicate cache refresh, log P&L mismatch, ZeroDivisionError on price=0 |
+| LOW | 2 | BZ/BE liquidity risk, phantom post-close candle |
+
+**Verdict:** No CRITICAL issues remain — the startup sequence (cache → warm-up → phantom cleanup → reconciliation) is now correct, and the Direction(None) crash is fixed. The highest-priority Round 4 fix is R4-1 (thread safety). Since APScheduler runs jobs on a background thread and KiteTicker runs on another, shared state is accessed without locks. A single `threading.Lock` guarding `handle_candle`, `handle_order_update`, and each scheduler hook would eliminate this class of bug. R4-2 (duplicate fill capital) should also be fixed before live — it can be triggered by normal Kite WebSocket reconnection behaviour and silently blocks all new entries.
