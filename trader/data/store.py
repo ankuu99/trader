@@ -8,6 +8,7 @@ orders   : every order action with full lifecycle tracking
 trades   : filled trade records linked to orders
 """
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -21,10 +22,27 @@ logger = get_logger(__name__)
 
 
 class Store:
+    _DB_WARN_MB = 500  # warn if DB exceeds this size on startup
+
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = str(db_path)
         self._init_schema()
+        self._log_db_size()
+
+    def _log_db_size(self):
+        try:
+            size_bytes = os.path.getsize(self._path)
+        except OSError:
+            return
+        size_mb = size_bytes / (1024 * 1024)
+        if size_mb >= self._DB_WARN_MB:
+            logger.warning(
+                "DB size WARNING | %.1f MB >= %d MB threshold — consider pruning old candles | path=%s",
+                size_mb, self._DB_WARN_MB, self._path,
+            )
+        else:
+            logger.info("DB size | %.1f MB | path=%s", size_mb, self._path)
 
     @contextmanager
     def _conn(self):
