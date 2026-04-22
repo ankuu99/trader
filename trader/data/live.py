@@ -207,6 +207,20 @@ class LiveFeed:
             self._partials.clear()
 
     def _candle_bucket(self, ts: datetime) -> datetime:
-        """Round a timestamp down to the nearest candle boundary."""
-        minute = (ts.minute // self._timeframe) * self._timeframe
-        return ts.replace(minute=minute, second=0, microsecond=0)
+        """Round a timestamp down to the nearest candle boundary, aligned to 9:15 IST.
+
+        Kite historical API candles are anchored to market open (09:15), so live
+        candle boundaries must match — otherwise live OHLCV differs from historical
+        OHLCV and the model runs inference on a different distribution than it was
+        trained on.
+        """
+        _MARKET_OPEN_MINUTES = 9 * 60 + 15  # 555
+        ts_minutes = ts.hour * 60 + ts.minute
+        offset = (ts_minutes - _MARKET_OPEN_MINUTES) // self._timeframe * self._timeframe
+        bucket_minutes = _MARKET_OPEN_MINUTES + offset
+        return ts.replace(
+            hour=bucket_minutes // 60,
+            minute=bucket_minutes % 60,
+            second=0,
+            microsecond=0,
+        )

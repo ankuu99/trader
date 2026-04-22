@@ -63,6 +63,13 @@ def _connect_kite():
         return None, {}, str(exc)
 
 
+def _reconnect_kite():
+    """Clear cached Kite connection and reload."""
+    _connect_kite.clear()
+    _get_store.clear()
+    st.rerun()
+
+
 def _cached_instruments(db_path: Path, timeframe: str) -> list[str]:
     """Symbols that have candles in SQLite for the configured timeframe."""
     conn = sqlite3.connect(str(db_path))
@@ -92,7 +99,12 @@ with st.sidebar:
         st.warning(f"Cache-only mode (Kite auth failed).\n\n`{kite_err}`")
         available = _cached_instruments(config.db_path, config.candle_timeframe)
     else:
+        st.success("Kite connected")
         available = config.watchlist + config.interested
+
+    col_reconnect, _ = st.columns([1, 2])
+    if col_reconnect.button("Reconnect Kite", use_container_width=True):
+        _reconnect_kite()
 
     selected_instruments = st.multiselect(
         "Instruments",
@@ -110,7 +122,13 @@ with st.sidebar:
         retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),   step=5)
         extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),    step=1)
 
-    run_clicked = st.button("Run Backtest", type="primary", use_container_width=True)
+    _is_running = st.session_state.get("_bt_running", False)
+    run_clicked = st.button(
+        "Running…" if _is_running else "Run Backtest",
+        type="primary",
+        use_container_width=True,
+        disabled=_is_running,
+    )
 
 # ── run backtest ──────────────────────────────────────────────────────────────
 
@@ -138,17 +156,19 @@ if run_clicked:
         # Dummy tokens — get_candles will serve from cache if candles exist
         s2t = {s: 0 for s in selected_instruments}
 
+    st.session_state["_bt_running"] = True
     with st.spinner("Running backtest…"):
         try:
             trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt)
+            st.session_state["trades"]      = trades
+            st.session_state["from_dt"]     = from_dt
+            st.session_state["to_dt"]       = to_dt
+            st.session_state["instruments"] = selected_instruments
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
-            st.stop()
-
-    st.session_state["trades"]      = trades
-    st.session_state["from_dt"]     = from_dt
-    st.session_state["to_dt"]       = to_dt
-    st.session_state["instruments"] = selected_instruments
+        finally:
+            st.session_state["_bt_running"] = False
+    st.rerun()
 
 # ── pull state ────────────────────────────────────────────────────────────────
 
