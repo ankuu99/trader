@@ -14,7 +14,7 @@ python scripts/backtest.py --from 2025-01-01
 python scripts/backtest.py --from 2025-01-01 --to 2025-12-31
 python scripts/calibrate.py --from 2025-01-01 [--mode grid|random] [--iterations 50]
 python scripts/screen.py --from 2025-01-01 [--min-trades 2] [--output results.csv]
-python scripts/login.py               # refresh Kite access token
+python scripts/kite_auth_server.py    # refresh Kite access token (run on EC2, open URL in any browser)
 ```
 
 ---
@@ -32,7 +32,7 @@ trader/
 │   ├── backtest.py                # standalone backtest runner (thin wrapper over engine)
 │   ├── calibrate.py               # grid/random param search for LRExtremaStrategy
 │   ├── screen.py                  # backtest LRExtrema against all NSE EQ stocks
-│   ├── login.py                   # OAuth flow to get access token
+│   ├── kite_auth_server.py        # OAuth flow — runs on EC2, works from any SSH client
 │   ├── trader.service             # systemd unit file for EC2 deployment
 │   └── test_telegram.py           # smoke test for Telegram notifications
 └── trader/
@@ -244,7 +244,7 @@ Configured via `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Safe to ca
 
 Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `notify_halt`, `notify_error`, `notify_startup`, `notify_token_reminder`
 
-**Token reminder:** scheduler fires `notify_token_reminder()` at 08:30 IST daily — prompts to run `python scripts/login.py` before market open.
+**Token reminder:** scheduler fires `notify_token_reminder()` at 08:30 IST daily — prompts to run `python scripts/kite_auth_server.py` on EC2 before market open.
 
 ---
 
@@ -255,7 +255,7 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - SSH port: 9654 (not 22)
 - Service: `systemd` unit at `scripts/trader.service`, managed as `trader` user
 - Deploy: `~/scripts/deploy.sh` — git pull + pip install + service restart
-- Token refresh: run `python scripts/login.py` locally (Mac), then `~/scripts/refresh-token.sh` SCPs the updated `.env` to EC2 and restarts the service
+- Token refresh: SSH into EC2, run `python scripts/kite_auth_server.py`, open the printed URL in any browser (Mac or iPhone)
 - KITE_ACCESS_TOKEN expires midnight IST — must refresh daily before 09:00
 
 ---
