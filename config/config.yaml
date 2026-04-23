@@ -1,7 +1,7 @@
 env: paper
 candle_timeframe: 60minute
 capital:
-  total: 100000
+  total: 500000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
 interested:
@@ -38,23 +38,6 @@ watchlist:
 
 
 strategies:
-  rsi:
-    enabled: false
-    period: 14
-    oversold: 30
-  macd:
-    enabled: false
-    fast: 12
-    slow: 26
-    signal: 9
-  zlmtf_macd:
-    enabled: false
-    fast: 9
-    slow: 18
-    signal: 9
-    current_tf_minutes:  30
-    htf_minutes: 60
-    lookback_bars: 5
   lr_extrema:
     enabled: true
     warmup_bars: 200

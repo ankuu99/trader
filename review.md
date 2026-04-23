@@ -465,20 +465,7 @@ Additionally, the backtest engine calls `risk.close_position(symbol)` (without e
 
 ---
 
-### R2-8. RSI and MACD strategies have no exit mechanism and no `stop_loss_hint`
-**File:** `trader/strategies/rsi.py` and `trader/strategies/macd.py`
-
-Both strategies emit ENTRY signals only — they never emit EXIT signals. They also don't provide `stop_loss_hint` or `target_price` in their signals.
-
-In live mode with `gtt_enabled: false` (current config):
-- Positions entered by RSI/MACD have **no exit path at all**
-- The RiskManager computes SL/target from config defaults, but those are only used in the Order — nothing acts on them
-- The position stays open until process restart
-
-With `gtt_enabled: true`:
-- GTT provides SL/target exits, but the strategy's `position` state is never reset (no EXIT `on_order_update` from GTT, same as R2-1)
-
-Currently mitigated because both strategies are `enabled: false` in config. But if either is ever enabled, positions will accumulate without exits.
+### R2-8. ✅ RSI and MACD strategies removed — no longer applicable
 
 ---
 

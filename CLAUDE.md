@@ -56,9 +56,6 @@ trader/
     └── strategies/
         ├── base.py                # Strategy ABC, Signal dataclass, Direction/SignalType enums
         ├── registry.py            # build_strategies(instrument, config) factory
-        ├── rsi.py                 # RSIStrategy — entry only
-        ├── macd.py                # MACDStrategy — entry only
-        ├── zlmtf_macd.py          # ZeroLagMTFMACDStrategy — dual timeframe MACD
         └── lr_extrema.py          # LRExtremaStrategy — self-training logistic regression
 ```
 
