@@ -51,6 +51,7 @@ class LiveFeed:
         self._vol_last: dict[int, int] = {}      # token → last cumulative vol seen
 
         self._stopping = False
+        self._suspended = False  # True between market close disconnect and next-day reconnect
 
         self._ticker.on_connect = self._on_connect
         self._ticker.on_ticks = self._on_ticks
@@ -90,6 +91,25 @@ class LiveFeed:
         self._ticker.close()
         logger.info("Live feed stopped")
 
+    def disconnect(self):
+        """Suspend feed at market close. Clears partial candles and pending volume state.
+        Call reconnect() at next market open to resume."""
+        self._suspended = True
+        with self._lock:
+            self._partials.clear()
+            self._vol_baseline.clear()
+            self._vol_last.clear()
+        self._ticker.close()
+        logger.info("Live feed disconnected for market close")
+
+    def reconnect(self):
+        """Re-establish WebSocket connection at market open. No-op on first startup."""
+        if not self._suspended:
+            return
+        self._suspended = False
+        self._ticker.connect(threaded=True)
+        logger.info("Live feed reconnecting for market open")
+
     # ------------------------------------------------------------------ #
     # KiteTicker callbacks                                                 #
     # ------------------------------------------------------------------ #
@@ -112,18 +132,18 @@ class LiveFeed:
                 logger.exception("Error in order update handler")
 
     def _on_close(self, ws, code, reason):
-        if self._stopping:
+        if self._stopping or self._suspended:
             logger.info("KiteTicker closed cleanly")
         else:
             logger.warning("KiteTicker disconnected | code=%s reason=%s", code, reason)
 
     def _on_error(self, ws, code, reason):
-        if self._stopping:
-            return  # expected during shutdown — suppress noise
+        if self._stopping or self._suspended:
+            return  # expected during shutdown/suspend — suppress noise
         logger.error("KiteTicker error | code=%s reason=%s", code, reason)
 
     def _on_reconnect(self, ws, attempts):
-        if self._stopping:
+        if self._stopping or self._suspended:
             return
         logger.info("KiteTicker reconnecting | attempt=%d", attempts)
 

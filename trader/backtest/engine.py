@@ -117,6 +117,18 @@ def run_backtest(
             update.get("target_price")
             or round(fill_price + (fill_price - sl_price) * config.risk_reward, 2)
         )
+        # Guard: if signal was generated at a different price than fill (e.g. gap
+        # open), SL/target may be stale and inverted relative to the actual fill
+        # price. Rebase both levels from fill_price using strategy's own percentages.
+        if fill_price > 0 and (sl_price <= 0 or sl_price >= fill_price or target <= fill_price):
+            stop_pct  = params.get("stop_pct",   3.0) / 100
+            profit_pct = params.get("profit_pct", 3.0) / 100
+            sl_price = round(fill_price * (1 - stop_pct),  2)
+            target   = round(fill_price * (1 + profit_pct), 2)
+            logger.debug(
+                "SL/target rebased to fill price | %s | fill=%.2f sl=%.2f target=%.2f",
+                instrument, fill_price, sl_price, target,
+            )
         open_positions[instrument] = {
             "entry": fill_price,
             "sl": sl_price,
@@ -210,6 +222,16 @@ def run_backtest(
             strategy.on_candle(candle)
         if warmup_feed:
             logger.info("Pre-warmup complete | %s | %d candles", symbol, len(warmup_feed))
+
+    # Clear phantom entry state left by signals that fired during pre-warmup
+    # but never received a fill (no orders are placed during warmup).
+    # Without this, the first real candle triggers a phantom EXIT that consumes
+    # the signal without placing a trade — causing missing trades vs a wider window.
+    for strategy in strategy_map.values():
+        if getattr(strategy, "_entry_price", None) is not None and strategy.position is None:
+            logger.debug("Clearing phantom pre-warmup entry state | %s", strategy.instrument)
+            strategy._entry_price = None
+            strategy._held_bars = 0
 
     for candle in merged_candles:
         symbol = candle["_symbol"]

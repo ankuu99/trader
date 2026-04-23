@@ -47,6 +47,16 @@ class OrderManager:
             return self._place_paper(order)
         return self._place_live(order)
 
+    def clear_pending(self):
+        """Discard stale pending paper orders at market close."""
+        if self._pending_paper:
+            logger.warning(
+                "Discarding %d stale pending paper order(s) at market close: %s",
+                len(self._pending_paper),
+                [o.instrument for o in self._pending_paper.values()],
+            )
+            self._pending_paper.clear()
+
     def on_candle(self, candle: dict):
         """Fill pending paper orders at this candle's open price."""
         if self._mode != "paper" or not self._pending_paper:

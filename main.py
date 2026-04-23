@@ -210,6 +210,7 @@ def main():
             token = symbol_to_token[symbol]
             warm_up(kite, store, token, symbol, config.candle_timeframe,
                     config.historical_cache_days)
+        feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
 
     def post_market():
         portfolio.refresh()  # fetch live P&L from Kite before summarising
@@ -238,6 +239,8 @@ def main():
             capital=config.total_capital,
         )
         risk.reset_day()
+        orders.clear_pending()
+        feed.disconnect()
 
     scheduler.on_pre_market(pre_market)
     scheduler.on_post_market(post_market)
