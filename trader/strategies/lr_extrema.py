@@ -84,8 +84,9 @@ class LRExtremaStrategy(Strategy):
 
             if reason:
                 logger.info(
-                    "LR-Extrema EXIT | %s | %s | entry=%.2f close=%.2f",
+                    "LR-Extrema EXIT | %s | %s | entry=%.2f close=%.2f | candle=%s",
                     self.instrument, reason, self._entry_price, close,
+                    candle.get("timestamp"),
                 )
                 self._entry_price = None
                 self._held_bars = 0
@@ -118,8 +119,9 @@ class LRExtremaStrategy(Strategy):
                     p_min = proba[classes.index(0)]
                     if p_min >= self._threshold:
                         logger.info(
-                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f",
+                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f | candle=%s",
                             self.instrument, p_min, self._threshold, close,
+                            candle.get("timestamp"),
                         )
                         self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                         self._held_bars = 0
