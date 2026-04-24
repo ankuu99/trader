@@ -148,7 +148,8 @@ class LRExtremaStrategy(Strategy):
                 fill_price = order.get("price") or order.get("average_price")
                 if fill_price:
                     self._entry_price = float(fill_price)
-                self._held_bars = 0
+                held_bars = order.get("_held_bars")
+                self._held_bars = int(held_bars) if held_bars is not None else 0
             elif signal_type == SignalType.EXIT:
                 self._entry_price = None
         elif status in ("REJECTED", "CANCELLED"):

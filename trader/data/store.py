@@ -3,9 +3,10 @@ SQLite interface — all raw SQL lives here and nowhere else.
 
 Tables
 ------
-candles  : OHLCV data for all instruments and timeframes
-orders   : every order action with full lifecycle tracking
-trades   : filled trade records linked to orders
+candles        : OHLCV data for all instruments and timeframes
+orders         : every order action with full lifecycle tracking
+trades         : filled trade records linked to orders
+open_positions : paper-mode positions that survive restarts
 """
 
 import os
@@ -102,6 +103,14 @@ class Store:
                     price       REAL    NOT NULL,
                     traded_at   TEXT    NOT NULL,
                     FOREIGN KEY (order_id) REFERENCES orders(order_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS open_positions (
+                    instrument  TEXT    PRIMARY KEY,
+                    entry_price REAL    NOT NULL,
+                    quantity    INTEGER NOT NULL,
+                    held_bars   INTEGER NOT NULL DEFAULT 0,
+                    entry_time  TEXT    NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -274,6 +283,45 @@ class Store:
                     reject_reason,
                 ),
             )
+
+    # ------------------------------------------------------------------ #
+    # Open positions (paper mode persistence)                              #
+    # ------------------------------------------------------------------ #
+
+    def upsert_open_position(self, instrument: str, entry_price: float,
+                             quantity: int, held_bars: int, entry_time: datetime):
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(instrument) DO UPDATE SET
+                    entry_price = excluded.entry_price,
+                    quantity    = excluded.quantity,
+                    held_bars   = excluded.held_bars,
+                    entry_time  = excluded.entry_time
+                """,
+                (instrument, entry_price, quantity, held_bars,
+                 self._to_naive(entry_time).isoformat()),
+            )
+
+    def update_held_bars(self, instrument: str, held_bars: int):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE open_positions SET held_bars = ? WHERE instrument = ?",
+                (held_bars, instrument),
+            )
+
+    def delete_open_position(self, instrument: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM open_positions WHERE instrument = ?", (instrument,))
+
+    def read_open_positions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT instrument, entry_price, quantity, held_bars, entry_time FROM open_positions"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def write_trade(self, trade: dict):
         """Record a filled trade."""

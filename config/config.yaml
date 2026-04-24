@@ -1,7 +1,7 @@
 env: paper
 candle_timeframe: 60minute
 capital:
-  total: 500000
+  total: 200000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
 interested:

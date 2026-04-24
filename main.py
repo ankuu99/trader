@@ -115,6 +115,32 @@ def main():
             if hasattr(strat, "_held_bars"):
                 strat._held_bars = 0
 
+    # Restore paper positions from SQLite so exits fire correctly after restart.
+    if config.env == "paper":
+        open_paper = store.read_open_positions()
+        for pos in open_paper:
+            instrument = pos["instrument"]
+            strats_for_instrument = [s for s in strategies if s.instrument == instrument]
+            if not strats_for_instrument:
+                logger.warning("Paper position in DB has no matching strategy | %s — skipping", instrument)
+                continue
+            synthetic_fill = {
+                "status": "COMPLETE",
+                "signal_type": SignalType.ENTRY,
+                "direction": "BUY",
+                "price": pos["entry_price"],
+                "instrument": instrument,
+                "quantity": pos["quantity"],
+                "_held_bars": pos["held_bars"],
+            }
+            for strat in strats_for_instrument:
+                strat.on_order_update(synthetic_fill)
+            risk.on_order_filled(instrument, pos["entry_price"], pos["quantity"])
+            logger.info(
+                "Paper position restored | %s | entry=%.2f qty=%d held_bars=%d",
+                instrument, pos["entry_price"], pos["quantity"], pos["held_bars"],
+            )
+
     # Reconcile state from broker after warm-up — overrides any position state
     # set during warm-up with the actual broker reality.
     if config.env == "live":
@@ -167,8 +193,12 @@ def main():
         strategy = update.get("strategy", "")
         if direction == "BUY":
             risk.on_order_filled(instrument, fill_price, quantity)
+            if config.env == "paper":
+                store.upsert_open_position(instrument, fill_price, quantity, 0, datetime.now())
         else:
             risk.close_position(instrument, fill_price)
+            if config.env == "paper":
+                store.delete_open_position(instrument)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
                                      strategy=strategy, mode=config.env)
@@ -194,6 +224,8 @@ def main():
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
+            if config.env == "paper" and getattr(strategy, "_entry_price", None) is not None:
+                store.update_held_bars(symbol, getattr(strategy, "_held_bars", 0))
             if signal is None:
                 continue
             order = risk.validate(signal)
