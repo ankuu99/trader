@@ -1,7 +1,7 @@
 env: paper
-candle_timeframe: 60minute
+candle_timeframe: 15minute
 capital:
-  total: 200000
+  total: 100000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
 interested:
@@ -32,8 +32,8 @@ strategies:
     enabled: true
     warmup_bars: 200
     threshold: 0.90
-    profit_pct: 5.0
-    stop_pct: 2.5
+    profit_pct: 4.0
+    stop_pct: 2
     hold_bars: 150
     retrain_every: 50
     extrema_order: 5

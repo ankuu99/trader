@@ -10,6 +10,7 @@ stop-loss price placed with each order.
 """
 
 import argparse
+import csv
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -57,6 +58,7 @@ def main():
     params = config.strategy_config("lr_extrema")
     trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt)
     _print_summary(trades, args.from_date, args.to_date)
+    _dump_csv(trades, args.from_date, args.to_date)
 
 
 def _print_summary(trades: list[dict], from_date: str, to_date: str):
@@ -111,6 +113,24 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         avg_loss = sum(t["pnl"] for t in losses) / len(losses)
         print(f"  Avg loss   : ₹{avg_loss:,.2f}")
     print(f"{'='*55}\n")
+
+
+def _dump_csv(trades: list[dict], from_date: str, to_date: str):
+    if not trades:
+        return
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    from_str = from_date.replace("-", "")
+    to_str = to_date.replace("-", "")
+    timeframe = config.candle_timeframe.replace("minute", "m").replace("day", "1d")
+    filename = f"portfolio_{from_str}_{to_str}_{timeframe}_{now}.csv"
+    out_path = Path(__file__).resolve().parents[1] / "backtest_results" / filename
+    fields = ["instrument", "entry_date", "exit_date", "entry", "exit", "qty",
+              "cost", "pnl", "product", "reason"]
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(trades)
+    print(f"  CSV saved : {out_path}")
 
 
 if __name__ == "__main__":

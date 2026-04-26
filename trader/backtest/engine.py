@@ -241,7 +241,9 @@ def run_backtest(
         # Intrabar SL/target simulation — always active in backtest.
         # Checks candle low/high against stored SL/target prices so exits fire
         # at the correct price rather than slipping to the next candle's open.
-        if symbol in open_positions:
+        # Skip the fill candle itself — GTT is disabled so same-candle entry+exit
+        # cannot happen in live trading (strategy only sees exits on closed candles).
+        if symbol in open_positions and current_ts[0] != open_positions[symbol]["entry_date"]:
             pos = open_positions[symbol]
             sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
             tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
