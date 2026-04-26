@@ -147,9 +147,8 @@ def run_backtest(
     # Must be fetched BEFORE the main [from_dt, to_dt] fetch so the cache is
     # populated in chronological order — otherwise get_candles sees cached_latest
     # pointing past from_dt and skips the pre-warmup range entirely.
-    warmup_bars = params.get("warmup_bars", 200)
-    candles_per_day = max(1.0, 375.0 / config.candle_minutes)
-    pre_warmup_days = math.ceil(warmup_bars / candles_per_day) * 2  # 2× buffer for weekends/holidays
+
+    pre_warmup_days = config.historical_cache_days
     pre_warmup_from = from_dt - timedelta(days=pre_warmup_days)
 
     # --- Fetch pre-warmup candles first (DB empty at this point) ---
