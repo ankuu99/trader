@@ -74,15 +74,20 @@ def _send(text: str) -> bool:
 # ------------------------------------------------------------------ #
 
 def notify_order_filled(instrument: str, direction: str, quantity: int,
-                        fill_price: float, strategy: str, mode: str):
+                        fill_price: float, strategy: str, mode: str,
+                        stop_loss: float | None = None, target_price: float | None = None):
     emoji = "🟢" if direction == "BUY" else "🔴"
     tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    sl_line = f"SL         : ₹{stop_loss:,.2f}\n" if stop_loss else ""
+    tgt_line = f"Target     : ₹{target_price:,.2f}\n" if target_price else ""
     text = (
         f"{emoji} *Order Filled* {tag}\n"
         f"Instrument : `{instrument}`\n"
         f"Direction  : {direction}\n"
         f"Quantity   : {quantity}\n"
         f"Price      : ₹{fill_price:,.2f}\n"
+        f"{sl_line}"
+        f"{tgt_line}"
         f"Strategy   : {strategy}\n"
         f"Time       : {datetime.now().strftime('%H:%M:%S')}"
     )

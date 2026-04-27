@@ -252,7 +252,9 @@ def main():
                 store.delete_open_position(instrument)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
-                                     strategy=strategy, mode=config.env)
+                                     strategy=strategy, mode=config.env,
+                                     stop_loss=update.get("trigger_price") or None,
+                                     target_price=update.get("target_price") or None)
         for strat in strategies:
             if strat.instrument == instrument:
                 strat.on_order_update(update)
