@@ -110,7 +110,7 @@ class Config:
 
     @property
     def candle_minutes(self) -> int:
-        mapping = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "4hour": 240, "day": 390}
+        mapping = {"minute": 1, "5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "4hour": 240, "day": 390}
         return mapping.get(self.candle_timeframe, 390)
 
     @property
