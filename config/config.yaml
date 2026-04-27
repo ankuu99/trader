@@ -39,7 +39,8 @@ strategies:
     extrema_order: 5
 risk:
   gtt_enabled: false
-  max_open_positions: 5 
+  order_type: limit          # market | limit  (live mode only; paper always fills at next open)
+  max_open_positions: 5
   default_sl_pct: 2
   risk_reward: 4
   max_capital_per_stock_pct: 20.0

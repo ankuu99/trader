@@ -83,6 +83,11 @@ class Config:
         return bool(self._data["risk"].get("gtt_enabled", True))
 
     @property
+    def order_type(self) -> str:
+        """'MARKET' or 'LIMIT' — controls live order placement only."""
+        return self._data["risk"].get("order_type", "market").upper()
+
+    @property
     def default_sl_pct(self) -> float:
         return float(self._data["risk"]["default_sl_pct"])
 

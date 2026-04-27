@@ -28,6 +28,8 @@ from trader.core.config import config
 from trader.core.logger import get_logger, setup
 from trader.data.historical import get_candles
 from trader.data.store import Store
+from trader.notifications import telegram
+telegram.disable()
 
 setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during scan
 logger = get_logger(__name__)

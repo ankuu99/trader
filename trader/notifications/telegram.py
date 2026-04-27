@@ -31,6 +31,13 @@ logger = get_logger(__name__)
 
 _BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _TIMEOUT = 5  # seconds
+_enabled = True
+
+
+def disable():
+    """Suppress all notifications (e.g. during backtesting)."""
+    global _enabled
+    _enabled = False
 
 
 def _token() -> str | None:
@@ -49,6 +56,8 @@ def _send(text: str) -> bool:
     token = _token()
     chat_id = _chat_id()
 
+    if not _enabled:
+        return False
     if not token or not chat_id:
         logger.debug("Telegram not configured — skipping notification")
         return False
@@ -72,6 +81,30 @@ def _send(text: str) -> bool:
 # ------------------------------------------------------------------ #
 # Public notification functions                                        #
 # ------------------------------------------------------------------ #
+
+def notify_order_queued(instrument: str, direction: str, quantity: int,
+                        strategy: str, mode: str,
+                        stop_loss: float | None = None, target_price: float | None = None,
+                        price_hint: float | None = None, order_type: str = "MARKET"):
+    emoji = "🟡" if direction == "BUY" else "🟠"
+    tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    price_line = f"Price      : ₹{price_hint:,.2f}\n" if price_hint else ""
+    sl_line    = f"SL         : ₹{stop_loss:,.2f}\n" if stop_loss else ""
+    tgt_line   = f"Target     : ₹{target_price:,.2f}\n" if target_price else ""
+    status = "Queued" if mode == "paper" else f"Placed ({order_type})"
+    text = (
+        f"{emoji} *Order {status}* {tag}\n"
+        f"Instrument : `{instrument}`\n"
+        f"Direction  : {direction}\n"
+        f"Quantity   : {quantity}\n"
+        f"{price_line}"
+        f"{sl_line}"
+        f"{tgt_line}"
+        f"Strategy   : {strategy}\n"
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
 
 def notify_order_filled(instrument: str, direction: str, quantity: int,
                         fill_price: float, strategy: str, mode: str,

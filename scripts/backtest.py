@@ -25,6 +25,8 @@ from trader.backtest.engine import run_backtest
 from trader.core.config import config
 from trader.core.logger import get_logger, setup
 from trader.data.store import Store
+from trader.notifications import telegram
+telegram.disable()
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)

@@ -14,6 +14,7 @@ from kiteconnect import KiteConnect
 from trader.core.config import config
 from trader.core.logger import get_logger
 from trader.data.store import Store
+from trader.notifications import telegram
 from trader.strategies.base import Direction
 from trader.risk.manager import Order
 
@@ -188,26 +189,38 @@ class OrderManager:
             "Paper order queued | %s x%d | SL=%.2f target=%.2f | strategy=%s",
             order.instrument, order.quantity, order.stop_loss, order.target_price, order.strategy,
         )
+        telegram.notify_order_queued(
+            order.instrument, order.direction.value, order.quantity,
+            strategy=order.strategy, mode="paper",
+            stop_loss=order.stop_loss or None,
+            target_price=order.target_price or None,
+            price_hint=order.price_hint or None,
+        )
         return order_id
 
     def _place_live(self, order: Order) -> str:
         symbol = order.instrument.split(":")[-1]
         if order.direction == Direction.SELL:
             self._cancel_gtt(order.instrument)
+        order_type = config.order_type  # "MARKET" or "LIMIT"
+        limit_price = order.price_hint if order_type == "LIMIT" else None
         try:
-            order_id = self._kite.place_order(
+            kite_kwargs = dict(
                 variety=KiteConnect.VARIETY_REGULAR,
                 exchange=_EXCHANGE,
                 tradingsymbol=symbol,
                 transaction_type=order.direction.value,
                 quantity=order.quantity,
                 product=config.product,
-                order_type="MARKET",
+                order_type=order_type,
             )
+            if order_type == "LIMIT":
+                kite_kwargs["price"] = limit_price
+            order_id = self._kite.place_order(**kite_kwargs)
             record = {
                 "order_id": str(order_id),
                 "instrument": order.instrument,
-                "order_type": "MARKET",
+                "order_type": order_type,
                 "product": config.product,
                 "direction": order.direction.value,
                 "quantity": order.quantity,
@@ -221,8 +234,18 @@ class OrderManager:
             if order.direction == Direction.BUY:
                 self._instrument_orders[order.instrument] = order
             logger.info(
-                "Live order placed | %s x%d | id=%s | strategy=%s",
-                order.instrument, order.quantity, order_id, order.strategy,
+                "Live order placed | %s x%d @ %s | type=%s | id=%s | strategy=%s",
+                order.instrument, order.quantity,
+                f"{limit_price:.2f}" if limit_price else "MARKET",
+                order_type, order_id, order.strategy,
+            )
+            telegram.notify_order_queued(
+                order.instrument, order.direction.value, order.quantity,
+                strategy=order.strategy, mode="live",
+                stop_loss=order.stop_loss or None,
+                target_price=order.target_price or None,
+                price_hint=order.price_hint or None,
+                order_type=order_type,
             )
             if config.gtt_enabled and order.direction == Direction.BUY:
                 self._place_gtt_sl(order, symbol)
