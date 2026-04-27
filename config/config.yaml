@@ -1,7 +1,7 @@
-env: paper
-candle_timeframe: minute
+env: live
+candle_timeframe: 5minute
 capital:
-  total: 100000
+  total: 1000
   max_risk_per_trade_pct: 7.0
   daily_loss_limit_pct: 10.0
 interested:
@@ -38,7 +38,7 @@ strategies:
     retrain_every: 50
     extrema_order: 5
 risk:
-  gtt_enabled: false
+  gtt_enabled: true
   order_type: limit          # market | limit  (live mode only; paper always fills at next open)
   max_open_positions: 5
   default_sl_pct: 2

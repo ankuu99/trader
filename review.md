@@ -1240,3 +1240,139 @@ GTT OCO is placed immediately after limit order submission, not after fill confi
 | L5 | MEDIUM | Dormant | GTT placed before limit fill — ghost GTT with no position |
 
 **Verdict:** Limit orders are not safe to use in live mode today. L1 and L2 are the critical blockers — both can result in double positions. L3 means paper testing under `order_type: limit` gives falsely optimistic results. L4 and L5 are dormant until GTT is re-enabled. Recommend keeping `order_type: market` until L1 and L2 are fixed.
+
+---
+---
+
+# Round 6 Review — Multi-day Position Tracking & GTT Capital Flow
+
+Reviewed after GTT was re-enabled and the L5 fix (GTT placed after fill) was applied.
+Focus: position state correctness across restarts, capital tracking for multi-day CNC holds, and GTT-triggered exit accounting.
+
+---
+
+## HIGH — Significant logic issues
+
+### R6-1. Multi-day CNC positions lost on restart — capital tracking broken
+**File:** `trader/risk/manager.py` — `seed_from_kite()` and `main.py` startup
+
+`seed_from_kite()` calls `kite.positions()`, which returns **only today's traded positions**. A CNC position bought 3 days ago with no activity today returns with `quantity=0` and is skipped. On any restart:
+
+- `_open_positions` is empty
+- `_capital_deployed` is 0
+- System believes full capital is available
+- New entries can be placed on top of existing holdings, over-deploying capital
+- When GTT eventually fires (SELL), `close_position()` finds nothing in `_open_positions` — capital tracking and P&L computation are both skipped silently
+
+**Root cause:** `kite.positions()` ≠ `kite.holdings()`. Multi-day CNC holdings live in `kite.holdings()`, not `kite.positions()`. Using `kite.holdings()` directly would also pick up the user's manual holdings unrelated to this bot.
+
+**Fix:** Seed from the bot's own `open_positions` SQLite table on restart. The DB only contains what this bot placed. Cross-check against `kite.holdings()` to detect positions closed externally (e.g. GTT fired while system was down) and call `close_position()` for those:
+
+```python
+def seed_from_db(store, risk, strategies, config):
+    db_positions = store.read_open_positions()   # reads open_positions table
+    kite_holdings = {h["tradingsymbol"]: h for h in kite.holdings()}
+    for row in db_positions:
+        instrument = row["instrument"]
+        symbol = instrument.split(":")[-1]
+        if symbol not in kite_holdings or kite_holdings[symbol]["quantity"] <= 0:
+            # Position was closed externally (GTT or manual) while bot was down
+            logger.warning("Position %s in DB but not in holdings — treating as closed", instrument)
+            risk.close_position(instrument, kite_holdings.get(symbol, {}).get("last_price", 0.0))
+            store.delete_open_position(instrument)
+            continue
+        qty = row["quantity"]
+        avg = row["entry_price"]
+        risk._open_positions[instrument] = qty
+        risk._position_values[instrument] = avg * qty
+        risk._capital_deployed += avg * qty
+        # Restore strategy state
+        for strat in strategies:
+            if strat.instrument == instrument:
+                strat.on_order_update({"status": "COMPLETE", "signal_type": SignalType.ENTRY,
+                                       "direction": "BUY", "average_price": avg, "instrument": instrument})
+```
+
+---
+
+### R6-2. GTT-triggered P&L not accounted for on restart — daily loss limit blind spot
+**File:** `trader/risk/manager.py` — `__init__` and `main.py` startup
+
+`_realised_pnl` always starts at `0.0` on startup. If a GTT fires while the system is running, `close_position()` is called via the WebSocket callback and P&L is accumulated correctly. But if the system restarts after a GTT fires today:
+
+- The exit already happened at Zerodha
+- `_realised_pnl = 0.0` on restart
+- The loss from the GTT exit is invisible
+- If the loss was large enough to trigger the daily halt, the bot doesn't know — it will continue placing new entries
+
+**Fix:** On startup, read the realised P&L from `kite.positions()` net entries (Kite returns a `realised` field per position for the current day) and seed `_realised_pnl`:
+
+```python
+for p in kite_positions.get("net", []):
+    realised = float(p.get("realised", 0.0))
+    risk._realised_pnl += realised
+    if not risk._halted and risk._realised_pnl <= -config.daily_loss_limit:
+        risk._halted = True
+        logger.warning("Halt triggered from seeded P&L on startup | pnl=%.2f", risk._realised_pnl)
+```
+
+---
+
+## MEDIUM — Should fix
+
+### R6-3. ✅ L5: GTT placed before fill confirmation — ghost GTT on unfilled limit orders — FIXED
+**File:** `trader/orders/manager.py` — moved `_place_gtt_sl` from `_place_live()` to `on_kite_order_update()`
+
+GTT is now placed only after `status == "COMPLETE" and direction == "BUY"` is confirmed via WebSocket. If the limit order is rejected, cancelled, or never fills (EOD cancellation at 3:30 PM), no GTT is placed.
+
+---
+
+### R6-4. `_instrument_orders` not cleaned up when BUY order is CANCELLED
+**File:** `trader/orders/manager.py:162-165` — `on_kite_order_update()`
+
+When a BUY order is CANCELLED (e.g. unfilled limit at EOD), it is removed from `_live_orders` but remains in `_instrument_orders`. This map is the fallback used to recover context for GTT-triggered fills. A future GTT SELL for the same instrument (from a later re-entry) would find the stale BUY entry from the original cancelled order — wrong strategy context, wrong quantity.
+
+**Fix:** One-line change — also pop `_instrument_orders` when a BUY is CANCELLED or REJECTED:
+
+```python
+if status in ("COMPLETE", "REJECTED", "CANCELLED"):
+    self._live_orders.pop(order_id, None)
+    if status == "COMPLETE" and direction == "SELL":
+        self._instrument_orders.pop(instrument, None)
+    if status in ("REJECTED", "CANCELLED") and direction == "BUY":
+        self._instrument_orders.pop(instrument, None)
+```
+
+---
+
+### R6-5. GTT `last_price` uses signal price_hint, not actual fill price
+**File:** `trader/orders/manager.py` — `_place_gtt_sl()` called from `on_kite_order_update()`
+
+After the L5 fix, `_place_gtt_sl(original, symbol)` is called with the original Order, which has `price_hint = candle close at signal time`. For limit orders, the actual fill price may differ from `price_hint`. The GTT `last_price` parameter is used by Zerodha to validate that the trigger values straddle the current price. If slippage is large, the validation check could fail.
+
+**Fix:** Pass the actual `fill_price` as `last_price` in the GTT call:
+
+```python
+# In on_kite_order_update, after the COMPLETE BUY check:
+if status == "COMPLETE" and direction == "BUY" and config.gtt_enabled and original is not None:
+    self._place_gtt_sl(original, symbol, last_price=fill_price)
+
+# In _place_gtt_sl, accept optional last_price override:
+def _place_gtt_sl(self, order: Order, symbol: str, last_price: float | None = None):
+    price = last_price or order.price_hint
+    result = self._kite.place_gtt(..., last_price=price, ...)
+```
+
+---
+
+## Round 6 Summary
+
+| ID | Severity | Issue |
+|----|----------|-------|
+| R6-1 | HIGH | Multi-day CNC positions lost on restart — seed from DB not kite.positions() |
+| R6-2 | HIGH | GTT P&L not seeded on restart — daily loss limit blind on same-day restart |
+| R6-3 | MEDIUM | ✅ L5 fixed — GTT only placed after fill confirmation |
+| R6-4 | MEDIUM | `_instrument_orders` stale after CANCELLED BUY — wrong GTT context |
+| R6-5 | MEDIUM | GTT last_price uses signal price_hint, not actual fill price |
+
+**Verdict:** R6-1 is the most impactful — any restart during live trading (crash, deploy, token refresh) loses track of all multi-day positions. The bot will attempt to over-deploy capital and miss GTT P&L accounting. R6-2 is a daily loss limit blind spot. R6-4 and R6-5 are lower risk but both affect GTT correctness directly. Fix R6-1 and R6-2 before going live with GTT enabled.

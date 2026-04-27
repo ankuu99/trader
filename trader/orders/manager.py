@@ -164,6 +164,9 @@ class OrderManager:
             self._live_orders.pop(order_id, None)
             if status == "COMPLETE" and direction == "SELL":
                 self._instrument_orders.pop(instrument, None)
+        # Place GTT only after BUY fill is confirmed (L5 fix: not at order submission time)
+        if status == "COMPLETE" and direction == "BUY" and config.gtt_enabled and original is not None:
+            self._place_gtt_sl(original, symbol)
 
     # ------------------------------------------------------------------ #
     # Internal                                                             #
@@ -247,8 +250,6 @@ class OrderManager:
                 price_hint=order.price_hint or None,
                 order_type=order_type,
             )
-            if config.gtt_enabled and order.direction == Direction.BUY:
-                self._place_gtt_sl(order, symbol)
             return str(order_id)
         except Exception as e:
             logger.error("Failed to place order for %s: %s", order.instrument, e)
