@@ -8,8 +8,15 @@ Responsibilities:
   - Reconnect automatically on disconnection
 """
 
-from datetime import datetime, timezone
+import time as _sys_time
+from datetime import datetime, timedelta, timezone
 from threading import Lock
+
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+# True when the server's local timezone is UTC (standard EC2 default).
+# KiteConnect returns naive datetimes in local time, so on UTC machines
+# tick timestamps are UTC and must be shifted to IST for correct bucketing.
+_SERVER_IS_UTC = _sys_time.timezone == 0 and not _sys_time.daylight
 from typing import Callable
 
 from kiteconnect import KiteTicker
@@ -161,9 +168,18 @@ class LiveFeed:
 
         token = tick.get("instrument_token")
         ltp = tick.get("last_price")
-        logger.info("Tick | token=%s ltp=%s", token, ltp)
+        logger.debug("Tick | token=%s ltp=%s", token, ltp)
         volume = tick.get("volume_traded", 0)
-        ts: datetime = tick.get("timestamp") or datetime.now(timezone.utc)
+        ts_raw: datetime = tick.get("timestamp") or datetime.now()
+        if ts_raw.tzinfo is not None:
+            # Aware datetime — convert to IST, strip tzinfo
+            ts = ts_raw.astimezone(timezone(_IST_OFFSET)).replace(tzinfo=None)
+        elif _SERVER_IS_UTC:
+            # Naive datetime on a UTC server — shift to IST
+            ts = ts_raw + _IST_OFFSET
+        else:
+            # Naive datetime on a local (IST) machine — use as-is
+            ts = ts_raw
 
         if token is None or ltp is None:
             return
