@@ -1130,7 +1130,7 @@ The strategy processes this as a regular candle, but its OHLCV is meaningless (e
 
 ---
 
-## Round 4 Summary
+## Round 4 Summary (continued below)
 
 | Severity | Count | Key theme |
 |----------|-------|-----------|
@@ -1139,3 +1139,104 @@ The strategy processes this as a regular candle, but its OHLCV is meaningless (e
 | LOW | 2 | BZ/BE liquidity risk, phantom post-close candle |
 
 **Verdict:** No CRITICAL issues remain — the startup sequence (cache → warm-up → phantom cleanup → reconciliation) is now correct, and the Direction(None) crash is fixed. The highest-priority Round 4 fix is R4-1 (thread safety). Since APScheduler runs jobs on a background thread and KiteTicker runs on another, shared state is accessed without locks. A single `threading.Lock` guarding `handle_candle`, `handle_order_update`, and each scheduler hook would eliminate this class of bug. R4-2 (duplicate fill capital) should also be fixed before live — it can be triggered by normal Kite WebSocket reconnection behaviour and silently blocks all new entries.
+
+---
+---
+
+# Round 5 Review — Limit Order Mode
+
+Reviewed after `order_type: limit` was added to config and `_place_live` was updated.
+Focus: correctness of limit order handling across all code paths.
+**Note:** GTT is currently disabled (`gtt_enabled: false`). Issues that are dormant under this config are marked accordingly.
+
+---
+
+## HIGH — Must fix before using limit orders in live mode
+
+### L1. ✅ Capital not locked while limit order is pending — FIXED
+**File:** `trader/risk/manager.py` — `on_order_filled()` and `validate()`
+
+`on_order_filled()` (which records deployed capital) is only called when a fill is COMPLETE. While a limit BUY is sitting unfilled in Kite, `capital_available` does not reflect the pending order. If a second signal fires for the same instrument before the first limit fills, `validate()` passes the duplicate-position check (`instrument not in _open_positions` is True — the first order hasn't filled yet) and a second order is placed.
+
+With a single strategy and `_entry_price` guard, the re-entry window is narrow: only the exact candle between the EXIT phantom clear (see L3) and the pending BUY fill arriving. But a second strategy or a mid-session restart could trigger it more reliably.
+
+**Fix approach:** Track pending capital separately in RiskManager — deduct at order placement and release on CANCELLED/REJECTED. Confirm with user before implementing.
+
+---
+
+### L2. ✅ Strategy clears `_entry_price` on phantom EXIT while limit is pending — FIXED
+**File:** `trader/strategies/lr_extrema.py:71-99` and `trader/risk/manager.py:131-136`
+
+**Sequence:**
+1. Limit BUY placed → `_entry_price = price_hint` (re-entry guard set)
+2. Price moves ≥ `profit_pct` or ≤ `-stop_pct` before the limit fills
+3. Strategy exit block runs (condition: `self._entry_price is not None`)
+4. EXIT signal emitted → strategy clears `_entry_price = None`, `_held_bars = 0`
+5. RiskManager correctly blocks the SELL (`quantity = 0` in `_open_positions`, returns None)
+6. **Re-entry guard is now gone** — strategy is fully reset
+7. Original limit order is still pending in Kite
+8. Next candle: strategy can fire a fresh ENTRY → second limit order placed
+9. Both limits eventually fill → two open positions for same instrument, but RiskManager only has one
+
+**Impact:** Double position possible. In practice requires a large intrabar move (≥ `profit_pct` = 4% or ≤ `-stop_pct` = 2%) between signal and fill — uncommon on 5-min candles but possible on volatile days.
+
+**Fix approach:** On EXIT emission, check whether the exit signal was accepted (non-None return from RiskManager) before clearing `_entry_price`. This requires wiring the RiskManager response back into the strategy — a structural change. Alternatively, skip the exit management block entirely until position is confirmed (status=COMPLETE). Confirm with user before implementing.
+
+---
+
+## MEDIUM — Significant for limit mode correctness
+
+### L3. Paper mode ignores limit price — always fills at next candle open
+**File:** `trader/orders/manager.py:61-93` — `on_candle()`
+
+Paper mode fills pending orders at `candle["open"]` unconditionally. A BUY limit at ₹100 fills even if next candle opens at ₹105. This makes paper mode more optimistic than live: limit orders that would miss in live trading appear to fill in paper. Backtested returns under `order_type: limit` are overstated.
+
+**Fix approach:** In `on_candle`, skip fill if `order.price_hint` is set and `fill_price > order.price_hint` for BUY orders (limit price missed). The pending order would remain until the next candle. Confirm with user before implementing.
+
+---
+
+### L4. `_instrument_orders` not cleaned up when limit BUY is CANCELLED
+**File:** `trader/orders/manager.py:162-165` — `on_kite_order_update()`
+
+```python
+if status in ("COMPLETE", "REJECTED", "CANCELLED"):
+    self._live_orders.pop(order_id, None)
+    if status == "COMPLETE" and direction == "SELL":
+        self._instrument_orders.pop(instrument, None)
+```
+
+When a CNC limit BUY is CANCELLED at 3:30 PM (unfilled at EOD), it is removed from `_live_orders` but stays in `_instrument_orders`. This map is used to recover GTT fill context — a future GTT SELL for the same instrument would find the stale BUY entry and recover wrong context.
+
+**Dormant while `gtt_enabled: false`.** Will become active if GTT is re-enabled.
+
+**Fix approach:** Also pop `_instrument_orders` on CANCELLED/REJECTED of BUY orders. One-line change.
+
+---
+
+### L5. GTT placed before limit fill — ghost GTT with no position backing it
+**File:** `trader/orders/manager.py:250-251` — `_place_live()`
+
+```python
+if config.gtt_enabled and order.direction == Direction.BUY:
+    self._place_gtt_sl(order, symbol)
+```
+
+GTT OCO is placed immediately after limit order submission, not after fill confirmation. If the limit never fills (price moves away, cancelled at EOD), the GTT remains active on Zerodha — armed to SELL a position that was never entered.
+
+**Dormant while `gtt_enabled: false`.** Will become active if GTT is re-enabled.
+
+**Fix approach:** Move `_place_gtt_sl` call to inside `on_kite_order_update` when status=COMPLETE and direction=BUY. Confirm with user before implementing.
+
+---
+
+## Round 5 Summary
+
+| ID | Severity | Active? | Issue |
+|----|----------|---------|-------|
+| L1 | HIGH | Yes | Capital not locked while limit pending — allows double orders |
+| L2 | HIGH | Yes | Phantom EXIT clears re-entry guard while limit is pending |
+| L3 | MEDIUM | Yes | Paper mode ignores limit price — always fills, overstates returns |
+| L4 | MEDIUM | Dormant | `_instrument_orders` stale after CANCELLED limit BUY |
+| L5 | MEDIUM | Dormant | GTT placed before limit fill — ghost GTT with no position |
+
+**Verdict:** Limit orders are not safe to use in live mode today. L1 and L2 are the critical blockers — both can result in double positions. L3 means paper testing under `order_type: limit` gives falsely optimistic results. L4 and L5 are dormant until GTT is re-enabled. Recommend keeping `order_type: market` until L1 and L2 are fixed.

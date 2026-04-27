@@ -1,5 +1,5 @@
 env: paper
-candle_timeframe: 5minute
+candle_timeframe: minute
 capital:
   total: 100000
   max_risk_per_trade_pct: 7.0
@@ -46,7 +46,7 @@ risk:
   max_capital_per_stock_pct: 20.0
 data:
   db_path: data/market.db
-  historical_cache_days: 90
+  historical_cache_days: 20
 logging:
   level: INFO
   dir: logs/

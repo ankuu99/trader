@@ -37,12 +37,14 @@ class RiskManager:
         self._open_positions: dict[str, int] = {}     # instrument → filled quantity
         self._position_values: dict[str, float] = {}  # instrument → entry_price * qty
         self._capital_deployed: float = 0.0
+        self._pending_orders: dict[str, float] = {}   # instrument → expected cost (pre-fill lock)
         self._realised_pnl: float = 0.0
         self._halted: bool = False
 
     @property
     def capital_available(self) -> float:
-        return max(0.0, config.total_capital - self._capital_deployed)
+        pending = sum(self._pending_orders.values())
+        return max(0.0, config.total_capital - self._capital_deployed - pending)
 
     def validate(self, signal: Signal) -> Order | None:
         if self._halted:
@@ -54,12 +56,16 @@ class RiskManager:
         if signal.signal_type == SignalType.EXIT:
             return self._validate_exit(signal)
 
-        if len(self._open_positions) >= config.max_open_positions:
+        if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
             logger.warning("Signal rejected — max open positions | %s", signal.instrument)
             return None
 
         if signal.instrument in self._open_positions:
             logger.warning("Signal rejected — already in position | %s", signal.instrument)
+            return None
+
+        if signal.instrument in self._pending_orders:
+            logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
             return None
 
         price = signal.price_hint
@@ -112,9 +118,12 @@ class RiskManager:
         else:
             target_price = round(price + sl_distance * config.risk_reward, 2)
 
+        expected_cost = price * quantity
+        self._pending_orders[signal.instrument] = expected_cost
         logger.info(
-            "Signal approved | %s x%d @ ~%.2f SL=%.2f target=%.2f (RR=%.1f)",
+            "Signal approved | %s x%d @ ~%.2f SL=%.2f target=%.2f (RR=%.1f) | pending_lock=%.0f",
             signal.instrument, quantity, price, sl_price, target_price, config.risk_reward,
+            expected_cost,
         )
         return Order(
             instrument=signal.instrument,
@@ -147,7 +156,17 @@ class RiskManager:
             signal_type=signal.signal_type,
         )
 
+    def on_order_cancelled(self, instrument: str):
+        """Release capital locked for a pending order that was cancelled or rejected."""
+        released = self._pending_orders.pop(instrument, None)
+        if released is not None:
+            logger.info(
+                "Pending capital released | %s | ₹%.0f | available=%.0f",
+                instrument, released, self.capital_available,
+            )
+
     def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+        self._pending_orders.pop(instrument, None)  # release pending lock, fill takes over
         if fill_price <= 0:
             logger.error(
                 "BUY fill with price=0 for %s qty=%d — skipping capital tracking",

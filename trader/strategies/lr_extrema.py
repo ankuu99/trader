@@ -70,6 +70,10 @@ class LRExtremaStrategy(Strategy):
         # --- Exit management (when in a position or awaiting fill) ---
         if not self.is_flat() or self._entry_price is not None:
             self._held_bars += 1
+            if self.is_flat():
+                # Order is pending (entry_price set as guard) but not yet filled.
+                # Do not emit exit signals — there is no position to close.
+                return None
             if self._entry_price is None:
                 return None  # position confirmed but price unknown; wait
             pct = (close - self._entry_price) / self._entry_price * 100.0

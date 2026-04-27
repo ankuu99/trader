@@ -227,6 +227,7 @@ def main():
         direction = update.get("direction", "")
 
         if status in ("REJECTED", "CANCELLED"):
+            risk.on_order_cancelled(instrument)
             telegram.notify_order_rejected(
                 instrument, direction,
                 update.get("status_message", status), config.env,
