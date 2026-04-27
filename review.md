@@ -1345,7 +1345,7 @@ if status in ("COMPLETE", "REJECTED", "CANCELLED"):
 
 ---
 
-### R6-5. GTT `last_price` uses signal price_hint, not actual fill price
+### R6-5. ✅ GTT `last_price` uses signal price_hint, not actual fill price — FIXED
 **File:** `trader/orders/manager.py` — `_place_gtt_sl()` called from `on_kite_order_update()`
 
 After the L5 fix, `_place_gtt_sl(original, symbol)` is called with the original Order, which has `price_hint = candle close at signal time`. For limit orders, the actual fill price may differ from `price_hint`. The GTT `last_price` parameter is used by Zerodha to validate that the trigger values straddle the current price. If slippage is large, the validation check could fail.

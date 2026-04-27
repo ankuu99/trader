@@ -166,7 +166,7 @@ class OrderManager:
                 self._instrument_orders.pop(instrument, None)
         # Place GTT only after BUY fill is confirmed (L5 fix: not at order submission time)
         if status == "COMPLETE" and direction == "BUY" and config.gtt_enabled and original is not None:
-            self._place_gtt_sl(original, symbol)
+            self._place_gtt_sl(original, symbol, last_price=fill_price)
 
     # ------------------------------------------------------------------ #
     # Internal                                                             #
@@ -271,14 +271,14 @@ class OrderManager:
             })
             raise
 
-    def _place_gtt_sl(self, order: Order, symbol: str):
+    def _place_gtt_sl(self, order: Order, symbol: str, last_price: float | None = None):
         try:
             result = self._kite.place_gtt(
                 trigger_type=self._kite.GTT_TYPE_TWO_LEG,
                 tradingsymbol=symbol,
                 exchange=_EXCHANGE,
                 trigger_values=[order.stop_loss, order.target_price],
-                last_price=order.price_hint,
+                last_price=last_price or order.price_hint,
                 orders=[
                     {
                         "transaction_type": "SELL",
