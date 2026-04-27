@@ -1,5 +1,5 @@
 env: paper
-candle_timeframe: 1minute
+candle_timeframe: 5minute
 capital:
   total: 100000
   max_risk_per_trade_pct: 7.0
