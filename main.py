@@ -118,12 +118,49 @@ def main():
     # Restore paper positions from SQLite so exits fire correctly after restart.
     if config.env == "paper":
         open_paper = store.read_open_positions()
+        lr_cfg = config.strategy_config("lr_extrema")
+        restored = []
         for pos in open_paper:
             instrument = pos["instrument"]
             strats_for_instrument = [s for s in strategies if s.instrument == instrument]
             if not strats_for_instrument:
                 logger.warning("Paper position in DB has no matching strategy | %s — skipping", instrument)
                 continue
+
+            # Compute held_bars from candle history and sweep for missed exits.
+            # held_bars is inferred by counting candles since entry_time — no
+            # per-candle DB write needed. All post-entry candles are checked:
+            # if an exit condition was met while the system was live it would
+            # have already fired and deleted the position from DB, so any
+            # position still in DB means those candles were safe.
+            entry_time_dt = datetime.fromisoformat(pos["entry_time"])
+            post_df = store.read_candles(instrument, config.candle_timeframe, entry_time_dt, datetime.now())
+            stop_price   = round(pos["entry_price"] * (1 - lr_cfg.get("stop_pct",   3.0) / 100), 2)
+            target_price = round(pos["entry_price"] * (1 + lr_cfg.get("profit_pct", 3.0) / 100), 2)
+            hold_bars_limit = lr_cfg.get("hold_bars", 150)
+            held = 0
+            missed_exit: tuple | None = None
+            for _, row in post_df.iterrows():
+                held += 1
+                if float(row["low"]) <= stop_price:
+                    missed_exit = ("SL", stop_price)
+                    break
+                elif float(row["high"]) >= target_price:
+                    missed_exit = ("TARGET", target_price)
+                    break
+                elif held >= hold_bars_limit:
+                    missed_exit = ("HOLD_BARS", float(row["close"]))
+                    break
+
+            if missed_exit:
+                reason, exit_price = missed_exit
+                logger.warning(
+                    "Catch-up exit | %s | reason=%s exit_price=%.2f | missed during downtime — removing position",
+                    instrument, reason, exit_price,
+                )
+                store.delete_open_position(instrument)
+                continue
+
             synthetic_fill = {
                 "status": "COMPLETE",
                 "signal_type": SignalType.ENTRY,
@@ -131,21 +168,26 @@ def main():
                 "price": pos["entry_price"],
                 "instrument": instrument,
                 "quantity": pos["quantity"],
-                "_held_bars": pos["held_bars"],
+                "_held_bars": held,  # includes any catch-up bars counted above
             }
             for strat in strats_for_instrument:
                 strat.on_order_update(synthetic_fill)
             risk.on_order_filled(instrument, pos["entry_price"], pos["quantity"])
+            restored.append(pos)
             logger.info(
                 "Paper position restored | %s | entry=%.2f qty=%d held_bars=%d",
-                instrument, pos["entry_price"], pos["quantity"], pos["held_bars"],
+                instrument, pos["entry_price"], pos["quantity"], held,
             )
+        if restored:
+            telegram.notify_positions_restored(restored)
 
     # Reconcile state from broker after warm-up — overrides any position state
     # set during warm-up with the actual broker reality.
     if config.env == "live":
         kite_pos = kite.positions()
         risk.seed_from_kite(kite_pos)
+        # Read persisted held_bars from DB (written each candle while live system runs)
+        persisted_live = {p["instrument"]: p for p in store.read_open_positions()}
         open_instruments = {
             f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", []) if p["quantity"] > 0
         }
@@ -153,12 +195,21 @@ def main():
             if p["quantity"] <= 0:
                 continue
             instrument = f"NSE:{p['tradingsymbol']}"
+            db_pos = persisted_live.get(instrument, {})
+            entry_time_str = db_pos.get("entry_time")
+            if entry_time_str:
+                entry_time_dt = datetime.fromisoformat(entry_time_str)
+                post_df = store.read_candles(instrument, config.candle_timeframe, entry_time_dt, datetime.now())
+                held_bars = len(post_df)
+            else:
+                held_bars = 0
             synthetic_fill = {
                 "status": "COMPLETE",
                 "signal_type": SignalType.ENTRY,
                 "direction": "BUY",
                 "price": float(p["average_price"]),
                 "instrument": instrument,
+                "_held_bars": held_bars,
             }
             for strat in strategies:
                 if strat.instrument == instrument:
@@ -193,11 +244,11 @@ def main():
         strategy = update.get("strategy", "")
         if direction == "BUY":
             risk.on_order_filled(instrument, fill_price, quantity)
-            if config.env == "paper":
+            if config.env in ("paper", "live"):
                 store.upsert_open_position(instrument, fill_price, quantity, 0, datetime.now())
         else:
             risk.close_position(instrument, fill_price)
-            if config.env == "paper":
+            if config.env in ("paper", "live"):
                 store.delete_open_position(instrument)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
@@ -224,8 +275,6 @@ def main():
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
-            if config.env == "paper" and getattr(strategy, "_entry_price", None) is not None:
-                store.update_held_bars(symbol, getattr(strategy, "_held_bars", 0))
             if signal is None:
                 continue
             order = risk.validate(signal)
