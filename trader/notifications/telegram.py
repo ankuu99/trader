@@ -196,3 +196,18 @@ def notify_startup(mode: str, instruments: list[str], strategies: int):
         f"Time        : {datetime.now().strftime('%H:%M:%S IST')}"
     )
     _send(text)
+
+
+def notify_positions_restored(positions: list[dict]):
+    if not positions:
+        return
+    lines = "\n".join(
+        f"  • `{p['instrument']}` x{p['quantity']} @ ₹{p['entry_price']:,.2f}"
+        for p in positions
+    )
+    text = (
+        f"♻️ *Positions Restored* [PAPER]\n"
+        f"{lines}\n"
+        f"Time : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)

@@ -10,6 +10,7 @@ from unittest.mock import patch, PropertyMock
 import pytest
 
 from trader.core.config import config
+from trader.notifications import telegram
 from trader.risk.manager import RiskManager
 from trader.strategies.base import Direction, Signal, SignalType
 
@@ -109,6 +110,16 @@ def test_capital_moves_from_pending_to_deployed_on_fill():
 # ---------------------------------------------------------------------------
 # Halt behaviour
 # ---------------------------------------------------------------------------
+
+def test_notify_positions_restored_does_not_crash():
+    """notify_positions_restored must exist and handle a list of position dicts."""
+    positions = [
+        {"instrument": "NSE:TEST", "quantity": 100, "entry_price": 42.5},
+    ]
+    # Should not raise — telegram is disabled in tests so _send is a no-op
+    telegram.notify_positions_restored(positions)
+    telegram.notify_positions_restored([])  # empty list — should also be fine
+
 
 def test_entry_blocked_when_halted():
     risk = RiskManager()
