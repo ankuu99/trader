@@ -271,11 +271,24 @@ def main():
             if candle_time is None or not (_MARKET_OPEN <= candle_time <= _MARKET_CLOSE):
                 return
 
+        logger.info(
+            "Candle | %s | O=%.2f H=%.2f L=%.2f C=%.2f V=%d | %s",
+            symbol,
+            candle["open"], candle["high"], candle["low"], candle["close"],
+            candle.get("volume", 0), candle.get("timestamp"),
+        )
+
         for strategy in strategies:
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
             if signal is None:
+                logger.debug(
+                    "No signal | %s | held_bars=%d entry=%.2f",
+                    symbol,
+                    getattr(strategy, "_held_bars", 0),
+                    getattr(strategy, "_entry_price", 0) or 0,
+                )
                 continue
             order = risk.validate(signal)
             if order is None:
@@ -323,8 +336,16 @@ def main():
         orders.clear_pending()
         feed.disconnect()
 
+    def heartbeat():
+        open_pos = list(risk._open_positions.keys())
+        logger.info(
+            "Heartbeat | mode=%s | open_positions=%d %s | capital_available=%.0f",
+            config.env, len(open_pos), open_pos, risk.capital_available,
+        )
+
     scheduler.on_pre_market(pre_market)
     scheduler.on_post_market(post_market)
+    scheduler.on_heartbeat(heartbeat)
 
     # Live feed
     tokens = [symbol_to_token[s] for s in valid_watchlist]

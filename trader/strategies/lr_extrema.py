@@ -172,7 +172,7 @@ class LRExtremaStrategy(Strategy):
         minima, maxima = self._find_local_extrema(closes, self._extrema_order)
 
         if len(minima) < _MIN_SAMPLES_PER_CLASS or len(maxima) < _MIN_SAMPLES_PER_CLASS:
-            logger.debug(
+            logger.warning(
                 "LR-Extrema | %s | not enough extrema to train (min=%d max=%d)",
                 self.instrument, len(minima), len(maxima),
             )
@@ -205,7 +205,7 @@ class LRExtremaStrategy(Strategy):
         self._scaler = scaler
         self._model = model
         self._trained = True
-        logger.debug(
+        logger.info(
             "LR-Extrema trained | %s | samples=%d (min=%d max=%d)",
             self.instrument, len(rows), labels.count(0), labels.count(1),
         )
