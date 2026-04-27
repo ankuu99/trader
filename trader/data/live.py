@@ -161,6 +161,7 @@ class LiveFeed:
 
         token = tick.get("instrument_token")
         ltp = tick.get("last_price")
+        logger.info("Tick | token=%s ltp=%s", token, ltp)
         volume = tick.get("volume_traded", 0)
         ts: datetime = tick.get("timestamp") or datetime.now(timezone.utc)
 
