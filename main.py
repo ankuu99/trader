@@ -195,20 +195,35 @@ def main():
         )
         risk.seed_realised_pnl(today_realised)
 
-        # R6-1: seed open positions from DB (bot-placed only) verified against kite.holdings()
+        # R6-1: seed open positions from DB (bot-placed only) verified against Kite.
+        # CNC positions go through 3 states on Kite:
+        #   T+0 (trade day)      : appear in kite.positions()["net"] with qty > 0
+        #   T+1 (next day, pre-settlement) : kite.holdings() with t1_quantity > 0, quantity = 0
+        #   T+1+ (after settlement): kite.holdings() with quantity > 0
+        # We must check all three sources before concluding a position was closed externally.
         db_positions = store.read_open_positions()
         kite_holdings = {h["tradingsymbol"]: h for h in kite.holdings()}
+        kite_net_positions = {
+            p["tradingsymbol"]: p
+            for p in kite_pos.get("net", [])
+            if int(p.get("quantity", 0)) > 0
+        }
         open_instruments = set()
 
         for pos in db_positions:
             instrument = pos["instrument"]
             symbol = instrument.split(":")[-1]
             holding = kite_holdings.get(symbol)
+            net_pos = kite_net_positions.get(symbol)
 
-            if holding is None or int(holding.get("quantity", 0)) <= 0:
+            held_qty = int(holding.get("quantity", 0)) if holding else 0
+            t1_qty = int(holding.get("t1_quantity", 0)) if holding else 0
+            pos_qty = int(net_pos.get("quantity", 0)) if net_pos else 0
+
+            if held_qty <= 0 and t1_qty <= 0 and pos_qty <= 0:
                 # Position closed externally (GTT or manual) while bot was down
                 logger.warning(
-                    "Position %s in DB but not in holdings — closed externally, removing from DB",
+                    "Position %s in DB but not in holdings or positions — closed externally, removing from DB",
                     instrument,
                 )
                 store.delete_open_position(instrument)
