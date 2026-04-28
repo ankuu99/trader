@@ -183,21 +183,29 @@ class RiskManager:
             self._capital_deployed, self.capital_available,
         )
 
-    def seed_from_kite(self, kite_positions: dict):
-        """Seed position state from broker on startup to survive restarts (live mode only)."""
-        for p in kite_positions.get("net", []):
-            if p["quantity"] <= 0:
-                continue
-            instrument = f"NSE:{p['tradingsymbol']}"
-            qty = p["quantity"]
-            avg = float(p["average_price"])
-            self._open_positions[instrument] = qty
-            self._position_values[instrument] = avg * qty
-            self._capital_deployed += avg * qty
-            logger.info(
-                "Seeded position from broker | %s x%d @ %.2f | deployed=%.0f",
-                instrument, qty, avg, self._capital_deployed,
+    def seed_position(self, instrument: str, qty: int, avg_price: float):
+        """Seed a single position into risk state (called from startup reconciliation)."""
+        self._open_positions[instrument] = qty
+        self._position_values[instrument] = avg_price * qty
+        self._capital_deployed += avg_price * qty
+        logger.info(
+            "Seeded position | %s x%d @ %.2f | deployed=%.0f",
+            instrument, qty, avg_price, self._capital_deployed,
+        )
+
+    def seed_realised_pnl(self, pnl: float):
+        """Seed today's already-realised P&L on startup (e.g. GTT fired while system was down)."""
+        if pnl == 0.0:
+            return
+        self._realised_pnl = pnl
+        logger.info("Seeded realised P&L from broker | pnl=%.2f", pnl)
+        if not self._halted and self._realised_pnl <= -config.daily_loss_limit:
+            self._halted = True
+            logger.warning(
+                "Halt triggered from seeded P&L on startup | pnl=%.2f limit=%.2f",
+                self._realised_pnl, config.daily_loss_limit,
             )
+            telegram.notify_halt(self._realised_pnl, config.daily_loss_limit, config.env)
 
     def is_halted(self) -> bool:
         return self._halted

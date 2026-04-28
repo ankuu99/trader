@@ -164,6 +164,8 @@ class OrderManager:
             self._live_orders.pop(order_id, None)
             if status == "COMPLETE" and direction == "SELL":
                 self._instrument_orders.pop(instrument, None)
+            if status in ("REJECTED", "CANCELLED") and direction == "BUY":
+                self._instrument_orders.pop(instrument, None)  # R6-4: prevent stale GTT context
         # Place GTT only after BUY fill is confirmed (L5 fix: not at order submission time)
         if status == "COMPLETE" and direction == "BUY" and config.gtt_enabled and original is not None:
             self._place_gtt_sl(original, symbol, last_price=fill_price)
@@ -274,7 +276,7 @@ class OrderManager:
     def _place_gtt_sl(self, order: Order, symbol: str, last_price: float | None = None):
         try:
             result = self._kite.place_gtt(
-                trigger_type=self._kite.GTT_TYPE_TWO_LEG,
+                trigger_type=self._kite.GTT_TYPE_OCO,
                 tradingsymbol=symbol,
                 exchange=_EXCHANGE,
                 trigger_values=[order.stop_loss, order.target_price],
@@ -301,6 +303,7 @@ class OrderManager:
                 "GTT OCO placed | %s | SL=%.2f target=%.2f | gtt_id=%s",
                 symbol, order.stop_loss, order.target_price, trigger_id,
             )
+            telegram.notify_gtt_placed(order.instrument, order.quantity, order.stop_loss, order.target_price)
         except Exception as e:
             logger.error("Failed to place GTT for %s: %s", symbol, e)
 

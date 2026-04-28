@@ -183,38 +183,67 @@ def main():
 
     # Reconcile state from broker after warm-up — overrides any position state
     # set during warm-up with the actual broker reality.
+    # R6-1: seed from bot's own DB (open_positions table) not kite.positions() which
+    #        only returns today's traded positions and misses multi-day CNC holds.
+    # R6-2: seed today's realised P&L from kite.positions() so daily loss limit is
+    #        correctly enforced even if GTT fired while the system was down.
     if config.env == "live":
+        # R6-2: seed realised P&L for today from Kite (covers GTT exits while down)
         kite_pos = kite.positions()
-        risk.seed_from_kite(kite_pos)
-        # Read persisted held_bars from DB (written each candle while live system runs)
-        persisted_live = {p["instrument"]: p for p in store.read_open_positions()}
-        open_instruments = {
-            f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", []) if p["quantity"] > 0
-        }
-        for p in kite_pos.get("net", []):
-            if p["quantity"] <= 0:
+        today_realised = sum(
+            float(p.get("realised", 0.0)) for p in kite_pos.get("net", [])
+        )
+        risk.seed_realised_pnl(today_realised)
+
+        # R6-1: seed open positions from DB (bot-placed only) verified against kite.holdings()
+        db_positions = store.read_open_positions()
+        kite_holdings = {h["tradingsymbol"]: h for h in kite.holdings()}
+        open_instruments = set()
+
+        for pos in db_positions:
+            instrument = pos["instrument"]
+            symbol = instrument.split(":")[-1]
+            holding = kite_holdings.get(symbol)
+
+            if holding is None or int(holding.get("quantity", 0)) <= 0:
+                # Position closed externally (GTT or manual) while bot was down
+                logger.warning(
+                    "Position %s in DB but not in holdings — closed externally, removing from DB",
+                    instrument,
+                )
+                store.delete_open_position(instrument)
                 continue
-            instrument = f"NSE:{p['tradingsymbol']}"
-            db_pos = persisted_live.get(instrument, {})
-            entry_time_str = db_pos.get("entry_time")
+
+            qty = pos["quantity"]
+            avg = pos["entry_price"]
+            risk.seed_position(instrument, qty, avg)
+            open_instruments.add(instrument)
+
+            entry_time_str = pos.get("entry_time")
             if entry_time_str:
                 entry_time_dt = datetime.fromisoformat(entry_time_str)
                 post_df = store.read_candles(instrument, config.candle_timeframe, entry_time_dt, datetime.now())
                 held_bars = len(post_df)
             else:
                 held_bars = 0
+
             synthetic_fill = {
                 "status": "COMPLETE",
                 "signal_type": SignalType.ENTRY,
                 "direction": "BUY",
-                "price": float(p["average_price"]),
+                "price": avg,
                 "instrument": instrument,
                 "_held_bars": held_bars,
             }
             for strat in strategies:
                 if strat.instrument == instrument:
                     strat.on_order_update(synthetic_fill)
-        # Clear residual phantom state for instruments not held in Kite
+            logger.info(
+                "Live position restored | %s x%d @ %.2f | held_bars=%d",
+                instrument, qty, avg, held_bars,
+            )
+
+        # Clear residual phantom state for instruments not in DB positions
         for strat in strategies:
             if strat.instrument not in open_instruments:
                 strat._entry_price = None

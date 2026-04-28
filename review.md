@@ -1253,7 +1253,7 @@ Focus: position state correctness across restarts, capital tracking for multi-da
 
 ## HIGH — Significant logic issues
 
-### R6-1. Multi-day CNC positions lost on restart — capital tracking broken
+### R6-1. ✅ Multi-day CNC positions lost on restart — capital tracking broken — FIXED
 **File:** `trader/risk/manager.py` — `seed_from_kite()` and `main.py` startup
 
 `seed_from_kite()` calls `kite.positions()`, which returns **only today's traded positions**. A CNC position bought 3 days ago with no activity today returns with `quantity=0` and is skipped. On any restart:
@@ -1295,7 +1295,7 @@ def seed_from_db(store, risk, strategies, config):
 
 ---
 
-### R6-2. GTT-triggered P&L not accounted for on restart — daily loss limit blind spot
+### R6-2. ✅ GTT-triggered P&L not accounted for on restart — daily loss limit blind spot — FIXED
 **File:** `trader/risk/manager.py` — `__init__` and `main.py` startup
 
 `_realised_pnl` always starts at `0.0` on startup. If a GTT fires while the system is running, `close_position()` is called via the WebSocket callback and P&L is accumulated correctly. But if the system restarts after a GTT fires today:
@@ -1327,7 +1327,7 @@ GTT is now placed only after `status == "COMPLETE" and direction == "BUY"` is co
 
 ---
 
-### R6-4. `_instrument_orders` not cleaned up when BUY order is CANCELLED
+### R6-4. ✅ `_instrument_orders` not cleaned up when BUY order is CANCELLED — FIXED
 **File:** `trader/orders/manager.py:162-165` — `on_kite_order_update()`
 
 When a BUY order is CANCELLED (e.g. unfilled limit at EOD), it is removed from `_live_orders` but remains in `_instrument_orders`. This map is the fallback used to recover context for GTT-triggered fills. A future GTT SELL for the same instrument (from a later re-entry) would find the stale BUY entry from the original cancelled order — wrong strategy context, wrong quantity.

@@ -198,6 +198,18 @@ def notify_startup(mode: str, instruments: list[str], strategies: int):
     _send(text)
 
 
+def notify_gtt_placed(instrument: str, quantity: int, stop_loss: float, target_price: float):
+    text = (
+        f"🎯 *GTT OCO Placed* [LIVE]\n"
+        f"Instrument : `{instrument}`\n"
+        f"Quantity   : {quantity}\n"
+        f"SL         : ₹{stop_loss:,.2f}\n"
+        f"Target     : ₹{target_price:,.2f}\n"
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
+
 def notify_positions_restored(positions: list[dict]):
     if not positions:
         return
