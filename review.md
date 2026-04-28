@@ -1376,3 +1376,83 @@ def _place_gtt_sl(self, order: Order, symbol: str, last_price: float | None = No
 | R6-5 | MEDIUM | GTT last_price uses signal price_hint, not actual fill price |
 
 **Verdict:** R6-1 is the most impactful — any restart during live trading (crash, deploy, token refresh) loses track of all multi-day positions. The bot will attempt to over-deploy capital and miss GTT P&L accounting. R6-2 is a daily loss limit blind spot. R6-4 and R6-5 are lower risk but both affect GTT correctness directly. Fix R6-1 and R6-2 before going live with GTT enabled.
+
+---
+
+## Round 7 — Backtest / script sync review
+
+Non-critical gaps identified during a sync review of `main.py`, `scripts/backtest.py`, `scripts/calibrate.py`, `scripts/screen.py`, and `trader/backtest/engine.py`. None affect live trading.
+
+### R7-1. `OPEN@END` backtest trades use entry price as exit — P&L always shows as −costs
+
+**File:** `trader/backtest/engine.py:304`
+
+```python
+last_close = pos["entry"]   # should be last known candle close for the symbol
+```
+
+Positions still open at `to_dt` are closed at the entry price, so gross P&L = 0 and net P&L = −transaction costs. The real mark-to-market value is ignored. Makes backtest returns slightly pessimistic for unclosed positions but also masks unrealised losses.
+
+**Severity:** Low — affects reporting only; no live trading impact.
+
+---
+
+### R7-2. `backtest.py` calls `store.clear_backtest_data()` on the live database
+
+**File:** `scripts/backtest.py:47`
+
+`store.clear_backtest_data()` wipes the `orders` and `signals` tables from `data/market.db` — the same file used by the live trader. Running a backtest while the live service is active destroys live order history. `calibrate.py` and `screen.py` correctly skip this call.
+
+**Severity:** Medium in theory — harmless in practice because backtesting is always run locally, never on the EC2 live server.
+
+---
+
+### R7-3. Backtest engine is hardcoded to `LRExtremaStrategy`
+
+**File:** `trader/backtest/engine.py:215`
+
+```python
+strategy_map.update({symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles})
+```
+
+Only `LRExtremaStrategy` is instantiated. Any other strategy registered in `registry.py` is invisible to backtest/calibrate/screen. Not a current issue (single strategy), but any new strategy addition will need a matching engine change.
+
+**Severity:** Low — no impact until a second strategy is added.
+
+---
+
+### R7-4. Paper mode catch-up exit recomputes SL/target from current config, not original signal
+
+**File:** `main.py:138–140`
+
+On restart, the paper mode catch-up logic recomputes stop and target prices from `lr_cfg.get("stop_pct")` and `lr_cfg.get("profit_pct")`. The `open_positions` table does not store the original SL/target from the signal. If config values change between sessions, the catch-up uses the new values and may incorrectly classify a candle as an SL/target hit.
+
+**Severity:** Low — only affects paper mode restart edge case.
+
+---
+
+### R7-5. Dead debug line in `screen.py`
+
+**File:** `scripts/screen.py:112`
+
+```python
+# breakpoint()
+```
+
+Harmless leftover comment from debugging.
+
+**Severity:** Trivial.
+
+---
+
+## Round 7 Summary
+
+| ID | Severity | Issue |
+|----|----------|-------|
+| R7-1 | Low | `OPEN@END` P&L shows 0 gross — uses entry price not last candle close |
+| R7-2 | Medium* | `backtest.py` clears live DB tables — safe only because backtest never runs on EC2 |
+| R7-3 | Low | Engine hardcoded to LRExtrema — new strategies need manual engine update |
+| R7-4 | Low | Paper catch-up exit uses current config SL/target, not original signal values |
+| R7-5 | Trivial | Dead `# breakpoint()` in `screen.py` |
+
+**Verdict:** None of these affect live trading. R7-2 is the only one worth revisiting if the workflow ever changes (e.g. EC2 backtest runs or a second strategy).

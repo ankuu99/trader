@@ -37,6 +37,7 @@ from trader.risk.manager import RiskManager
 from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
+from trader.ui.state import BotState
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
@@ -57,6 +58,7 @@ def main():
     risk = RiskManager()
     orders = OrderManager(kite=kite, store=store, mode=config.env)
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
+    bot_state = BotState()
 
     # Resolve instrument tokens
     instruments = kite.instruments("NSE")
@@ -105,6 +107,8 @@ def main():
             "Warm-up status | %s | %s | candles=%d",
             strat.instrument, status, candle_count,
         )
+        bot_state.warmup_status[strat.instrument] = {"status": status, "candles": candle_count}
+    bot_state.warmup_done = True
 
     # Clear any phantom entry state left by warm-up signal triggers that never
     # received a fill callback (position=None but _entry_price set).
@@ -264,6 +268,15 @@ def main():
                 strat._entry_price = None
                 strat.position = None
 
+    # Dashboard (read-only UI)
+    if config.ui_enabled:
+        from trader.ui.server import start_dashboard
+        start_dashboard(bot_state, risk, store, config)
+        logger.info(
+            "Dashboard started | port=%d | tunnel: ssh -fN -L %d:localhost:%d trader",
+            config.ui_port, config.ui_port, config.ui_port,
+        )
+
     # Order fill callback
     def handle_order_update(update: dict):
         status = update.get("status")
@@ -311,6 +324,8 @@ def main():
         symbol = token_to_symbol.get(candle.get("instrument_token"))
         candle["_symbol"] = symbol
         orders.on_candle(candle)
+        bot_state.last_candle_at = datetime.now()
+        bot_state.halted = risk.is_halted()
 
         if config.candle_timeframe in _INTRADAY_TIMEFRAMES:
             ts = candle.get("timestamp")

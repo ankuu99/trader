@@ -122,6 +122,14 @@ class Config:
         return int(self._data["data"]["historical_cache_days"])
 
     @property
+    def ui_enabled(self) -> bool:
+        return bool(self._data.get("ui", {}).get("enabled", False))
+
+    @property
+    def ui_port(self) -> int:
+        return int(self._data.get("ui", {}).get("port", 8080))
+
+    @property
     def log_level(self) -> str:
         return self._data["logging"]["level"]
 

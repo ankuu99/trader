@@ -2,8 +2,8 @@ env: live
 candle_timeframe: 5minute
 capital:
   total: 1000
-  max_risk_per_trade_pct: 7.0
-  daily_loss_limit_pct: 10.0
+  max_risk_per_trade_pct: 5.0
+  daily_loss_limit_pct: 5
 interested:
 - NSE:INDHOTEL
 - NSE:IDEA
@@ -50,3 +50,6 @@ data:
 logging:
   level: INFO
   dir: logs/
+ui:
+  enabled: true
+  port: 8080

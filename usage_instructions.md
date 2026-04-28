@@ -421,6 +421,32 @@ ssh trader "sudo journalctl -u trader -n 100"
 ssh trader "free -h && df -h /"
 ```
 
+### Live Dashboard (read-only UI)
+
+The bot includes a lightweight read-only dashboard showing open positions, P&L, recent
+orders, and signals. It binds to loopback only — access it via SSH tunnel:
+
+```bash
+# Open tunnel (runs in background)
+ssh -fN -L 8080:localhost:8080 trader
+
+# Then open in browser
+open http://localhost:8080
+
+# Close the tunnel when done
+pkill -f "ssh -fN -L 8080"
+```
+
+The dashboard auto-refreshes every 30 seconds. No port needs to be opened in the EC2
+security group — the SSH tunnel handles access securely.
+
+Enable in `config/config.yaml`:
+```yaml
+ui:
+  enabled: true
+  port: 8080
+```
+
 ### Health Signal
 
 After `refresh-token.sh` runs successfully, the bot sends a Telegram startup notification. If you don't receive it by 9:10 AM IST, check logs:
