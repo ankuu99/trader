@@ -6,9 +6,17 @@ SQLite is queried directly (read-only connection) so the Store write path is unt
 """
 
 import sqlite3
+import time as _time
 from datetime import datetime, timezone, timedelta
 
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+# Seconds the local clock is ahead of UTC (e.g. IST = +19800, UTC = 0).
+# Used to convert naive DB timestamps (stored in server local time) to IST
+# without double-adding the offset on machines already in IST.
+_LOCAL_UTC_OFFSET_HRS = -_time.timezone / 3600  # time.timezone is seconds *west* of UTC
+_IST_HRS = 5.5
+_NAIVE_TO_IST_DELTA = timedelta(hours=_IST_HRS - _LOCAL_UTC_OFFSET_HRS)
 
 _CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -61,7 +69,9 @@ def _fmt_ist(dt: datetime | None) -> str:
     if dt is None:
         return "—"
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc).astimezone(_IST)
+        # Naive datetime stored in server local time. Shift only the remaining
+        # delta to reach IST: on UTC servers adds +5:30; on IST servers adds 0.
+        dt = dt + _NAIVE_TO_IST_DELTA
     else:
         dt = dt.astimezone(_IST)
     return dt.strftime("%H:%M:%S")
