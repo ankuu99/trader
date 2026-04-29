@@ -350,16 +350,49 @@ def render_page(bot_state, risk, store, config) -> str:
     else:
         strategy_section = ""
 
-    # Watchlist + warm-up status
+    # Watchlist + warm-up status + last tick from DB
+    placeholders = ",".join("?" * len(config.watchlist))
+    last_ticks = {}
+    if config.watchlist:
+        rows = _read_db(
+            config.db_path,
+            f"""
+            SELECT c.instrument, c.timestamp, c.close, c.volume
+            FROM candles c
+            INNER JOIN (
+                SELECT instrument, MAX(timestamp) AS max_ts
+                FROM candles
+                WHERE timeframe = ? AND instrument IN ({placeholders})
+                GROUP BY instrument
+            ) latest ON c.instrument = latest.instrument AND c.timestamp = latest.max_ts
+            """,
+            (config.candle_timeframe, *config.watchlist),
+        )
+        last_ticks = {r["instrument"]: r for r in rows}
+
     ws_rows = ""
     for sym in config.watchlist:
         ws = bot_state.warmup_status.get(sym, {})
         st = ws.get("status", "—")
         candles = ws.get("candles", "—")
         kind = "green" if st == "TRAINED" else ("orange" if st == "WARMING_UP" else "dim")
+        tick = last_ticks.get(sym)
+        if tick:
+            close = tick["close"]
+            vol = tick["volume"]
+            tick_time = _fmt_ist(datetime.fromisoformat(tick["timestamp"]))
+            price_html = f"&#8377; {close:.2f}"
+            vol_html = f"{vol:,}"
+        else:
+            price_html = "<span class='dim'>—</span>"
+            vol_html = "<span class='dim'>—</span>"
+            tick_time = "<span class='dim'>—</span>"
         ws_rows += (
             f"<tr>"
             f"<td>{sym.split(':')[-1]}</td>"
+            f"<td class='val'>{price_html}</td>"
+            f"<td class='dim'>{tick_time}</td>"
+            f"<td class='dim'>{vol_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
             f"<td class='dim'>{candles} candles</td>"
             f"</tr>"
@@ -368,7 +401,8 @@ def render_page(bot_state, risk, store, config) -> str:
     <div class="card full">
         <h2>Watchlist ({len(config.watchlist)} symbols)</h2>
         <table>
-            <tr><th>Symbol</th><th>Warm-up</th><th>Candles</th></tr>
+            <tr><th>Symbol</th><th>Last price</th><th>Candle time (IST)</th>
+                <th>Volume</th><th>Warm-up</th><th>Candles</th></tr>
             {ws_rows}
         </table>
     </div>"""
