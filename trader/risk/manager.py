@@ -40,6 +40,7 @@ class RiskManager:
         self._pending_orders: dict[str, float] = {}   # instrument → expected cost (pre-fill lock)
         self._realised_pnl: float = 0.0
         self._halted: bool = False
+        self._last_reject_reason: str | None = None   # set whenever validate() returns None
 
     @property
     def capital_available(self) -> float:
@@ -47,10 +48,12 @@ class RiskManager:
         return max(0.0, config.total_capital - self._capital_deployed - pending)
 
     def validate(self, signal: Signal) -> Order | None:
+        self._last_reject_reason = None
         if self._halted:
             if signal.signal_type == SignalType.EXIT:
                 return self._validate_exit(signal)  # exits always allowed, even when halted
             logger.warning("Signal rejected — daily halt | %s", signal.instrument)
+            self._last_reject_reason = "daily_halt"
             return None
 
         if signal.signal_type == SignalType.EXIT:
@@ -58,14 +61,17 @@ class RiskManager:
 
         if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
             logger.warning("Signal rejected — max open positions | %s", signal.instrument)
+            self._last_reject_reason = "max_positions"
             return None
 
         if signal.instrument in self._open_positions:
             logger.warning("Signal rejected — already in position | %s", signal.instrument)
+            self._last_reject_reason = "already_in_position"
             return None
 
         if signal.instrument in self._pending_orders:
             logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
+            self._last_reject_reason = "pending_order_exists"
             return None
 
         price = signal.price_hint
@@ -81,6 +87,7 @@ class RiskManager:
 
         if sl_distance <= 0:
             logger.error("SL distance is zero for %s", signal.instrument)
+            self._last_reject_reason = "sl_distance_zero"
             return None
 
         quantity = int(config.max_risk_per_trade // sl_distance)
@@ -111,6 +118,7 @@ class RiskManager:
                 "Quantity is 0 for %s — price %.2f vs available capital %.0f",
                 signal.instrument, price, self.capital_available,
             )
+            self._last_reject_reason = "quantity_zero"
             return None
 
         if signal.target_price is not None:

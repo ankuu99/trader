@@ -377,7 +377,7 @@ def main():
                 signal_type=signal.signal_type.value,
                 price_hint=signal.price_hint,
                 accepted=order is not None,
-                reject_reason=None if order else "risk_check_failed",
+                reject_reason=None if order else risk._last_reject_reason,
             )
             if order is None:
                 continue
