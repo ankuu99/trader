@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 5minute
 capital:
-  total: 1000
+  total: 5000
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 5
 interested:
