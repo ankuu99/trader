@@ -5,7 +5,7 @@ capital:
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 5
 risk:
-  gtt_enabled: true
+  gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   max_open_positions: 5
   default_sl_pct: 2
