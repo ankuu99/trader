@@ -208,17 +208,7 @@ class OrderManager:
         if order.direction == Direction.SELL:
             self._cancel_gtt(order.instrument)
         order_type = config.order_type  # "MARKET" or "LIMIT"
-        if order_type == "LIMIT":
-            limit_price = order.price_hint
-        else:
-            # Zerodha requires a market-protection price for API MARKET orders.
-            # It acts as a price ceiling (BUY) / floor (SELL) — not a limit order,
-            # but prevents fills at extreme prices caused by thin books or circuit moves.
-            pct = config.market_protection_pct / 100
-            if order.direction == Direction.BUY:
-                limit_price = round(order.price_hint * (1 + pct), 2)
-            else:
-                limit_price = round(order.price_hint * (1 - pct), 2)
+        limit_price = order.price_hint if order_type == "LIMIT" else None
         try:
             kite_kwargs = dict(
                 variety=KiteConnect.VARIETY_REGULAR,
@@ -228,8 +218,13 @@ class OrderManager:
                 quantity=order.quantity,
                 product=config.product,
                 order_type=order_type,
-                price=limit_price,
             )
+            if order_type == "LIMIT":
+                kite_kwargs["price"] = limit_price
+            else:
+                # Zerodha API requires market_protection for MARKET orders.
+                # -1 = automatic protection per Zerodha's own guidelines.
+                kite_kwargs["market_protection"] = -1
             order_id = self._kite.place_order(**kite_kwargs)
             record = {
                 "order_id": str(order_id),
@@ -248,8 +243,9 @@ class OrderManager:
             if order.direction == Direction.BUY:
                 self._instrument_orders[order.instrument] = order
             logger.info(
-                "Live order placed | %s x%d @ %.2f | type=%s | id=%s | strategy=%s",
-                order.instrument, order.quantity, limit_price,
+                "Live order placed | %s x%d @ %s | type=%s | id=%s | strategy=%s",
+                order.instrument, order.quantity,
+                f"{limit_price:.2f}" if limit_price else "MARKET",
                 order_type, order_id, order.strategy,
             )
             telegram.notify_order_queued(

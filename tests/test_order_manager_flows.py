@@ -326,22 +326,23 @@ def test_unknown_instrument_sell_dispatched_as_exit(store):
 # Market protection price (Zerodha API requirement for MARKET orders)
 # ---------------------------------------------------------------------------
 
-def test_market_buy_includes_protection_price(store):
-    """MARKET BUY must pass price = price_hint * (1 + pct/100) to satisfy Zerodha API."""
+def test_market_order_passes_market_protection_flag(store):
+    """MARKET orders must pass market_protection=-1 (auto) — not a price field."""
     kite = _make_kite(order_id="ORD1")
     order = _buy_order(price=100.0)
 
-    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=1.0):
+    with _live_config(gtt_enabled=False, order_type="MARKET"):
         mgr = OrderManager(kite=kite, store=store, mode="live")
         mgr.place(order)
 
     _, kwargs = kite.place_order.call_args
     assert kwargs["order_type"] == "MARKET"
-    assert kwargs["price"] == pytest.approx(101.0)  # 100 * 1.01
+    assert kwargs.get("market_protection") == -1
+    assert "price" not in kwargs  # price must NOT be sent for MARKET orders
 
 
-def test_market_sell_includes_protection_price(store):
-    """MARKET SELL must pass price = price_hint * (1 - pct/100)."""
+def test_market_sell_passes_market_protection_flag(store):
+    """MARKET SELL must also pass market_protection=-1."""
     kite = _make_kite(order_id="ORD1")
     sell_order = Order(
         instrument="NSE:TEST",
@@ -355,37 +356,26 @@ def test_market_sell_includes_protection_price(store):
         signal_type=SignalType.EXIT,
     )
 
-    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=1.0):
+    with _live_config(gtt_enabled=False, order_type="MARKET"):
         mgr = OrderManager(kite=kite, store=store, mode="live")
         mgr.place(sell_order)
 
     _, kwargs = kite.place_order.call_args
     assert kwargs["order_type"] == "MARKET"
-    assert kwargs["price"] == pytest.approx(99.0)  # 100 * 0.99
+    assert kwargs.get("market_protection") == -1
+    assert "price" not in kwargs
 
 
 def test_limit_order_uses_price_hint_exactly(store):
-    """LIMIT orders must pass price = price_hint with no buffer."""
+    """LIMIT orders must pass price = price_hint with no buffer, no market_protection."""
     kite = _make_kite(order_id="ORD1")
     order = _buy_order(price=100.0)
 
-    with _live_config(gtt_enabled=False, order_type="LIMIT", market_protection_pct=1.0):
+    with _live_config(gtt_enabled=False, order_type="LIMIT"):
         mgr = OrderManager(kite=kite, store=store, mode="live")
         mgr.place(order)
 
     _, kwargs = kite.place_order.call_args
     assert kwargs["order_type"] == "LIMIT"
-    assert kwargs["price"] == pytest.approx(100.0)  # exact, no buffer
-
-
-def test_market_protection_pct_is_configurable(store):
-    """A different protection % must scale the ceiling/floor accordingly."""
-    kite = _make_kite(order_id="ORD1")
-    order = _buy_order(price=200.0)
-
-    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=2.0):
-        mgr = OrderManager(kite=kite, store=store, mode="live")
-        mgr.place(order)
-
-    _, kwargs = kite.place_order.call_args
-    assert kwargs["price"] == pytest.approx(204.0)  # 200 * 1.02
+    assert kwargs["price"] == pytest.approx(100.0)
+    assert "market_protection" not in kwargs
