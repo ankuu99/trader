@@ -234,6 +234,7 @@ class Store:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(order_id) DO UPDATE SET
                     status     = excluded.status,
+                    price      = COALESCE(excluded.price, orders.price),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -313,6 +314,21 @@ class Store:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT instrument, entry_price, quantity, held_bars, entry_time FROM open_positions"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def read_pending_live_orders(self) -> list[dict]:
+        """Return today's live BUY orders still in PENDING state (unfilled on restart)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT instrument, quantity, price
+                FROM orders
+                WHERE status = 'PENDING'
+                  AND mode   = 'live'
+                  AND direction = 'BUY'
+                  AND date(placed_at) = date('now', 'localtime')
+                """
             ).fetchall()
         return [dict(r) for r in rows]
 

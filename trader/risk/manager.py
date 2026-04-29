@@ -193,6 +193,14 @@ class RiskManager:
             instrument, qty, avg_price, self._capital_deployed,
         )
 
+    def seed_pending_order(self, instrument: str, estimated_cost: float):
+        """Re-lock capital for a BUY order that was pending when the bot restarted."""
+        self._pending_orders[instrument] = estimated_cost
+        logger.info(
+            "Seeded pending order | %s | estimated_cost=%.0f | available=%.0f",
+            instrument, estimated_cost, self.capital_available,
+        )
+
     def seed_realised_pnl(self, pnl: float):
         """Seed today's already-realised P&L on startup (e.g. GTT fired while system was down)."""
         if pnl == 0.0:

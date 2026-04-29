@@ -268,7 +268,7 @@ def render_page(bot_state, risk, store, config) -> str:
         rows_html = ""
         for o in orders:
             sym = o["instrument"].split(":")[-1]
-            price_str = f"&#8377; {o['price']:.2f}" if o.get("price") else "—"
+            price_str = f"&#8377; {o['price']:.2f}" if o.get("price") else o.get("order_type", "—")
             status = o.get("status", "")
             status_kind = {"COMPLETE": "green", "REJECTED": "red", "CANCELLED": "red"}.get(status, "dim")
             dir_class = "green" if o["direction"] == "BUY" else "red"

@@ -268,6 +268,22 @@ def main():
                 strat._entry_price = None
                 strat.position = None
 
+        # Restore capital lock for BUY orders that were pending when bot restarted.
+        # Without this, capital_available is overstated and a duplicate order could
+        # be approved for the same instrument before the fill arrives.
+        for pending in store.read_pending_live_orders():
+            instrument = pending["instrument"]
+            if instrument in open_instruments:
+                continue  # already filled and seeded above — skip
+            qty = pending["quantity"]
+            price = pending["price"] or 0.0  # None for MARKET orders
+            estimated_cost = qty * price
+            risk.seed_pending_order(instrument, estimated_cost)
+            logger.info(
+                "Pending order re-locked on restart | %s | qty=%d est_cost=%.0f",
+                instrument, qty, estimated_cost,
+            )
+
     # Dashboard (read-only UI)
     if config.ui_enabled:
         from trader.ui.server import start_dashboard
@@ -353,6 +369,16 @@ def main():
                 )
                 continue
             order = risk.validate(signal)
+            store.log_signal(
+                timestamp=candle.get("timestamp") or datetime.now(),
+                instrument=signal.instrument,
+                strategy=signal.strategy,
+                direction=signal.direction.value,
+                signal_type=signal.signal_type.value,
+                price_hint=signal.price_hint,
+                accepted=order is not None,
+                reject_reason=None if order else "risk_check_failed",
+            )
             if order is None:
                 continue
             orders.place(order)

@@ -229,7 +229,7 @@ class OrderManager:
                 "product": config.product,
                 "direction": order.direction.value,
                 "quantity": order.quantity,
-                "price": None,
+                "price": limit_price,  # stored for LIMIT orders; None for MARKET
                 "trigger_price": order.stop_loss,
                 "status": "PENDING",
                 "mode": "live",
