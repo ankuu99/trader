@@ -274,13 +274,34 @@ class OrderManager:
             raise
 
     def _place_gtt_sl(self, order: Order, symbol: str, last_price: float | None = None):
+        fill_price = last_price or order.price_hint
+
+        # Rebase SL and target to the actual fill price.
+        # The Order carries levels computed at signal time from price_hint.
+        # If fill differs (e.g. MARKET order slippage), derive the implied
+        # percentages and reapply them from the real fill so GTT levels are correct.
+        if order.price_hint > 0 and fill_price != order.price_hint:
+            sl_pct     = (order.price_hint - order.stop_loss)   / order.price_hint
+            target_pct = (order.target_price - order.price_hint) / order.price_hint
+            sl_price     = round(fill_price * (1 - sl_pct),     2)
+            target_price = round(fill_price * (1 + target_pct), 2)
+            logger.info(
+                "GTT levels rebased to fill | %s | signal=%.2f fill=%.2f"
+                " | SL %.2f→%.2f target %.2f→%.2f",
+                symbol, order.price_hint, fill_price,
+                order.stop_loss, sl_price, order.target_price, target_price,
+            )
+        else:
+            sl_price     = order.stop_loss
+            target_price = order.target_price
+
         try:
             result = self._kite.place_gtt(
                 trigger_type=self._kite.GTT_TYPE_OCO,
                 tradingsymbol=symbol,
                 exchange=_EXCHANGE,
-                trigger_values=[order.stop_loss, order.target_price],
-                last_price=last_price or order.price_hint,
+                trigger_values=[sl_price, target_price],
+                last_price=fill_price,
                 orders=[
                     {
                         "transaction_type": "SELL",
@@ -293,7 +314,7 @@ class OrderManager:
                         "quantity": order.quantity,
                         "product": "CNC",
                         "order_type": "LIMIT",
-                        "price": order.target_price,
+                        "price": target_price,
                     },
                 ],
             )
@@ -301,9 +322,9 @@ class OrderManager:
             self._gtt_ids[order.instrument] = trigger_id
             logger.info(
                 "GTT OCO placed | %s | SL=%.2f target=%.2f | gtt_id=%s",
-                symbol, order.stop_loss, order.target_price, trigger_id,
+                symbol, sl_price, target_price, trigger_id,
             )
-            telegram.notify_gtt_placed(order.instrument, order.quantity, order.stop_loss, order.target_price)
+            telegram.notify_gtt_placed(order.instrument, order.quantity, sl_price, target_price)
         except Exception as e:
             logger.error("Failed to place GTT for %s: %s", symbol, e)
 
