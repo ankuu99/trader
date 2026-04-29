@@ -7,6 +7,7 @@ capital:
 risk:
   gtt_enabled: true
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
+  market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 5
   default_sl_pct: 2
   risk_reward: 4

@@ -88,6 +88,14 @@ class Config:
         return self._data["risk"].get("order_type", "market").upper()
 
     @property
+    def market_protection_pct(self) -> float:
+        """Price buffer % added to MARKET orders to satisfy Zerodha's market-protection requirement.
+        BUY:  limit = price_hint × (1 + pct/100)  — ceiling, won't pay more than this.
+        SELL: limit = price_hint × (1 - pct/100)  — floor, won't receive less than this.
+        Default 1% keeps fills near market while meeting API requirements."""
+        return float(self._data["risk"].get("market_protection_pct", 1.0))
+
+    @property
     def default_sl_pct(self) -> float:
         return float(self._data["risk"]["default_sl_pct"])
 

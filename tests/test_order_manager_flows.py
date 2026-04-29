@@ -59,10 +59,11 @@ def _kite_update(order_id, instrument, direction, status, fill_price, qty=10):
 
 
 @contextmanager
-def _live_config(gtt_enabled=True, order_type="MARKET"):
+def _live_config(gtt_enabled=True, order_type="MARKET", market_protection_pct=1.0):
     """Patch all config properties needed for live order placement."""
     with patch.object(type(config), "gtt_enabled", new_callable=PropertyMock, return_value=gtt_enabled), \
          patch.object(type(config), "order_type", new_callable=PropertyMock, return_value=order_type), \
+         patch.object(type(config), "market_protection_pct", new_callable=PropertyMock, return_value=market_protection_pct), \
          patch.object(type(config), "product", new_callable=PropertyMock, return_value="CNC"), \
          patch.object(type(config), "env", new_callable=PropertyMock, return_value="live"):
         yield
@@ -319,3 +320,72 @@ def test_unknown_instrument_sell_dispatched_as_exit(store):
         mgr.on_kite_order_update(_kite_update("UNKNOWN", "NSE:MYSTERY", "SELL", "COMPLETE", 50.0))
 
     assert received[0]["signal_type"] == SignalType.EXIT
+
+
+# ---------------------------------------------------------------------------
+# Market protection price (Zerodha API requirement for MARKET orders)
+# ---------------------------------------------------------------------------
+
+def test_market_buy_includes_protection_price(store):
+    """MARKET BUY must pass price = price_hint * (1 + pct/100) to satisfy Zerodha API."""
+    kite = _make_kite(order_id="ORD1")
+    order = _buy_order(price=100.0)
+
+    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=1.0):
+        mgr = OrderManager(kite=kite, store=store, mode="live")
+        mgr.place(order)
+
+    _, kwargs = kite.place_order.call_args
+    assert kwargs["order_type"] == "MARKET"
+    assert kwargs["price"] == pytest.approx(101.0)  # 100 * 1.01
+
+
+def test_market_sell_includes_protection_price(store):
+    """MARKET SELL must pass price = price_hint * (1 - pct/100)."""
+    kite = _make_kite(order_id="ORD1")
+    sell_order = Order(
+        instrument="NSE:TEST",
+        direction=Direction.SELL,
+        quantity=10,
+        price_hint=100.0,
+        stop_loss=0.0,
+        target_price=0.0,
+        strategy="test",
+        mode="live",
+        signal_type=SignalType.EXIT,
+    )
+
+    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=1.0):
+        mgr = OrderManager(kite=kite, store=store, mode="live")
+        mgr.place(sell_order)
+
+    _, kwargs = kite.place_order.call_args
+    assert kwargs["order_type"] == "MARKET"
+    assert kwargs["price"] == pytest.approx(99.0)  # 100 * 0.99
+
+
+def test_limit_order_uses_price_hint_exactly(store):
+    """LIMIT orders must pass price = price_hint with no buffer."""
+    kite = _make_kite(order_id="ORD1")
+    order = _buy_order(price=100.0)
+
+    with _live_config(gtt_enabled=False, order_type="LIMIT", market_protection_pct=1.0):
+        mgr = OrderManager(kite=kite, store=store, mode="live")
+        mgr.place(order)
+
+    _, kwargs = kite.place_order.call_args
+    assert kwargs["order_type"] == "LIMIT"
+    assert kwargs["price"] == pytest.approx(100.0)  # exact, no buffer
+
+
+def test_market_protection_pct_is_configurable(store):
+    """A different protection % must scale the ceiling/floor accordingly."""
+    kite = _make_kite(order_id="ORD1")
+    order = _buy_order(price=200.0)
+
+    with _live_config(gtt_enabled=False, order_type="MARKET", market_protection_pct=2.0):
+        mgr = OrderManager(kite=kite, store=store, mode="live")
+        mgr.place(order)
+
+    _, kwargs = kite.place_order.call_args
+    assert kwargs["price"] == pytest.approx(204.0)  # 200 * 1.02

@@ -1456,3 +1456,28 @@ Harmless leftover comment from debugging.
 | R7-5 | Trivial | Dead `# breakpoint()` in `screen.py` |
 
 **Verdict:** None of these affect live trading. R7-2 is the only one worth revisiting if the workflow ever changes (e.g. EC2 backtest runs or a second strategy).
+
+---
+
+## Round 8 — UI / pending order cosmetic gaps
+
+### R8-1 — MARKET pending orders seed capital lock as ₹0
+**Severity:** Cosmetic (UI only — trading logic unaffected)
+**File:** `main.py` — pending order seeding block; `trader/data/store.py` — `read_pending_live_orders()`
+
+MARKET orders have `price=NULL` in the `orders` table (no limit price to store). On restart, the pending order seeding calls `estimated_cost = qty * (price or 0)`, which locks ₹0. The instrument is still added to `_pending_orders` so duplicate entry is blocked, but `capital_available` in the UI is overstated by `qty × last_price`.
+
+**Fix:** In `read_pending_live_orders()`, join against the `candles` table to fetch `last_close` as a fallback price estimate for NULL-price orders. Use `COALESCE(o.price, last_close)` as the effective price in the seeding loop.
+
+---
+
+### R8-2 — Pre-fix pending orders have NULL price in DB after restart
+**Severity:** Cosmetic (one-time, self-heals after next fill or EOD)
+**Context:** Any pending order placed before the R8 fix (which now stores `limit_price` for LIMIT orders) has `price=NULL` in the DB. On the next restart, the seeding logic falls back to ₹0 cost, so the UI capital panel shows more available capital than is actually reserved.
+
+**Fix (one-time):** Run on EC2 before restart if a known pending LIMIT order exists:
+```sql
+UPDATE orders SET price = <limit_price>
+WHERE instrument = '<NSE:SYMBOL>' AND status = 'PENDING' AND mode = 'live';
+```
+Self-heals once the fill arrives (fill price is now written back via `COALESCE` in `upsert_order`) or at EOD when the order is cancelled.
