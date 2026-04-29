@@ -306,13 +306,15 @@ def render_page(bot_state, risk, store, config) -> str:
             accepted = bool(s.get("accepted"))
             acc_badge = _badge("✓", "green") if accepted else _badge("✗", "red")
             reason = s.get("reject_reason") or ""
-            dir_class = "green" if s["direction"] == "BUY" else "red"
+            # EXIT signals are always a SELL action regardless of stored direction
+            display_dir = "SELL" if s.get("signal_type") == "EXIT" else s["direction"]
+            dir_class = "green" if display_dir == "BUY" else "red"
             logged = s.get("logged_at", "")[:16]
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{logged}</td>"
                 f"<td>{sym}</td>"
-                f"<td class='{dir_class}'>{s['direction']}</td>"
+                f"<td class='{dir_class}'>{display_dir}</td>"
                 f"<td class='dim'>{s['signal_type']}</td>"
                 f"<td>&#8377; {s['price_hint']:.2f}</td>"
                 f"<td>{acc_badge}</td>"
