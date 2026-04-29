@@ -4,6 +4,13 @@ capital:
   total: 5000
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 5
+risk:
+  gtt_enabled: true
+  order_type: market          # market | limit  (live mode only; paper always fills at next open)
+  max_open_positions: 5
+  default_sl_pct: 2
+  risk_reward: 4
+  max_capital_per_stock_pct: 15.0
 interested:
 - NSE:INDHOTEL
 - NSE:IDEA
@@ -37,13 +44,7 @@ strategies:
     hold_bars: 150
     retrain_every: 50
     extrema_order: 5
-risk:
-  gtt_enabled: true
-  order_type: limit          # market | limit  (live mode only; paper always fills at next open)
-  max_open_positions: 5
-  default_sl_pct: 2
-  risk_reward: 4
-  max_capital_per_stock_pct: 20.0
+
 data:
   db_path: data/market.db
   historical_cache_days: 20
