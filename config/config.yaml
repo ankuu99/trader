@@ -1,17 +1,17 @@
 env: live
 candle_timeframe: 5minute
 capital:
-  total: 5000
+  total: 10000
   max_risk_per_trade_pct: 5.0
-  daily_loss_limit_pct: 5
+  daily_loss_limit_pct: 7
 risk:
   gtt_enabled: true
   order_type: limit          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 5
-  default_sl_pct: 2
+  default_sl_pct: 3
   risk_reward: 4
-  max_capital_per_stock_pct: 20.0
+  max_capital_per_stock_pct: 10.0
 interested:
 - NSE:INDHOTEL
 - NSE:IDEA
@@ -19,11 +19,19 @@ interested:
 
 
 watchlist:
-# - NSE:SUPREMEENG-BZ
-# - NSE:OMKARCHEM-BZ
- - NSE:TECILCHEM
-
-
+- NSE:TOTAL
+- NSE:SUZLON
+- NSE:ENGINERSIN
+- NSE:GODIGIT
+- NSE:TECILCHEM
+- NSE:GLOBALE
+- NSE:RMDRIP
+- NSE:MODTHREAD
+- NSE:GTECJAINX
+- NSE:GICL
+- NSE:SVLL
+- NSE:VISASTEEL
+- NSE:INFOMEDIA
 
 strategies:
   lr_extrema:
