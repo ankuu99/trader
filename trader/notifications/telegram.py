@@ -187,6 +187,16 @@ def notify_token_reminder():
     _send(text)
 
 
+def notify_token_refreshed(user_id: str):
+    text = (
+        f"🔑 *Token Refreshed*\n"
+        f"User : {user_id}\n"
+        f"Time : {datetime.now().strftime('%H:%M:%S IST')}\n"
+        f"Valid until midnight IST."
+    )
+    _send(text)
+
+
 def notify_startup(mode: str, instruments: list[str], strategies: int):
     tag = "[PAPER]" if mode == "paper" else "[LIVE]"
     text = (

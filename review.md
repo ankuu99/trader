@@ -1481,3 +1481,25 @@ UPDATE orders SET price = <limit_price>
 WHERE instrument = '<NSE:SYMBOL>' AND status = 'PENDING' AND mode = 'live';
 ```
 Self-heals once the fill arrives (fill price is now written back via `COALESCE` in `upsert_order`) or at EOD when the order is cancelled.
+
+---
+
+## Round 9 — Post-market UI display gaps
+
+### R9-1 — P&L shows ₹0 in UI after market close
+**Severity:** Cosmetic (Telegram notification shows correct P&L before reset)
+**File:** `main.py:423` — `post_market()`, `trader/ui/template.py`
+
+`post_market()` calls `risk.reset_day()` at 15:35 which sets `_realised_pnl = 0.0`. The UI reads `risk._realised_pnl` live, so it shows ₹0 after reset. The Telegram `notify_daily_pnl` fires correctly before the reset — functional P&L tracking and daily halt logic are unaffected.
+
+**Fix:** Capture the day's final P&L into a `BotState` field before calling `reset_day()`, and display that frozen value in the UI instead of live `_realised_pnl`.
+
+---
+
+### R9-2 — Capital shows fully available after market close
+**Severity:** Cosmetic (no new orders can be placed after market close)
+**File:** `main.py:401-413` — `post_market()` stale position cleanup
+
+After market close, `kite.positions()["net"]` returns CNC holdings with `quantity=0` (they transition to T+1 settlement). The stale position cleanup compares `risk._open_positions` against `net` positions with `quantity > 0` — finds none — and calls `risk.close_position()` on every tracked position, zeroing `_capital_deployed`. Holdings are still physically held; only the in-memory risk tracker is cleared.
+
+**Fix:** Include `kite.holdings()` in the live instruments set before the stale check (same logic already used in startup reconciliation).

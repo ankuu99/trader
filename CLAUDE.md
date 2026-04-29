@@ -3,6 +3,8 @@
 ## What this is
 An automated equity trading system for Indian markets (NSE) using Zerodha/Kite. Supports paper and live modes. Strategies emit signals; a risk layer sizes and places orders; a live WebSocket feed assembles candles.
 
+The system is **long-only, delivery (CNC) only**, targeting multi-day swing trades on NSE-listed equities. It is not an intraday system.
+
 ---
 
 ## Running the system
@@ -72,12 +74,15 @@ capital:
   daily_loss_limit_pct: 10.0
 watchlist:
   - NSE:SYMBOL
+interested:          # instruments shown in UI but not traded
+  - NSE:SYMBOL
 strategies:
   <name>:
     enabled: true | false
     ...params
 risk:
   gtt_enabled: true | false       # master GTT on/off switch
+  order_type: market | limit      # live mode only; paper always fills at next candle open
   max_open_positions: 5
   default_sl_pct: 2               # fallback SL% when signal has no stop_loss_hint
   risk_reward: 4                  # fallback target multiplier when signal has no target_price
@@ -156,13 +161,15 @@ Key rules:
 - `_position_values: dict[str, float]` — instrument → entry_price × qty (for capital tracking)
 - `capital_available` property — `total_capital - capital_deployed`; quantity is capped so portfolio never over-deploys
 - `on_order_filled()` records deployed capital; `close_position()` frees it
+- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`); surfaced in UI signals table
 
 ---
 
 ## OrderManager behaviour
 
-- **Paper mode**: queues orders in `_pending_paper`, fills at next candle's open price
-- **Live mode**: places market order via `kite.place_order()`, optionally places GTT OCO (`gtt_enabled`), tracks submitted orders in `_live_orders` for fill enrichment
+- **Paper mode**: queues orders in `_pending_paper`; MARKET fills at next candle open, LIMIT fills only if price touches the limit level during a candle (low <= limit for BUY, high >= limit for SELL); fill price = limit price exactly
+- **Live mode**: places order via `kite.place_order()` with `order_type=MARKET` (uses `market_protection=-1`) or `order_type=LIMIT` (uses `price=limit_price`); optionally places GTT OCO after BUY fill confirmation
+- **EOD cancellation (LIMIT mode)**: unfilled LIMIT orders are cancelled at day boundary — `clear_pending()` dispatches CANCELLED for each so strategy clears `_entry_price` and risk releases capital
 - GTT only placed on BUY/ENTRY orders, never on SELL/EXIT orders
 - Dispatched fill records include `signal_type` and `target_price` from the original Order so callbacks can distinguish entry vs exit fills
 
@@ -181,8 +188,9 @@ metrics = compute_metrics(trades, capital)
 - Fetches all symbol candles upfront, merges into a single chronological stream — multi-stock portfolio simulation is correct (RiskManager sees competing signals at the real timestamp)
 - Calls `strategy.on_order_update()` after every paper fill so `_entry_price` is updated to the actual fill price
 - **Intrabar SL/target simulation always active** — checks `candle["low"] <= sl_price` and `candle["high"] >= target_price` on every candle; exits at the exact SL/target price (not next-candle open). Notifies strategy via `on_order_update` so internal state is reset
+- **LIMIT fill simulation** — in LIMIT mode, entry orders only fill when price actually touches the limit level; unfilled orders persist across candles within the day and are cancelled at day boundary
 - SL/target prices come from the signal's `stop_loss_hint` / `target_price` (strategy-supplied), falling back to `trigger_price` / RR computation
-- `hold_bars` exits still fire at candle close (time-based, any price is correct)
+- `hold_bars` exits fire at candle close (time-based, actual close price used)
 - `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
 
 **`compute_metrics` returns:** `total_trades, wins, losses, win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy`
@@ -192,30 +200,136 @@ metrics = compute_metrics(trades, capital)
 
 ---
 
-## LRExtremaStrategy (`trader/strategies/lr_extrema.py`)
+## LRExtremaStrategy — deep dive (`trader/strategies/lr_extrema.py`)
 
-Self-training logistic regression that identifies local price extrema.
+### What it does
+LRExtremaStrategy is a **self-training swing entry detector**. It learns what local price minima look like on a given stock using historical candles, then fires a BUY signal when the current candle looks like a local minimum — i.e., the price is likely near a short-term bottom and about to bounce.
 
-**Config params:**
+The model retrains itself every `retrain_every` candles using the most recent history, so it adapts to the stock's current behaviour over time.
+
+### How it works — step by step
+
+1. **Candle accumulation**: Every candle is appended to an internal buffer. The model does nothing until `warmup_bars` candles have been seen.
+
+2. **Extrema detection (training labels)**:
+   Scans the historical candle buffer for local minima and maxima using a neighbourhood half-window of `extrema_order` bars.
+   - A candle is a **local minimum** (class 0 = buy candidate) if its close is lower than all closes within ±`extrema_order` bars.
+   - A candle is a **local maximum** (class 1 = sell/exit candidate) if its close is higher than all closes within ±`extrema_order` bars.
+   - All other candles are unlabelled and excluded from training.
+
+3. **Feature engineering (6 features per candle)**:
+   - `volume` — raw volume of the candle
+   - `norm_price` — `(close - low) / (high - low)` — where within the bar did price close? 0 = at the low (bearish bar), 1 = at the high (bullish bar)
+   - LR slope over last 3 bars
+   - LR slope over last 5 bars
+   - LR slope over last 10 bars
+   - LR slope over last 20 bars
+
+   These slopes capture the short, medium, and longer-term momentum direction going into the current candle. A local minimum tends to appear at the end of a declining slope sequence before a reversal.
+
+4. **Logistic regression classifier**:
+   Trained on the labelled extrema candles. Predicts P(class 0) = probability that the current candle is a local minimum.
+
+5. **Entry signal**:
+   If `P(local-min) >= threshold` and the strategy has no open position, a BUY signal is emitted with:
+   - `stop_loss_hint = close × (1 - stop_pct/100)`
+   - `target_price = close × (1 + profit_pct/100)`
+
+6. **Exit conditions** (checked every candle while in position):
+   - **Profit target**: `close >= entry_price × (1 + profit_pct/100)` → EXIT signal at exact target price
+   - **Stop-loss**: `close <= entry_price × (1 - stop_pct/100)` → EXIT signal at exact stop price
+   - **Max hold**: held `hold_bars` candles without hitting either level → EXIT at current close
+   - In backtest, the intrabar check also fires exits at the exact SL/target price if the candle's low/high touches those levels, even if close didn't.
+
+7. **Retraining**: every `retrain_every` new candles, the model is retrained on the updated buffer. This lets it adapt to regime changes (trending vs ranging periods).
+
+### Config params
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `warmup_bars` | 200 | Candles before first training |
-| `threshold` | 0.70 | Min P(local-min) to trigger BUY |
-| `profit_pct` | 3.0 | Profit target % |
-| `stop_pct` | 3.0 | Stop-loss % |
-| `hold_bars` | 150 | Max bars to hold (~10 trading days at 60min) |
+| `threshold` | 0.70 | Min P(local-min) to trigger BUY (higher = more selective) |
+| `profit_pct` | 3.0 | Profit target % from entry |
+| `stop_pct` | 3.0 | Stop-loss % from entry |
+| `hold_bars` | 150 | Max candles to hold before time-based exit |
 | `retrain_every` | 50 | Retrain every N new candles |
 | `extrema_order` | 5 | Neighbourhood half-window for extrema detection |
 
-**Features (6):** volume, normalised price `(close-low)/(high-low)`, linear regression slopes over 3/5/10/20 bars.
-**Training labels:** local minima = class 0 (buy), local maxima = class 1 (sell). No scipy — manual extrema detection.
-**Exits:** strategy-driven (not GTT). Emits `SignalType.EXIT` on profit target, stop-loss, or max hold.
-**Entry signal** includes `stop_loss_hint = close × (1 - stop_pct%)` and `target_price = close × (1 + profit_pct%)` so RiskManager and backtest engine use the strategy's own levels.
-**Re-entry guard:** sets `_entry_price = close` at signal time (prevents duplicate entry while awaiting fill); `on_order_update()` overrides it with the actual fill price.
+### What makes this strategy work (and when it fails)
 
-**Calibration** (`scripts/calibrate.py`): grid or random search over warmup/threshold/profit/stop/hold/retrain/extrema params. Pre-fetches candles once; subsequent runs hit SQLite cache. Results ranked by `return_pct`.
+**Works well on stocks that:**
+- Exhibit clear mean-reverting or oscillating price behaviour — price bounces between loose support/resistance levels rather than trending strongly in one direction
+- Have consistent volume patterns — volume spikes at local extrema (a key feature)
+- Have moderate volatility — enough to reach the profit target within `hold_bars` candles without constantly hitting the stop
+- Have sufficient liquidity — thin stocks have wide spreads and erratic candle patterns that confuse the features
+- Are not in a strong one-directional trend — a stock in a confirmed uptrend may have very few "local minima" and the model won't generalise well
 
-**Screening** (`scripts/screen.py`): backtests current config params against all ~2,000 NSE EQ stocks. Resumable — already-processed symbols read from output CSV. Rate-limited to ~3 req/sec.
+**Fails on stocks that:**
+- Are strongly trending (all entries look like local minima in a falling market)
+- Have extremely low volume / liquidity (penny stocks with days of zero volume)
+- Have highly irregular candle patterns driven by news/events rather than technical structure
+- Are in a prolonged sideways range so narrow that neither profit_pct nor stop_pct is reached within hold_bars
+
+### Calibration (`scripts/calibrate.py`)
+
+Grid or random search over warmup/threshold/profit/stop/hold/retrain/extrema params. Pre-fetches candles once; subsequent runs hit SQLite cache. Results ranked by `return_pct`.
+
+Use calibration to find the optimal parameter set for a specific stock before adding it to the watchlist.
+
+```bash
+python scripts/calibrate.py --from 2025-01-01 --symbols NSE:RELIANCE --mode random --iterations 100
+```
+
+### Screening (`scripts/screen.py`)
+
+Backtests the current config params against all ~2,000 NSE EQ stocks. Resumable — already-processed symbols read from output CSV. Rate-limited to ~3 req/sec.
+
+```bash
+python scripts/screen.py --from 2025-01-01 --output results.csv --min-trades 3
+```
+
+---
+
+## Stock selection guidance (for AI agents helping identify candidates)
+
+### Goal
+Find NSE-listed equity stocks where the LRExtremaStrategy has historically generated profitable trades with the current (or calibrated) parameters.
+
+### Primary workflow
+1. Run `screen.py` over a representative backtest period (minimum 6 months, ideally 1–2 years)
+2. Filter the results CSV for candidates worth investigating further
+3. Run `calibrate.py` on promising candidates to find their optimal parameters
+4. Paper trade candidates for 2–4 weeks before adding to live watchlist
+
+### Screening result interpretation
+
+The output CSV has columns: `symbol, total_trades, wins, losses, win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy`
+
+**Good candidate signals:**
+- `return_pct > 5%` over the backtest period (net of all costs)
+- `win_rate >= 50%` — the strategy should be right more often than wrong
+- `total_trades >= 3` — enough trades to have statistical signal (not just one lucky trade)
+- `avg_win / abs(avg_loss) > 1.5` — wins should be meaningfully larger than losses (R:R)
+- `sharpe_proxy > 0.3` — consistent, not just a few big wins masking many losses
+
+**Red flags to exclude:**
+- `total_trades == 1` — a single trade result is noise
+- `total_pnl > 0` but `win_rate < 30%` — one outlier win masking systematic losses
+- Very high `total_trades` with low `return_pct` — churning; transaction costs eating gains
+- Stocks with erratic volume (check manually — `screen.py` doesn't filter for this)
+
+### Fundamental / market context to layer on top
+The screener is purely quantitative. When shortlisting, also consider:
+- **Sector momentum**: prefer stocks in sectors with broad market tailwind
+- **Liquidity**: daily average volume should be at least ₹50L turnover to ensure LIMIT orders fill without slippage
+- **Corporate events**: avoid stocks near earnings, AGM, bonus/split record dates — these create abnormal candle patterns that confuse the model
+- **Price band**: stocks in T-group or trade-to-trade (BE) segment have settlement constraints — avoid
+- **Promoter holding**: very low promoter holding stocks can be targets for pump-and-dump, generating false extrema signals
+
+### Watchlist management
+- `watchlist` in config.yaml — stocks actively traded by the system
+- `interested` in config.yaml — stocks shown in the UI for monitoring but not traded
+- Move a stock from `interested` to `watchlist` only after calibration + paper trading validation
 
 ---
 
@@ -262,18 +376,21 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Product is always CNC** (delivery) — hardcoded in `Config.product`. No intraday/MIS support.
 - **Long-only** — all signals are BUY direction. No short selling.
 - **Paper state is in-memory** — does not survive restarts. Live mode re-fetches from Kite on startup.
-- **Paper fill timing** — ENTRY orders fill at next candle open (realistic slippage). EXIT orders (stop/target) are simulated intrabar in the backtest engine at the exact SL/target price; in live mode market orders fill within seconds.
+- **Paper fill timing** — ENTRY orders fill at next candle open (realistic slippage). EXIT orders (stop/target) are simulated intrabar in the backtest engine at the exact SL/target price; in live mode orders fill within seconds.
+- **Strategy exit price_hint** — profit/stop exits set `price_hint` to the exact target/stop level (not candle close) so backtest fills at the realistic price. Time-based (hold_bars) exits use actual close.
 - **GTT fires not confirmed via on_order_update** if GTT was placed before a live order update arrives — known edge case for GTT-triggered exits.
 - **Scheduler timezone** — IST (Asia/Kolkata). Pre-market at 09:00, post-market at 15:35.
 - **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
+
+---
 
 ## Zerodha CNC order EOD rules (important)
 
 | Order type | Used by this system | EOD behaviour |
 |---|---|---|
-| CNC Limit | No | Cancelled at 3:30 PM if unfilled |
+| CNC Limit | Yes (when `order_type: limit`) | Cancelled at 3:30 PM if unfilled — simulated in backtest at day boundary |
 | CNC SL / SL-M | No | Cancelled at 3:30 PM — must re-place next day |
-| CNC Market | Yes (entry + exit) | Fills immediately during market hours — no cancellation risk |
+| CNC Market | Yes (when `order_type: market`) | Fills immediately during market hours — no cancellation risk |
 | GTT (Good Till Triggered) | Yes (SL + target when `gtt_enabled: true`) | Persists across days — not cancelled at EOD |
 
 **Paper vs live simulation mismatch for end-of-day signals:**

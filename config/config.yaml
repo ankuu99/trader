@@ -6,12 +6,12 @@ capital:
   daily_loss_limit_pct: 5
 risk:
   gtt_enabled: true
-  order_type: market          # market | limit  (live mode only; paper always fills at next open)
+  order_type: limit          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 5
   default_sl_pct: 2
   risk_reward: 4
-  max_capital_per_stock_pct: 15.0
+  max_capital_per_stock_pct: 20.0
 interested:
 - NSE:INDHOTEL
 - NSE:IDEA
@@ -21,17 +21,7 @@ interested:
 watchlist:
 # - NSE:SUPREMEENG-BZ
 # - NSE:OMKARCHEM-BZ
-# - NSE:TECILCHEM
-- NSE:GLOBALE
-- NSE:RMDRIP
-- NSE:MODTHREAD
-- NSE:GTECJAINX
-- NSE:GICL
-# - NSE:MAHASTEEL-BE
-- NSE:TECILCHEM
-- NSE:SVLL
-- NSE:VISASTEEL
-- NSE:INFOMEDIA
+ - NSE:TECILCHEM
 
 
 
@@ -48,7 +38,7 @@ strategies:
 
 data:
   db_path: data/market.db
-  historical_cache_days: 20
+  historical_cache_days: 50
 logging:
   level: INFO
   dir: logs/
