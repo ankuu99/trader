@@ -81,7 +81,19 @@ def run_backtest(
     strategy_map: dict[str, LRExtremaStrategy] = {}
 
     def handle_order_update(update: dict):
-        if update.get("status") != "COMPLETE":
+        status = update.get("status")
+        instrument = update["instrument"]
+
+        # CANCELLED: unfilled LIMIT order expired at day boundary.
+        # Release capital and clear strategy entry guard so next day's signals fire.
+        if status == "CANCELLED":
+            risk.on_order_cancelled(instrument)
+            s = strategy_map.get(instrument)
+            if s:
+                s.on_order_update(update)
+            return
+
+        if status != "COMPLETE":
             return
         instrument = update["instrument"]
         fill_price = update.get("fill_price") or update.get("price") or 0.0
@@ -232,9 +244,17 @@ def run_backtest(
             strategy._entry_price = None
             strategy._held_bars = 0
 
+    prev_date = None
     for candle in merged_candles:
         symbol = candle["_symbol"]
         current_ts[0] = candle["timestamp"]
+        candle_date = candle["timestamp"].date()
+
+        # Simulate Zerodha's EOD LIMIT order cancellation: unfilled LIMIT orders
+        # are cancelled at day boundary, not carried forward to the next session.
+        if config.order_type == "LIMIT" and prev_date is not None and candle_date != prev_date:
+            orders.clear_pending()
+        prev_date = candle_date
 
         orders.on_candle(candle)
 

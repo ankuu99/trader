@@ -49,26 +49,64 @@ class OrderManager:
         return self._place_live(order)
 
     def clear_pending(self):
-        """Discard stale pending paper orders at market close."""
-        if self._pending_paper:
-            logger.warning(
-                "Discarding %d stale pending paper order(s) at market close: %s",
-                len(self._pending_paper),
-                [o.instrument for o in self._pending_paper.values()],
-            )
-            self._pending_paper.clear()
+        """Discard stale pending paper orders (EOD or day-boundary cancellation).
+
+        Dispatches CANCELLED for each order so strategies clear _entry_price and
+        the risk manager can release pending capital locks.
+        """
+        if not self._pending_paper:
+            return
+        logger.warning(
+            "Cancelling %d unfilled pending paper order(s): %s",
+            len(self._pending_paper),
+            [o.instrument for o in self._pending_paper.values()],
+        )
+        for order_id, order in list(self._pending_paper.items()):
+            self._dispatch({
+                "order_id": order_id,
+                "instrument": order.instrument,
+                "order_type": config.order_type,
+                "product": config.product,
+                "direction": order.direction.value,
+                "quantity": order.quantity,
+                "price": 0.0,
+                "fill_price": 0.0,
+                "trigger_price": 0.0,
+                "status": "CANCELLED",
+                "mode": "paper",
+                "strategy": order.strategy,
+                "signal_type": order.signal_type,
+            })
+        self._pending_paper.clear()
 
     def on_candle(self, candle: dict):
-        """Fill pending paper orders at this candle's open price."""
+        """Fill pending paper orders.
+
+        MARKET orders: fill at candle open (next-candle fill, existing behaviour).
+        LIMIT orders:  fill only if price touched the limit level during the candle
+                       (low <= limit for BUY, high >= limit for SELL); fill at the
+                       limit price, not the open.  Unfilled orders stay pending and
+                       are retried on subsequent candles until cleared by clear_pending().
+        """
         if self._mode != "paper" or not self._pending_paper:
             return
         symbol = candle.get("_symbol")
-        fill_price = candle["open"]
         to_fill = [
             (oid, o) for oid, o in self._pending_paper.items()
             if o.instrument == symbol
         ]
         for order_id, order in to_fill:
+            if config.order_type == "LIMIT":
+                if order.direction == Direction.BUY:
+                    if candle["low"] > order.price_hint:
+                        continue  # price never reached limit — keep pending
+                    fill_price = order.price_hint
+                else:
+                    if candle["high"] < order.price_hint:
+                        continue
+                    fill_price = order.price_hint
+            else:
+                fill_price = candle["open"]
             del self._pending_paper[order_id]
             record = {
                 "order_id": order_id,
