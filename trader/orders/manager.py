@@ -111,7 +111,7 @@ class OrderManager:
             record = {
                 "order_id": order_id,
                 "instrument": order.instrument,
-                "order_type": "MARKET",
+                "order_type": config.order_type.upper(),
                 "product": config.product,
                 "direction": order.direction.value,
                 "quantity": order.quantity,
@@ -218,7 +218,7 @@ class OrderManager:
         record = {
             "order_id": order_id,
             "instrument": order.instrument,
-            "order_type": "MARKET",
+            "order_type": config.order_type.upper(),
             "product": config.product,
             "direction": order.direction.value,
             "quantity": order.quantity,
@@ -350,6 +350,7 @@ class OrderManager:
                         "quantity": order.quantity,
                         "product": "CNC",
                         "order_type": "MARKET",
+                        "price": sl_price,
                     },
                     {
                         "transaction_type": "SELL",
