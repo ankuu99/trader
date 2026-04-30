@@ -8,9 +8,9 @@ risk:
   gtt_enabled: true
   order_type: limit          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 5
+  max_open_positions: 10
   default_sl_pct: 3
-  risk_reward: 4
+  risk_reward: 2.5
   max_capital_per_stock_pct: 10.0
 interested:
 - NSE:INDHOTEL
@@ -19,19 +19,22 @@ interested:
 
 
 watchlist:
-- NSE:TOTAL
-- NSE:SUZLON
-- NSE:ENGINERSIN
-- NSE:GODIGIT
-- NSE:TECILCHEM
-- NSE:GLOBALE
-- NSE:RMDRIP
-- NSE:MODTHREAD
-- NSE:GTECJAINX
-- NSE:GICL
-- NSE:SVLL
-- NSE:VISASTEEL
-- NSE:INFOMEDIA
+# - NSE:ATHERENERG
+# - NSE:TOTAL
+# - NSE:SUZLON
+# - NSE:ENGINERSIN
+# - NSE:GODIGIT
+
+# - NSE:GLOBALE
+# - NSE:MODTHREAD
+# - NSE:GICL
+# - NSE:SVLL
+
+# - NSE:INFOMEDIA
+# - NSE:THYROCARE
+# - NSE:MANAPPURAM
+- NSE:COMSYN
+# - NSE:TRANSRAILL
 
 strategies:
   lr_extrema:
