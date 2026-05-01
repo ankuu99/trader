@@ -103,11 +103,26 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
             f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7}  {prod:<4}  {t['reason']}"
         )
+    # Max drawdown — peak-to-trough on cumulative equity curve
+    sorted_trades = sorted(trades, key=lambda t: t.get("entry_date") or "")
+    cum_pnl = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for t in sorted_trades:
+        cum_pnl += t["pnl"]
+        if cum_pnl > peak:
+            peak = cum_pnl
+        dd = peak - cum_pnl
+        if dd > max_dd:
+            max_dd = dd
+    max_dd_pct = max_dd / config.total_capital * 100
+
     print(f"\n  Trades     : {len(trades)}  (W:{len(wins)}  L:{len(losses)})")
     print(f"  Win rate   : {win_rate:.1f}%")
     print(f"  Total cost : ₹{total_costs:,.2f}")
     print(f"  Total P&L  : ₹{total_pnl:,.2f}  (net of costs)")
     print(f"  Return     : {total_pnl / config.total_capital * 100:.2f}%")
+    print(f"  Max DD     : ₹{max_dd:,.2f}  ({max_dd_pct:.2f}% of capital)")
 
     if wins:
         avg_win = sum(t["pnl"] for t in wins) / len(wins)

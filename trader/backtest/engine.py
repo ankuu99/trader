@@ -360,16 +360,21 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
 
     Returns dict with:
         total_trades, wins, losses, win_rate (0-100),
-        total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy
+        total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy,
+        max_drawdown (absolute ₹), max_drawdown_pct (% of capital)
 
     sharpe_proxy = mean(pnl) / std(pnl) across trades — useful for relative
     ranking only, not a true Sharpe ratio. Labelled "Sharpe*" in output.
+
+    max_drawdown = largest peak-to-trough decline in the cumulative P&L equity
+    curve, ordered by entry_date. Represents the worst losing streak experienced.
     """
     if not trades:
         return {
             "total_trades": 0, "wins": 0, "losses": 0,
             "win_rate": 0.0, "total_pnl": 0.0, "return_pct": 0.0,
             "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
+            "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
         }
 
     pnls = [t["pnl"] for t in trades]
@@ -382,6 +387,19 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
     std_pnl = math.sqrt(variance)
     sharpe_proxy = mean_pnl / std_pnl if std_pnl > 0 else 0.0
 
+    # Max drawdown — peak-to-trough on equity curve ordered by entry_date
+    sorted_trades = sorted(trades, key=lambda t: t.get("entry_date") or "")
+    cum_pnl = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for t in sorted_trades:
+        cum_pnl += t["pnl"]
+        if cum_pnl > peak:
+            peak = cum_pnl
+        dd = peak - cum_pnl
+        if dd > max_dd:
+            max_dd = dd
+
     return {
         "total_trades": len(trades),
         "wins": len(wins),
@@ -392,4 +410,6 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         "avg_win": sum(wins) / len(wins) if wins else 0.0,
         "avg_loss": sum(losses) / len(losses) if losses else 0.0,
         "sharpe_proxy": sharpe_proxy,
+        "max_drawdown": max_dd,
+        "max_drawdown_pct": max_dd / capital * 100 if capital > 0 else 0.0,
     }

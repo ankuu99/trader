@@ -1503,3 +1503,13 @@ Self-heals once the fill arrives (fill price is now written back via `COALESCE` 
 After market close, `kite.positions()["net"]` returns CNC holdings with `quantity=0` (they transition to T+1 settlement). The stale position cleanup compares `risk._open_positions` against `net` positions with `quantity > 0` — finds none — and calls `risk.close_position()` on every tracked position, zeroing `_capital_deployed`. Holdings are still physically held; only the in-memory risk tracker is cleared.
 
 **Fix:** Include `kite.holdings()` in the live instruments set before the stale check (same logic already used in startup reconciliation).
+
+---
+
+**Zombie EXIT state in LIMIT mode — `lr_extrema.py`**
+
+**File:** `trader/strategies/lr_extrema.py` — `on_candle()` / `on_order_update()`
+
+In LIMIT order mode (`order_type: limit`), strategy EXIT signals produce a SELL LIMIT order at the candle close price. If the stock gaps down the next candle (high < close), the order doesn't fill. At EOD, `clear_pending()` cancels it and dispatches `CANCELLED` — but `on_order_update` only handles `CANCELLED` for ENTRY orders, not EXIT. This leaves the strategy in a zombie state: `is_flat()` = False (position still tracked in base class), `_entry_price = None`. Every subsequent `on_candle` hits `if self._entry_price is None: return None` and bails silently forever. The engine's `candle_count` keeps incrementing until intrabar SL/target fires or `OPEN@END`, producing `held_candles` far exceeding `hold_bars`.
+
+**Fix:** Add `_exit_pending` flag. Don't clear `_entry_price` when emitting EXIT signal — clear it only in `on_order_update(EXIT COMPLETE)`. Handle `CANCELLED EXIT` in `on_order_update` by clearing the flag so the strategy can re-emit exits on subsequent candles.

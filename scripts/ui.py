@@ -196,6 +196,9 @@ with st.sidebar:
         hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),      step=10)
         retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),   step=5)
         extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),    step=1)
+        tc1, tc2 = st.columns(2)
+        trading_start = tc1.text_input("trading_start", value=p.get("trading_start", "09:15"))
+        trading_end   = tc2.text_input("trading_end",   value=p.get("trading_end",   "15:30"))
 
     _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
@@ -222,13 +225,15 @@ if run_clicked:
 
     params = {
         "enabled": True,
-        "warmup_bars":   int(warmup),
-        "threshold":     float(threshold),
-        "profit_pct":    float(profit_pct),
-        "stop_pct":      float(stop_pct),
-        "hold_bars":     int(hold_bars),
-        "retrain_every": int(retrain),
-        "extrema_order": int(extrema_ord),
+        "warmup_bars":    int(warmup),
+        "threshold":      float(threshold),
+        "profit_pct":     float(profit_pct),
+        "stop_pct":       float(stop_pct),
+        "hold_bars":      int(hold_bars),
+        "retrain_every":  int(retrain),
+        "extrema_order":  int(extrema_ord),
+        "trading_start":  trading_start,
+        "trading_end":    trading_end,
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.max.time().replace(microsecond=0))
@@ -277,14 +282,15 @@ with tab1:
     metrics = compute_metrics(trades, config.total_capital)
 
     # Metric cards
-    cols = st.columns(7)
+    cols = st.columns(8)
     cols[0].metric("Trades",   metrics["total_trades"])
     cols[1].metric("Win Rate", f"{metrics['win_rate']:.1f}%")
     cols[2].metric("Net P&L",  f"₹{metrics['total_pnl']:,.0f}")
     cols[3].metric("Return",   f"{metrics['return_pct']:.2f}%")
-    cols[4].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
-    cols[5].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
-    cols[6].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
+    cols[4].metric("Max DD",   f"₹{metrics['max_drawdown']:,.0f}", delta=f"{metrics['max_drawdown_pct']:.2f}%", delta_color="inverse")
+    cols[5].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
+    cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
+    cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
 
     st.divider()
 
@@ -395,12 +401,13 @@ with tab2:
     # Per-stock summary metrics
     if inst_trades:
         im = compute_metrics(inst_trades, config.total_capital)
-        mc = st.columns(5)
+        mc = st.columns(6)
         mc[0].metric("Trades",   im["total_trades"])
         mc[1].metric("Win Rate", f"{im['win_rate']:.1f}%")
         mc[2].metric("Net P&L",  f"₹{im['total_pnl']:,.0f}")
         mc[3].metric("Return",   f"{im['return_pct']:.2f}%")
-        mc[4].metric("Sharpe*",  f"{im['sharpe_proxy']:.2f}")
+        mc[4].metric("Max DD",   f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
+        mc[5].metric("Sharpe*",  f"{im['sharpe_proxy']:.2f}")
         st.divider()
 
     # Build subplots: price | volume | (per-stock equity if trades exist)

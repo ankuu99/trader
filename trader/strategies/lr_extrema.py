@@ -59,8 +59,8 @@ class LRExtremaStrategy(Strategy):
             h, m = val.split(":")
             return time(int(h), int(m))
 
-        self._trading_start: time = _parse_time(params.get("trading_start"), time(9, 45))
-        self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 15))
+        self._trading_start: time = _parse_time(params.get("trading_start"), time(9, 30))
+        self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 30))
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None

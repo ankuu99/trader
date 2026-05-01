@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 100000
+  total: 200000
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 5
 risk:
@@ -27,6 +27,8 @@ watchlist:
 - NSE:SAIL
 - NSE:TARACHAND
 - NSE:CUPID
+- NSE:IDEA
+- NSE:INDHOTEL
 
 
 strategies:
