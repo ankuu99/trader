@@ -31,11 +31,11 @@ setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during cal
 logger = get_logger(__name__)
 
 PARAM_GRID = {
-    "warmup_bars":   [100, 150, 200, 300],
+    "warmup_bars":   [100, 150, 200, 300, 400],
     "threshold":     [0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
-    "profit_pct":    [3.0, 4.0, 5.0, 6.0, 8.0],
-    "stop_pct":      [1.5, 2.0, 2.5, 3.0],
-    "hold_bars":     [50, 100, 150, 200],
+    "profit_pct":    [3.0, 4.0, 5.0, 6.0, 8.0, 9.0, 10.0],
+    "stop_pct":      [1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
+    "hold_bars":     [100, 150, 200, 250],
     "retrain_every": [25, 50, 100],
     "extrema_order": [3, 5, 7],
 }

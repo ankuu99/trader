@@ -3,9 +3,9 @@ candle_timeframe: 15minute
 capital:
   total: 100000
   max_risk_per_trade_pct: 5.0
-  daily_loss_limit_pct: 7
+  daily_loss_limit_pct: 5
 risk:
-  gtt_enabled: true
+  gtt_enabled: false
   order_type: limit          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 10
@@ -21,19 +21,24 @@ watchlist:
 - NSE:SUZLON
 - NSE:ENGINERSIN
 - NSE:GODIGIT
-- NSE:INFOMEDIA
 - NSE:THYROCARE
+- NSE:NATIONALUM
+- NSE:INDIGO
+- NSE:SAIL
+- NSE:TARACHAND
+- NSE:CUPID
 
 
 strategies:
   lr_extrema:
     enabled: true
-    warmup_bars: 400
-    threshold: 0.90
-    profit_pct: 10.0
+    warmup_bars: 300
+    lookback_bars: 600
+    threshold: 0.85
+    profit_pct: 8
     stop_pct: 5
     hold_bars: 200
-    retrain_every: 50
+    retrain_every: 25
     extrema_order: 5
 
 data:

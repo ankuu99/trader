@@ -254,8 +254,12 @@ def run_backtest(
 
         # Simulate Zerodha's EOD LIMIT order cancellation: unfilled LIMIT orders
         # are cancelled at day boundary, not carried forward to the next session.
-        if config.order_type == "LIMIT" and prev_date is not None and candle_date != prev_date:
-            orders.clear_pending()
+        if prev_date is not None and candle_date != prev_date:
+            if config.order_type == "LIMIT":
+                orders.clear_pending()
+            # Reset daily P&L and halt state so a daily-loss-limit breach on one
+            # day doesn't permanently halt the rest of the backtest.
+            risk.reset_day()
         prev_date = candle_date
 
         orders.on_candle(candle)

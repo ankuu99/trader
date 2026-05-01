@@ -11,6 +11,8 @@ bar is a local minimum.  Exits are managed within the strategy:
 
 Config keys (under strategies.lr_extrema in config.yaml):
     warmup_bars   : candles to collect before first training (default 200)
+    lookback_bars : rolling training window size — deque maxlen (default 500)
+                    must be >= warmup_bars; older candles beyond this are dropped
     threshold     : min P(local-min) to trigger BUY ENTRY   (default 0.70)
     profit_pct    : profit target in % from entry price     (default 3.0)
     stop_pct      : stop-loss in % from entry price         (default 3.0)
@@ -21,6 +23,8 @@ Config keys (under strategies.lr_extrema in config.yaml):
 Based on: github.com/kaneelgit/Trading-strategy-
 Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
+
+from collections import deque
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -38,6 +42,7 @@ class LRExtremaStrategy(Strategy):
     def __init__(self, instrument: str, params: dict):
         super().__init__(instrument, params)
         self._warmup_bars: int = params.get("warmup_bars", 200)
+        self._lookback_bars: int = params.get("lookback_bars", 500)
         self._threshold: float = params.get("threshold", 0.70)
         self._profit_pct: float = params.get("profit_pct", 3.0)
         self._stop_pct: float = params.get("stop_pct", 3.0)
@@ -45,7 +50,7 @@ class LRExtremaStrategy(Strategy):
         self._retrain_every: int = params.get("retrain_every", 50)
         self._extrema_order: int = params.get("extrema_order", 5)
 
-        self._candles: list[dict] = []
+        self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
         self._scaler: MinMaxScaler | None = None
         self._trained: bool = False
@@ -172,7 +177,10 @@ class LRExtremaStrategy(Strategy):
     # ------------------------------------------------------------------
 
     def _train(self) -> None:
-        closes = [c["close"] for c in self._candles]
+        # Snapshot the deque once — deque does not support slice notation and
+        # a consistent list is needed for indexed access throughout training.
+        candles = list(self._candles)
+        closes = [c["close"] for c in candles]
         minima, maxima = self._find_local_extrema(closes, self._extrema_order)
 
         if len(minima) < _MIN_SAMPLES_PER_CLASS or len(maxima) < _MIN_SAMPLES_PER_CLASS:
@@ -184,12 +192,12 @@ class LRExtremaStrategy(Strategy):
 
         rows, labels = [], []
         for idx in minima:
-            feat = self._compute_features(self._candles[: idx + 1])
+            feat = self._compute_features(candles[: idx + 1])
             if feat is not None:
                 rows.append(feat)
                 labels.append(0)
         for idx in maxima:
-            feat = self._compute_features(self._candles[: idx + 1])
+            feat = self._compute_features(candles[: idx + 1])
             if feat is not None:
                 rows.append(feat)
                 labels.append(1)

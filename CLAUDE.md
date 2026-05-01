@@ -15,6 +15,7 @@ python main.py --config <path>        # alternate config
 python scripts/backtest.py --from 2025-01-01
 python scripts/backtest.py --from 2025-01-01 --to 2025-12-31
 python scripts/calibrate.py --from 2025-01-01 [--mode grid|random] [--iterations 50]
+python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31 [--window 6] [--step 3] [--symbols NSE:X]
 python scripts/screen.py --from 2025-01-01 [--min-trades 2] [--output results.csv]
 python scripts/kite_auth_server.py    # refresh Kite access token (run on EC2, open URL in any browser)
 ```
@@ -34,6 +35,7 @@ trader/
 │   ├── backtest.py                # standalone backtest runner (thin wrapper over engine)
 │   ├── calibrate.py               # grid/random param search for LRExtremaStrategy
 │   ├── screen.py                  # backtest LRExtrema against all NSE EQ stocks
+│   ├── backtest_rolling.py        # rolling-window backtest — slides window across date range, consolidated output
 │   ├── kite_auth_server.py        # OAuth flow — runs on EC2, works from any SSH client
 │   ├── trader.service             # systemd unit file for EC2 deployment
 │   └── test_telegram.py           # smoke test for Telegram notifications
@@ -189,6 +191,7 @@ metrics = compute_metrics(trades, capital)
 - Calls `strategy.on_order_update()` after every paper fill so `_entry_price` is updated to the actual fill price
 - **Intrabar SL/target simulation always active** — checks `candle["low"] <= sl_price` and `candle["high"] >= target_price` on every candle; exits at the exact SL/target price (not next-candle open). Notifies strategy via `on_order_update` so internal state is reset
 - **LIMIT fill simulation** — in LIMIT mode, entry orders only fill when price actually touches the limit level; unfilled orders persist across candles within the day and are cancelled at day boundary
+- **Daily loss limit is per-day** — `risk.reset_day()` is called at every day boundary, so a daily-loss-limit halt on one day does not carry over to subsequent days
 - SL/target prices come from the signal's `stop_loss_hint` / `target_price` (strategy-supplied), falling back to `trigger_price` / RR computation
 - `hold_bars` exits fire at candle close (time-based, actual close price used)
 - `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
@@ -255,6 +258,7 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `warmup_bars` | 200 | Candles before first training |
+| `lookback_bars` | 500 | Rolling training window — deque maxlen; candles older than this are dropped. Must be >= `warmup_bars`. |
 | `threshold` | 0.70 | Min P(local-min) to trigger BUY (higher = more selective) |
 | `profit_pct` | 3.0 | Profit target % from entry |
 | `stop_pct` | 3.0 | Stop-loss % from entry |
@@ -386,7 +390,7 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Paper state is in-memory** — does not survive restarts. Live mode re-fetches from Kite on startup.
 - **Paper fill timing** — ENTRY orders fill at next candle open (realistic slippage). EXIT orders (stop/target) are simulated intrabar in the backtest engine at the exact SL/target price; in live mode orders fill within seconds.
 - **Strategy exit price_hint** — profit/stop exits set `price_hint` to the exact target/stop level (not candle close) so backtest fills at the realistic price. Time-based (hold_bars) exits use actual close.
-- **GTT fires not confirmed via on_order_update** if GTT was placed before a live order update arrives — known edge case for GTT-triggered exits.
+- **GTT is disabled (`gtt_enabled: false`)** — strategy exit logic (profit%, stop%, hold_bars) is the sole exit mechanism in live trading, consistent with backtest behaviour. GTT was disabled because: (1) backtest never uses GTT so enabling it creates a live/backtest divergence; (2) GTT-triggered exits were not confirmed via `on_order_update`, leaving strategy state inconsistent after a GTT fire. Safety net is `Restart=always` + `RestartSec=10` in the systemd unit — bot restarts within 10s on any failure and resumes exit monitoring on the next candle.
 - **Scheduler timezone** — IST (Asia/Kolkata). Pre-market at 09:00, post-market at 15:35.
 - **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
 
@@ -399,7 +403,7 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 | CNC Limit | Yes (when `order_type: limit`) | Cancelled at 3:30 PM if unfilled — simulated in backtest at day boundary |
 | CNC SL / SL-M | No | Cancelled at 3:30 PM — must re-place next day |
 | CNC Market | Yes (when `order_type: market`) | Fills immediately during market hours — no cancellation risk |
-| GTT (Good Till Triggered) | Yes (SL + target when `gtt_enabled: true`) | Persists across days — not cancelled at EOD |
+| GTT (Good Till Triggered) | **Disabled** (`gtt_enabled: false`) | Persists across days — not cancelled at EOD |
 
 **Paper vs live simulation mismatch for end-of-day signals:**
 In live mode a market order placed at e.g. 15:15 fills within seconds (same day). In paper mode the same signal queues and fills at the **next candle's open** (next trading day 09:15 if it's the last candle of the day). This means:

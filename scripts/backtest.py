@@ -80,8 +80,8 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
 
 
     total_costs = sum(t.get("cost", 0.0) for t in trades)
-    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
-    print(f"  {'-'*19} {'-'*19} {'-'*4} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
+    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Bars':>5} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
+    print(f"  {'-'*19} {'-'*19} {'-'*4} {'-'*5} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
     for t in trades:
         entry_date_str = str(t["entry_date"])[:19] if t["entry_date"] else "—"
         exit_date_str  = str(t["exit_date"])[:19]
@@ -92,13 +92,14 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             hold_str = str(hold_days)
         else:
             hold_str = "—"
+        bars_str = str(t.get("held_candles", "—"))
         cost_str = f"₹{t.get('cost', 0.0):,.2f}"
         pnl_str = f"₹{t['pnl']:,.2f}"
         invested = t["entry"] * t["qty"]
         pnl_pct_str = f"{t['pnl'] / invested * 100:+.2f}%" if invested else "—"
         prod = t.get("product", "CNC")
         print(
-            f"  {entry_date_str:<19} {exit_date_str:<19} {hold_str:>4} {t['instrument']:<15} "
+            f"  {entry_date_str:<19} {exit_date_str:<19} {hold_str:>4} {bars_str:>5} {t['instrument']:<15} "
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
             f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7}  {prod:<4}  {t['reason']}"
         )
@@ -127,7 +128,7 @@ def _dump_csv(trades: list[dict], from_date: str, to_date: str):
     filename = f"portfolio_{from_str}_{to_str}_{timeframe}_{now}.csv"
     out_path = Path(__file__).resolve().parents[1] / "backtest_results" / filename
     fields = ["instrument", "entry_date", "exit_date", "entry", "exit", "qty",
-              "cost", "pnl", "product", "reason"]
+              "cost", "pnl", "product", "reason", "held_candles"]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
