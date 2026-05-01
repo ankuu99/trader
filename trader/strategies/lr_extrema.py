@@ -19,12 +19,15 @@ Config keys (under strategies.lr_extrema in config.yaml):
     hold_bars     : max candles to stay in a position       (default 150)
     retrain_every : retrain model every N new candles       (default 50)
     extrema_order : neighbourhood half-window for extrema   (default 5)
+    trading_start : earliest candle time for ENTRY signals  (default "09:45")
+    trading_end   : latest candle time for ENTRY signals    (default "15:15")
 
 Based on: github.com/kaneelgit/Trading-strategy-
 Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
 
 from collections import deque
+from datetime import time
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -42,13 +45,22 @@ class LRExtremaStrategy(Strategy):
     def __init__(self, instrument: str, params: dict):
         super().__init__(instrument, params)
         self._warmup_bars: int = params.get("warmup_bars", 200)
-        self._lookback_bars: int = params.get("lookback_bars", 500)
+        self._lookback_bars: int = params.get("lookback_bars", 600)
         self._threshold: float = params.get("threshold", 0.70)
         self._profit_pct: float = params.get("profit_pct", 3.0)
         self._stop_pct: float = params.get("stop_pct", 3.0)
         self._hold_bars: int = params.get("hold_bars", 150)
         self._retrain_every: int = params.get("retrain_every", 50)
         self._extrema_order: int = params.get("extrema_order", 5)
+
+        def _parse_time(val: str | None, default: time) -> time:
+            if val is None:
+                return default
+            h, m = val.split(":")
+            return time(int(h), int(m))
+
+        self._trading_start: time = _parse_time(params.get("trading_start"), time(9, 45))
+        self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 15))
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -115,6 +127,14 @@ class LRExtremaStrategy(Strategy):
         if not self._trained or self._candles_since_train >= self._retrain_every:
             self._train()
             self._candles_since_train = 0
+
+        # --- Trading window gate (entry only) ---
+        ts = candle.get("timestamp")
+        if ts is not None:
+            candle_time = ts.time() if hasattr(ts, "time") else None
+            if candle_time is not None and not (self._trading_start <= candle_time <= self._trading_end):
+                self._candles_since_train += 1
+                return None
 
         # --- Entry prediction ---
         if self._trained and self.is_flat() and self._entry_price is None:
