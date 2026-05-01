@@ -196,7 +196,14 @@ metrics = compute_metrics(trades, capital)
 **`compute_metrics` returns:** `total_trades, wins, losses, win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy`
 - `sharpe_proxy = mean(pnl) / std(pnl)` — relative ranking only, labelled "Sharpe*" in output
 
+**Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
+- `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
+
 **Reason values in trade records:** `SL`, `TARGET` (intrabar), `STRATEGY` (strategy EXIT signal), `OPEN@END`
+
+**UI (scripts/ui.py):**
+- Tab 1 trade table shows `Hold (d)` (calendar days) and `Candles` (held_candles) side by side
+- Tab 3 hold-duration scatter uses candles on x-axis; hours shown in hover tooltip
 
 ---
 
@@ -365,9 +372,10 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - Elastic IP: `13.202.187.191` — whitelist this in Zerodha API settings
 - SSH port: 9654 (not 22)
 - Service: `systemd` unit at `scripts/trader.service`, managed as `trader` user
-- Deploy: `~/scripts/deploy.sh` — git pull + pip install + service restart
-- Token refresh: SSH into EC2, run `python scripts/kite_auth_server.py`, open the printed URL in any browser (Mac or iPhone)
-- KITE_ACCESS_TOKEN expires midnight IST — must refresh daily before 09:00
+- Deploy: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo systemctl restart trader"`
+- Deploy with deps change: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo -u trader .venv/bin/pip install -r requirements.txt && sudo systemctl restart trader"`
+- Token refresh: automated via TOTP cron (runs daily 08:15 IST). Manual fallback: `python scripts/kite_auth_server.py` on EC2
+- KITE_ACCESS_TOKEN expires midnight IST — auto-refreshed by cron at 02:45 UTC (08:15 IST) via `scripts/kite_totp_refresh.py`
 
 ---
 

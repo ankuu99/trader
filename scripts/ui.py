@@ -8,6 +8,7 @@ Opens at http://localhost:8501
 """
 
 import sqlite3
+import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -30,6 +31,9 @@ from trader.data.store import Store
 
 setup(log_dir=config.log_dir, level="WARNING")  # suppress engine noise in UI
 logger = get_logger(__name__)
+
+from trader.notifications import telegram
+telegram.disable()
 
 # ── page config ──────────────────────────────────────────────────────────────
 
@@ -81,6 +85,77 @@ def _cached_instruments(db_path: Path, timeframe: str) -> list[str]:
     return [r[0] for r in rows]
 
 
+_LIVE_DB_TMP = "/tmp/trader_live_market.db"
+_LIVE_SSH_ALIAS = "trader"
+_LIVE_DB_REMOTE = "/opt/trader/data/market.db"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_live_trades() -> tuple[list[dict], str | None]:
+    """
+    SCP the remote market.db (read-only copy) and reconstruct filled trade pairs
+    from the orders table. Returns (pairs, error_string|None).
+
+    Never modifies the remote file — opens local copy in read-only mode.
+    """
+    try:
+        # The trader service runs as the 'trader' OS user; the SSH user ('ubuntu')
+        # can't traverse /opt/trader/ directly (dir is 750). Use sudo cat to read
+        # the file as root and stream it locally — no remote files are modified.
+        result = subprocess.run(
+            ["ssh", _LIVE_SSH_ALIAS, f"sudo cat {_LIVE_DB_REMOTE}"],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode(errors="replace").strip()
+            return [], f"SSH fetch failed (exit {result.returncode}): {err}"
+        with open(_LIVE_DB_TMP, "wb") as fh:
+            fh.write(result.stdout)
+    except subprocess.TimeoutExpired:
+        return [], "SSH timed out after 30 s — EC2 may be unreachable"
+    except Exception as exc:
+        return [], str(exc)
+
+    try:
+        # uri=True + mode=ro ensures we never accidentally write to the copy
+        conn = sqlite3.connect(f"file:{_LIVE_DB_TMP}?mode=ro", uri=True)
+        rows = conn.execute(
+            """
+            SELECT instrument, direction, quantity, price, updated_at
+            FROM orders
+            WHERE status = 'COMPLETE' AND mode = 'live'
+              AND price IS NOT NULL AND price > 0
+            ORDER BY updated_at ASC
+            """
+        ).fetchall()
+        conn.close()
+    except Exception as exc:
+        return [], f"DB read error: {exc}"
+
+    # Reconstruct entry/exit pairs FIFO per instrument
+    from collections import defaultdict
+    open_buys: dict[str, list[dict]] = defaultdict(list)
+    pairs: list[dict] = []
+    for inst, direction, qty, price, ts in rows:
+        if direction == "BUY":
+            open_buys[inst].append({
+                "instrument": inst,
+                "entry": price,
+                "entry_date": pd.Timestamp(ts),
+                "qty": qty,
+            })
+        elif direction == "SELL" and open_buys[inst]:
+            buy = open_buys[inst].pop(0)
+            pairs.append({
+                **buy,
+                "exit": price,
+                "exit_date": pd.Timestamp(ts),
+                "pnl": (price - buy["entry"]) * buy["qty"],
+            })
+
+    return pairs, None
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 store = _get_store()
@@ -129,6 +204,14 @@ with st.sidebar:
         use_container_width=True,
         disabled=_is_running,
     )
+
+    st.divider()
+    load_live = st.checkbox("Overlay live trades (EC2)", value=False, key="load_live")
+    if load_live:
+        col_refresh, _ = st.columns([1, 2])
+        if col_refresh.button("Refresh live data", use_container_width=True):
+            _fetch_live_trades.clear()
+            st.rerun()
 
 # ── run backtest ──────────────────────────────────────────────────────────────
 
@@ -249,13 +332,14 @@ with tab1:
         return row["pnl"] / invested * 100 if invested else 0.0
 
     df_display = df_t.copy()
-    df_display["Hold"] = df_t.apply(_hold_days, axis=1)
+    df_display["Hold (d)"] = df_t.apply(_hold_days, axis=1)
+    df_display["Candles"]  = df_t["held_candles"].fillna(0).astype(int) if "held_candles" in df_t.columns else 0
     df_display["P&L%"] = df_t.apply(_pnl_pct, axis=1)
     df_display["entry_date"] = df_display["entry_date"].astype(str).str[:19]
     df_display["exit_date"]  = df_display["exit_date"].astype(str).str[:19]
 
     df_display = df_display[[
-        "entry_date", "exit_date", "Hold", "instrument",
+        "entry_date", "exit_date", "Hold (d)", "Candles", "instrument",
         "entry", "exit", "qty", "cost", "pnl", "P&L%", "product", "reason",
     ]].rename(columns={
         "entry_date": "Entry",
@@ -405,6 +489,47 @@ with tab2:
         fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)",
                       line_width=1, row=3, col=1)
 
+    # ── live trades overlay ──
+    if st.session_state.get("load_live", False):
+        with st.spinner("Fetching live trades from EC2…"):
+            live_pairs, live_err = _fetch_live_trades()
+        if live_err:
+            st.warning(
+                f"Could not load live trades from EC2:\n\n`{live_err}`\n\n"
+                "Please confirm EC2 is reachable and the `trader` SSH alias is "
+                "configured, then click **Refresh live data** in the sidebar."
+            )
+        else:
+            inst_live = [
+                p for p in live_pairs
+                if p["instrument"] == selected_inst
+                and from_dt <= p["entry_date"] <= to_dt
+            ]
+            if inst_live:
+                df_lv = pd.DataFrame(inst_live)
+                fig.add_trace(go.Scatter(
+                    x=df_lv["entry_date"],
+                    y=df_lv["entry"],
+                    mode="markers",
+                    name="Live Entry",
+                    marker=dict(symbol="diamond", size=13, color="#f1c40f",
+                                line=dict(width=1, color="#9a7d0a")),
+                    hovertemplate="<b>LIVE ENTRY</b><br>%{x|%Y-%m-%d %H:%M}<br>₹%{y:.2f}<extra></extra>",
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=df_lv["exit_date"],
+                    y=df_lv["exit"],
+                    mode="markers",
+                    name="Live Exit",
+                    marker=dict(symbol="diamond-open", size=13, color="#e67e22",
+                                line=dict(width=2, color="#e67e22")),
+                    customdata=list(zip(df_lv["pnl"], df_lv["qty"])),
+                    hovertemplate=(
+                        "<b>LIVE EXIT</b><br>%{x|%Y-%m-%d %H:%M}<br>"
+                        "₹%{y:.2f}<br>P&L: ₹%{customdata[0]:,.0f}<extra></extra>"
+                    ),
+                ), row=1, col=1)
+
     fig.update_layout(
         height=700,
         margin=dict(l=10, r=10, t=60, b=10),
@@ -412,7 +537,13 @@ with tab2:
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
     )
-    fig.update_xaxes(rangeslider_visible=False)
+
+    # Hide non-market hours and weekends so candles don't span 24 h
+    _rangebreaks = [dict(bounds=["sat", "mon"])]
+    if config.candle_timeframe != "day":
+        _rangebreaks.append(dict(bounds=[15.5, 9.25], pattern="hour"))
+    fig.update_xaxes(rangebreaks=_rangebreaks, rangeslider_visible=False)
+
     fig.update_yaxes(title_text="₹",   row=1, col=1)
     fig.update_yaxes(title_text="Vol", row=2, col=1)
     if inst_trades:
@@ -492,21 +623,23 @@ with tab3:
         df_all["hold_h"] = (
             pd.to_datetime(df_all["exit_date"]) - pd.to_datetime(df_all["entry_date"])
         ).dt.total_seconds() / 3600
+        df_all["held_candles"] = df_all["held_candles"].fillna(0).astype(int) if "held_candles" in df_all.columns else 0
         scatter_colors = ["#2ecc71" if p > 0 else "#e74c3c" for p in df_all["pnl"]]
 
         fig_sc = go.Figure(go.Scatter(
-            x=df_all["hold_h"],
+            x=df_all["held_candles"],
             y=df_all["pnl"],
             mode="markers",
             marker=dict(size=9, color=scatter_colors, opacity=0.8,
                         line=dict(width=0.5, color="rgba(0,0,0,0.3)")),
             text=df_all["instrument"].str.replace("NSE:", "", regex=False),
-            hovertemplate="<b>%{text}</b><br>Hold: %{x:.1f}h<br>P&L: ₹%{y:,.0f}<extra></extra>",
+            customdata=df_all["hold_h"],
+            hovertemplate="<b>%{text}</b><br>Hold: %{x} bars (%{customdata:.1f}h)<br>P&L: ₹%{y:,.0f}<extra></extra>",
         ))
         fig_sc.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
         fig_sc.update_layout(
             title="Hold Duration vs P&L",
-            xaxis_title="Hold (hours)",
+            xaxis_title="Hold (candles)",
             yaxis_title="₹ P&L",
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),

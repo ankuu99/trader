@@ -116,6 +116,7 @@ def run_backtest(
                 "reason": "STRATEGY",
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
+                "held_candles": pos.get("candle_count", 0),
             })
             risk.close_position(instrument, fill_price)
             s = strategy_map.get(instrument)
@@ -147,6 +148,7 @@ def run_backtest(
             "target": target,
             "qty": quantity,
             "entry_date": current_ts[0],
+            "candle_count": 0,
         }
         risk.on_order_filled(instrument, fill_price, quantity)
         s = strategy_map.get(instrument)
@@ -258,6 +260,11 @@ def run_backtest(
 
         orders.on_candle(candle)
 
+        # Increment candle counter for the open position on this symbol.
+        # Done after order fill so the entry candle itself counts as 1.
+        if symbol in open_positions:
+            open_positions[symbol]["candle_count"] += 1
+
         # Intrabar SL/target simulation — always active in backtest.
         # Checks candle low/high against stored SL/target prices so exits fire
         # at the correct price rather than slipping to the next candle's open.
@@ -292,6 +299,7 @@ def run_backtest(
                     "reason": reason,
                     "entry_date": pos["entry_date"],
                     "exit_date": candle["timestamp"],
+                    "held_candles": pos.get("candle_count", 0),
                 })
                 del open_positions[symbol]
                 risk.close_position(symbol, exit_price)
@@ -336,6 +344,7 @@ def run_backtest(
             "reason": "OPEN@END",
             "entry_date": pos["entry_date"],
             "exit_date": to_dt,
+            "held_candles": pos.get("candle_count", 0),
         })
 
     return trades
