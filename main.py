@@ -458,9 +458,35 @@ def main():
         timeframe_minutes=config.candle_minutes,
     )
     scheduler.on_market_close(feed.flush_partials)
+    def handle_tick(tick: dict):
+        token = tick.get("instrument_token")
+        symbol = token_to_symbol.get(token)
+        if symbol is None:
+            return
+        for strat in strategies:
+            if strat.instrument != symbol:
+                continue
+            signal = strat.on_tick(tick)
+            if signal is None:
+                continue
+            order = risk.validate(signal)
+            store.log_signal(
+                timestamp=tick.get("timestamp") or datetime.now(),
+                instrument=signal.instrument,
+                strategy=signal.strategy,
+                direction=signal.direction.value,
+                signal_type=signal.signal_type.value,
+                price_hint=signal.price_hint,
+                accepted=order is not None,
+                reject_reason=None if order else risk._last_reject_reason,
+            )
+            if order is None:
+                continue
+            orders.place(order)
+
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)
-    feed.register_tick_handler(lambda _tick: None)
+    feed.register_tick_handler(handle_tick)
     if config.env == "live":
         feed.register_order_update_handler(orders.on_kite_order_update)
 

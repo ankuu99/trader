@@ -69,11 +69,14 @@ class Strategy(ABC):
             Signal if an action is warranted, else None.
         """
 
-    def on_tick(self, tick: dict) -> None:
+    def on_tick(self, tick: dict) -> "Signal | None":
         """
-        Called on every raw tick. Override only if tick-level logic is needed.
+        Called on every raw tick (live) or simulated tick (backtest).
+        Override to implement tick-speed exit logic (e.g. trailing stop).
+        Entry logic should stay in on_candle.
         Default: no-op.
         """
+        return None
 
     def on_order_update(self, order: dict) -> None:
         """

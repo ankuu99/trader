@@ -192,6 +192,7 @@ with st.sidebar:
         warmup      = st.number_input("warmup_bars",    value=int(p.get("warmup_bars", 200)),   step=10)
         threshold   = st.slider(      "threshold",      0.50, 0.99, float(p.get("threshold", 0.70)), 0.01)
         profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),  step=0.5)
+        trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),  step=0.25)
         stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),    step=0.5)
         hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),      step=10)
         retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),   step=5)
@@ -228,6 +229,7 @@ if run_clicked:
         "warmup_bars":    int(warmup),
         "threshold":      float(threshold),
         "profit_pct":     float(profit_pct),
+        "trail_pct":      float(trail_pct),
         "stop_pct":       float(stop_pct),
         "hold_bars":      int(hold_bars),
         "retrain_every":  int(retrain),
@@ -568,6 +570,18 @@ with tab3:
         st.info("Run a backtest first.")
         st.stop()
 
+    cols = st.columns(8)
+    cols[0].metric("Trades",   metrics["total_trades"])
+    cols[1].metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+    cols[2].metric("Net P&L",  f"₹{metrics['total_pnl']:,.0f}")
+    cols[3].metric("Return",   f"{metrics['return_pct']:.2f}%")
+    cols[4].metric("Max DD",   f"₹{metrics['max_drawdown']:,.0f}", delta=f"{metrics['max_drawdown_pct']:.2f}%", delta_color="inverse")
+    cols[5].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
+    cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
+    cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
+
+    st.divider()
+
     df_all = pd.DataFrame(trades)
 
     row1_l, row1_r = st.columns(2)
@@ -603,6 +617,7 @@ with tab3:
         _reason_colors = {
             "SL":       "#e74c3c",
             "TARGET":   "#2ecc71",
+            "TRAILING": "#9b59b6",
             "STRATEGY": "#3498db",
             "OPEN@END": "#f39c12",
         }

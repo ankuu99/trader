@@ -126,21 +126,28 @@ def run_backtest(
 
         # BUY fill — open new position
         sl_price = update.get("trigger_price") or 0.0
-        target = (
-            update.get("target_price")
-            or round(fill_price + (fill_price - sl_price) * config.risk_reward, 2)
-        )
+        # When trailing stop is configured there is no fixed profit target —
+        # the exit is dynamic and managed via on_tick. Set target=0 to disable
+        # the engine's intrabar target check; hard SL intrabar check is kept.
+        _trailing = "trail_pct" in params
+        if _trailing:
+            target = 0.0
+        else:
+            target = (
+                update.get("target_price")
+                or round(fill_price + (fill_price - sl_price) * config.risk_reward, 2)
+            )
         # Guard: if signal was generated at a different price than fill (e.g. gap
-        # open), SL/target may be stale and inverted relative to the actual fill
-        # price. Rebase both levels from fill_price using strategy's own percentages.
-        if fill_price > 0 and (sl_price <= 0 or sl_price >= fill_price or target <= fill_price):
-            stop_pct  = params.get("stop_pct",   3.0) / 100
-            profit_pct = params.get("profit_pct", 3.0) / 100
-            sl_price = round(fill_price * (1 - stop_pct),  2)
-            target   = round(fill_price * (1 + profit_pct), 2)
+        # open), SL may be stale. Rebase from fill_price using strategy's own pct.
+        if fill_price > 0 and (sl_price <= 0 or sl_price >= fill_price):
+            stop_pct = params.get("stop_pct", 3.0) / 100
+            sl_price = round(fill_price * (1 - stop_pct), 2)
+            if not _trailing:
+                profit_pct = params.get("profit_pct", 3.0) / 100
+                target = round(fill_price * (1 + profit_pct), 2)
             logger.debug(
-                "SL/target rebased to fill price | %s | fill=%.2f sl=%.2f target=%.2f",
-                instrument, fill_price, sl_price, target,
+                "SL rebased to fill price | %s | fill=%.2f sl=%.2f",
+                instrument, fill_price, sl_price,
             )
         open_positions[instrument] = {
             "entry": fill_price,
@@ -323,6 +330,49 @@ def run_backtest(
         strategy = strategy_map.get(symbol)
         if strategy is None:
             continue
+
+        # Trailing stop simulation via on_tick.
+        # Feed candle high first (updates _peak_close), then close (checks trail).
+        # Hard SL is already handled intrabar above; if it fired, strategy state
+        # is already reset and on_tick returns None safely.
+        if symbol in open_positions:
+            for tick_price in (candle["high"], candle["close"]):
+                tick_signal = strategy.on_tick({
+                    "last_price": tick_price,
+                    "instrument_token": candle.get("instrument_token"),
+                })
+                if tick_signal is not None:
+                    pos = open_positions.pop(symbol)
+                    exit_price = candle["close"]
+                    net, cost, product = _net_pnl(
+                        pos["entry"], exit_price, pos["qty"],
+                        pos["entry_date"], candle["timestamp"]
+                    )
+                    trades.append({
+                        "instrument": symbol,
+                        "entry": pos["entry"],
+                        "exit": exit_price,
+                        "qty": pos["qty"],
+                        "pnl": net,
+                        "cost": cost,
+                        "product": product,
+                        "reason": "TRAILING",
+                        "entry_date": pos["entry_date"],
+                        "exit_date": candle["timestamp"],
+                        "held_candles": pos.get("candle_count", 0),
+                    })
+                    risk.close_position(symbol, exit_price)
+                    strategy.on_order_update({
+                        "status": "COMPLETE",
+                        "instrument": symbol,
+                        "direction": "SELL",
+                        "signal_type": "EXIT",
+                        "quantity": pos["qty"],
+                        "price": exit_price,
+                        "fill_price": exit_price,
+                    })
+                    break
+
         signal = strategy.on_candle(candle)
         if signal is None:
             continue

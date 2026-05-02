@@ -14,9 +14,10 @@ Config keys (under strategies.lr_extrema in config.yaml):
     lookback_bars : rolling training window size — deque maxlen (default 500)
                     must be >= warmup_bars; older candles beyond this are dropped
     threshold     : min P(local-min) to trigger BUY ENTRY   (default 0.70)
-    profit_pct    : profit target in % from entry price     (default 3.0)
-    stop_pct      : stop-loss in % from entry price         (default 3.0)
-    hold_bars     : max candles to stay in a position       (default 150)
+    profit_pct    : minimum profit % to activate trailing stop (default 3.0)
+    trail_pct     : trailing stop distance % from peak       (default 1.5)
+    stop_pct      : hard stop-loss in % from entry price     (default 3.0)
+    hold_bars     : max candles to stay in a position        (default 150)
     retrain_every : retrain model every N new candles       (default 50)
     extrema_order : neighbourhood half-window for extrema   (default 5)
     trading_start : earliest candle time for ENTRY signals  (default "09:45")
@@ -48,6 +49,7 @@ class LRExtremaStrategy(Strategy):
         self._lookback_bars: int = params.get("lookback_bars", 600)
         self._threshold: float = params.get("threshold", 0.70)
         self._profit_pct: float = params.get("profit_pct", 3.0)
+        self._trail_pct: float = params.get("trail_pct", 1.5)
         self._stop_pct: float = params.get("stop_pct", 3.0)
         self._hold_bars: int = params.get("hold_bars", 150)
         self._retrain_every: int = params.get("retrain_every", 50)
@@ -71,6 +73,8 @@ class LRExtremaStrategy(Strategy):
         # exit tracking
         self._entry_price: float | None = None
         self._held_bars: int = 0
+        self._peak_close: float | None = None   # highest close since entry
+        self._trailing_active: bool = False     # True once profit_pct floor is hit
 
     @property
     def name(self) -> str:
@@ -84,33 +88,25 @@ class LRExtremaStrategy(Strategy):
         self._candles.append(candle)
         close = candle["close"]
 
-        # --- Exit management (when in a position or awaiting fill) ---
-        if not self.is_flat() or self._entry_price is not None:
+        # --- Pending fill guard (entry order sent, awaiting fill) ---
+        if self._entry_price is not None and self.is_flat():
+            return None
+
+        # --- Hold-bars timeout (candle-granularity is appropriate for a time cap) ---
+        # Hard stop and trailing stop fire tick-by-tick via on_tick; hold_bars is
+        # intentionally candle-based (a time limit, not a price level).
+        if not self.is_flat():
             self._held_bars += 1
-            if self.is_flat():
-                # Order is pending (entry_price set as guard) but not yet filled.
-                # Do not emit exit signals — there is no position to close.
-                return None
-            if self._entry_price is None:
-                return None  # position confirmed but price unknown; wait
-            pct = (close - self._entry_price) / self._entry_price * 100.0
-
-            reason: str | None = None
-            if pct >= self._profit_pct:
-                reason = f"profit target +{pct:.2f}%"
-            elif pct <= -self._stop_pct:
-                reason = f"stop-loss {pct:.2f}%"
-            elif self._held_bars >= self._hold_bars:
-                reason = f"max hold ({self._held_bars} bars)"
-
-            if reason:
+            if self._held_bars >= self._hold_bars:
                 logger.info(
-                    "LR-Extrema EXIT | %s | %s | entry=%.2f close=%.2f | candle=%s",
-                    self.instrument, reason, self._entry_price, close,
+                    "LR-Extrema EXIT | %s | max hold (%d bars) | entry=%.2f close=%.2f | candle=%s",
+                    self.instrument, self._held_bars, self._entry_price or 0, close,
                     candle.get("timestamp"),
                 )
                 self._entry_price = None
                 self._held_bars = 0
+                self._peak_close = None
+                self._trailing_active = False
                 return Signal(
                     instrument=self.instrument,
                     direction=Direction.BUY,
@@ -156,7 +152,6 @@ class LRExtremaStrategy(Strategy):
                         self._held_bars = 0
                         self._candles_since_train += 1
                         sl_hint = round(close * (1 - self._stop_pct / 100), 2)
-                        tgt_hint = round(close * (1 + self._profit_pct / 100), 2)
                         return Signal(
                             instrument=self.instrument,
                             direction=Direction.BUY,
@@ -164,10 +159,63 @@ class LRExtremaStrategy(Strategy):
                             price_hint=close,
                             strategy=self.name,
                             stop_loss_hint=sl_hint,
-                            target_price=tgt_hint,
+                            target_price=None,  # trailing stop manages upside; no fixed target
                         )
 
         self._candles_since_train += 1
+        return None
+
+    def on_tick(self, tick: dict) -> Signal | None:
+        """
+        Called on every raw tick (live) or simulated tick (backtest).
+        Handles hard stop and trailing stop at tick speed.
+        Entry logic stays in on_candle.
+        """
+        if self.is_flat() or self._entry_price is None:
+            return None
+
+        last_price = tick.get("last_price")
+        if last_price is None:
+            return None
+
+        # Update high-water mark
+        if self._peak_close is None or last_price > self._peak_close:
+            self._peak_close = last_price
+
+        # Activate trailing once minimum profit floor is reached
+        pct = (last_price - self._entry_price) / self._entry_price * 100.0
+        if not self._trailing_active and pct >= self._profit_pct:
+            self._trailing_active = True
+            logger.info(
+                "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
+                self.instrument, pct, self._profit_pct, self._peak_close,
+            )
+
+        reason: str | None = None
+        if pct <= -self._stop_pct:
+            reason = f"stop-loss {pct:.2f}%"
+        elif self._trailing_active:
+            drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
+            if drawdown <= -self._trail_pct:
+                reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
+
+        if reason:
+            logger.info(
+                "LR-Extrema EXIT (tick) | %s | %s | entry=%.2f price=%.2f",
+                self.instrument, reason, self._entry_price, last_price,
+            )
+            self._entry_price = None
+            self._held_bars = 0
+            self._peak_close = None
+            self._trailing_active = False
+            return Signal(
+                instrument=self.instrument,
+                direction=Direction.BUY,
+                signal_type=SignalType.EXIT,
+                price_hint=last_price,
+                strategy=self.name,
+            )
+
         return None
 
     def on_order_update(self, order: dict) -> None:
@@ -183,6 +231,8 @@ class LRExtremaStrategy(Strategy):
                 self._held_bars = int(held_bars) if held_bars is not None else 0
             elif signal_type == SignalType.EXIT:
                 self._entry_price = None
+                self._peak_close = None
+                self._trailing_active = False
         elif status in ("REJECTED", "CANCELLED"):
             if signal_type == SignalType.ENTRY:
                 logger.warning(
@@ -191,6 +241,8 @@ class LRExtremaStrategy(Strategy):
                 )
                 self._entry_price = None
                 self._held_bars = 0
+                self._peak_close = None
+                self._trailing_active = False
 
     # ------------------------------------------------------------------
     # Training

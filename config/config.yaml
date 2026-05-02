@@ -38,8 +38,9 @@ strategies:
     lookback_bars: 600
     threshold: 0.85
     profit_pct: 6
+    trail_pct: 1.5
     stop_pct: 5
-    hold_bars: 250
+    hold_bars: 300
     retrain_every: 25
     extrema_order: 5
     trading_start: "09:30"

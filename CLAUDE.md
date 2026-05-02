@@ -161,7 +161,7 @@ Key rules:
 - EXIT signals: skips conflict check → returns SELL Order with stored quantity
 - `_open_positions: dict[str, int]` — instrument → quantity
 - `_position_values: dict[str, float]` — instrument → entry_price × qty (for capital tracking)
-- `capital_available` property — `total_capital - capital_deployed`; quantity is capped so portfolio never over-deploys
+- `capital_available` property — `total_capital - capital_deployed`; quantity is capped so portfolio never over-deploys. In live mode `total_capital` is capped at startup by Kite available cash (see Known design decisions)
 - `on_order_filled()` records deployed capital; `close_position()` frees it
 - `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`); surfaced in UI signals table
 
@@ -202,7 +202,7 @@ metrics = compute_metrics(trades, capital)
 **Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
 - `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
 
-**Reason values in trade records:** `SL`, `TARGET` (intrabar), `STRATEGY` (strategy EXIT signal), `OPEN@END`
+**Reason values in trade records:** `SL`, `TARGET` (intrabar), `TRAILING` (trailing stop via on_tick), `STRATEGY` (strategy EXIT signal — hold_bars timeout), `OPEN@END`
 
 **UI (scripts/ui.py):**
 - Tab 1 trade table shows `Hold (d)` (calendar days) and `Candles` (held_candles) side by side
@@ -243,13 +243,20 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 5. **Entry signal**:
    If `P(local-min) >= threshold` and the strategy has no open position, a BUY signal is emitted with:
    - `stop_loss_hint = close × (1 - stop_pct/100)`
-   - `target_price = close × (1 + profit_pct/100)`
+   - `target_price = None` — no fixed target; trailing stop manages the upside
 
-6. **Exit conditions** (checked every candle while in position):
-   - **Profit target**: `close >= entry_price × (1 + profit_pct/100)` → EXIT signal at exact target price
-   - **Stop-loss**: `close <= entry_price × (1 - stop_pct/100)` → EXIT signal at exact stop price
-   - **Max hold**: held `hold_bars` candles without hitting either level → EXIT at current close
-   - In backtest, the intrabar check also fires exits at the exact SL/target price if the candle's low/high touches those levels, even if close didn't.
+6. **Exit conditions** — split across two methods:
+
+   **`on_tick` (tick-speed, live ~1 sec / backtest candle-close granularity):**
+   - **Hard stop**: `last_price <= entry_price × (1 - stop_pct/100)` → EXIT immediately
+   - **Trailing stop activation**: once `last_price >= entry_price × (1 + profit_pct/100)`, trailing activates and `_peak_close` starts tracking the high-water mark
+   - **Trailing stop exit**: once trailing is active, fires when `last_price <= _peak_close × (1 - trail_pct/100)`
+   - In backtest: engine feeds `candle["high"]` then `candle["close"]` as simulated ticks — high updates `_peak_close`, close checks trail; hard SL still fires intrabar via engine's low-check at exact SL price
+
+   **`on_candle` (candle-granularity, appropriate for a time cap):**
+   - **Max hold**: held `hold_bars` candles → EXIT at current close
+
+   **`target_price=None`** means the backtest engine's fixed intrabar target check is disabled (`target=0`) when `trail_pct` is configured — trailing is the sole upside exit.
 
 7. **Retraining**: every `retrain_every` new candles, the model is retrained on the updated buffer. This lets it adapt to regime changes (trending vs ranging periods).
 
@@ -260,8 +267,9 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | `warmup_bars` | 200 | Candles before first training |
 | `lookback_bars` | 500 | Rolling training window — deque maxlen; candles older than this are dropped. Must be >= `warmup_bars`. |
 | `threshold` | 0.70 | Min P(local-min) to trigger BUY (higher = more selective) |
-| `profit_pct` | 3.0 | Profit target % from entry |
-| `stop_pct` | 3.0 | Stop-loss % from entry |
+| `profit_pct` | 3.0 | Minimum profit % floor before trailing activates (not a fixed target) |
+| `trail_pct` | 1.5 | Trailing stop distance % from peak once trailing is active |
+| `stop_pct` | 3.0 | Hard stop-loss % from entry price |
 | `hold_bars` | 150 | Max candles to hold before time-based exit |
 | `retrain_every` | 50 | Retrain every N new candles |
 | `extrema_order` | 5 | Neighbourhood half-window for extrema detection |
@@ -389,10 +397,12 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Long-only** — all signals are BUY direction. No short selling.
 - **Paper state is in-memory** — does not survive restarts. Live mode re-fetches from Kite on startup.
 - **Paper fill timing** — ENTRY orders fill at next candle open (realistic slippage). EXIT orders (stop/target) are simulated intrabar in the backtest engine at the exact SL/target price; in live mode orders fill within seconds.
-- **Strategy exit price_hint** — profit/stop exits set `price_hint` to the exact target/stop level (not candle close) so backtest fills at the realistic price. Time-based (hold_bars) exits use actual close.
+- **Strategy exit price_hint** — trailing/stop exits set `price_hint` to the tick `last_price` at the moment of exit; time-based (hold_bars) exits use candle close.
+- **Tick-speed exits (`on_tick`)** — hard stop and trailing stop are checked on every raw Kite tick in live mode (~1 sec granularity). `on_candle` handles entry signals and the hold_bars timeout only. In backtest the engine simulates ticks by calling `strategy.on_tick` with `candle["high"]` then `candle["close"]` per candle. Hard SL still fires intrabar at the exact low price via the engine's own check. Trailing exits record as reason `"TRAILING"` in the trades list. `_peak_close` (the trailing high-water mark) is in-memory only and resets to current price on restart — see todo.md.
 - **GTT is disabled (`gtt_enabled: false`)** — strategy exit logic (profit%, stop%, hold_bars) is the sole exit mechanism in live trading, consistent with backtest behaviour. GTT was disabled because: (1) backtest never uses GTT so enabling it creates a live/backtest divergence; (2) GTT-triggered exits were not confirmed via `on_order_update`, leaving strategy state inconsistent after a GTT fire. Safety net is `Restart=always` + `RestartSec=10` in the systemd unit — bot restarts within 10s on any failure and resumes exit monitoring on the next candle.
 - **Scheduler timezone** — IST (Asia/Kolkata). Pre-market at 09:00, post-market at 15:35.
 - **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
+- **Effective capital in live mode** — on startup, `main.py` fetches `kite.margins(segment="equity")` and applies `effective_capital = min(config.total_capital, kite_available_cash)` via `config.set_effective_capital()`. This ensures the bot never tries to deploy more money than is actually in the account while still respecting the config ceiling. All derived values (`daily_loss_limit`, `max_risk_per_trade`, `max_capital_per_stock`) update automatically since they derive from `config.total_capital`. Paper mode is unaffected — it always uses the config value as-is. If the margins call fails, the system falls back to config capital and logs a warning.
 
 ---
 
