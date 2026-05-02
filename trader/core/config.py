@@ -49,6 +49,11 @@ class Config:
     def total_capital(self) -> float:
         return float(self._data["capital"]["total"])
 
+    def set_effective_capital(self, amount: float) -> None:
+        """Override total_capital at runtime (e.g. capped by Kite available cash).
+        All derived properties (daily_loss_limit, max_risk_per_trade, etc.) update automatically."""
+        self._data["capital"]["total"] = amount
+
     @property
     def max_risk_per_trade_pct(self) -> float:
         return float(self._data["capital"]["max_risk_per_trade_pct"])

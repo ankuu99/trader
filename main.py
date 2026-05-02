@@ -54,6 +54,21 @@ def main():
     )
 
     kite = create_kite()
+
+    if config.env == "live":
+        try:
+            margins = kite.margins(segment="equity")
+            kite_cash = float(margins.get("available", {}).get("cash", 0.0))
+            config_cap = config.total_capital
+            effective = min(config_cap, kite_cash)
+            config.set_effective_capital(effective)
+            logger.info(
+                "Effective capital | kite_cash=%.0f config_cap=%.0f effective=%.0f",
+                kite_cash, config_cap, effective,
+            )
+        except Exception as e:
+            logger.warning("Failed to fetch Kite margins — using config capital as-is: %s", e)
+
     store = Store(config.db_path)
     risk = RiskManager()
     orders = OrderManager(kite=kite, store=store, mode=config.env)
