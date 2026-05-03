@@ -326,14 +326,41 @@ with tab1:
     ))
     fig_eq.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
     fig_eq.update_layout(
-        title="Equity Curve — Cumulative P&L (Red dots = Drawdown events)",
+        title="Equity Curve — Drag to select range (filters table) · Click dot to highlight row",
         xaxis_title="Date",
         yaxis_title="₹",
         height=340,
         margin=dict(l=10, r=10, t=45, b=10),
         hovermode="x unified",
+        dragmode="select",
     )
-    st.plotly_chart(fig_eq, use_container_width=True)
+    eq_event = st.plotly_chart(
+        fig_eq, on_select="rerun",
+        selection_mode=["points", "box"],
+        width="stretch",
+    )
+
+    # Box selection → date range filter; lone point click → row highlight
+    try:
+        _eq_box = eq_event.selection.box or []
+        _eq_pts = eq_event.selection.points or []
+    except AttributeError:
+        _eq_box, _eq_pts = [], []
+    eq_date_start = eq_date_end = None
+    eq_highlight_ts = None
+    if _eq_box:
+        _bx = _eq_box[0].get("x", [])
+        if len(_bx) >= 2:
+            try:
+                eq_date_start = pd.Timestamp(min(_bx))
+                eq_date_end = pd.Timestamp(max(_bx))
+            except Exception:
+                pass
+    elif _eq_pts:
+        try:
+            eq_highlight_ts = str(pd.Timestamp(str(_eq_pts[0].get("x", ""))))[:19]
+        except Exception:
+            pass
 
     # ── trade table ──
     st.subheader("Trades")
@@ -348,6 +375,9 @@ with tab1:
         invested = row["entry"] * row["qty"]
         return row["pnl"] / invested * 100 if invested else 0.0
 
+    # Compute Capital on df_t so Tab 2's df_inst (derived from df_t) also has it
+    df_t["Capital"] = config.total_capital + df_t["pnl"].cumsum().shift(1, fill_value=0)
+
     df_display = df_t.copy()
     df_display["Hold (d)"] = df_t.apply(_hold_days, axis=1)
     df_display["Candles"]  = df_t["held_candles"].fillna(0).astype(int) if "held_candles" in df_t.columns else 0
@@ -357,7 +387,7 @@ with tab1:
 
     df_display = df_display[[
         "entry_date", "exit_date", "Hold (d)", "Candles", "instrument",
-        "entry", "exit", "qty", "cost", "pnl", "P&L%", "product", "reason",
+        "entry", "exit", "qty", "cost", "pnl", "P&L%", "Capital", "product", "reason",
     ]].rename(columns={
         "entry_date": "Entry",
         "exit_date":  "Exit",
@@ -371,19 +401,33 @@ with tab1:
         "reason":  "Reason",
     })
 
-    st.dataframe(
-        df_display,
-        use_container_width=True,
-        height=420,
-        column_config={
-            "Entry ₹": st.column_config.NumberColumn(format="₹%.2f"),
-            "Exit ₹":  st.column_config.NumberColumn(format="₹%.2f"),
-            "Cost":    st.column_config.NumberColumn(format="₹%.2f"),
-            "P&L":     st.column_config.NumberColumn(format="₹%.0f"),
-            "P&L%":    st.column_config.NumberColumn(format="%.2f%%"),
-        },
-        hide_index=True,
-    )
+    # Apply date filter from box selection
+    df_show = df_display
+    if eq_date_start and eq_date_end:
+        df_show = df_display[
+            (pd.to_datetime(df_display["Entry"]) >= eq_date_start) &
+            (pd.to_datetime(df_display["Entry"]) <= eq_date_end)
+        ]
+
+    # Apply row highlight from point click
+    if eq_highlight_ts:
+        def _eq_hl(row):
+            return (
+                ["background-color: rgba(52,152,219,0.25)"] * len(row)
+                if row["Entry"] == eq_highlight_ts else [""] * len(row)
+            )
+        df_show = df_show.style.apply(_eq_hl, axis=1)
+
+    _col_cfg = {
+        "Entry ₹": st.column_config.NumberColumn(format="₹%.2f"),
+        "Exit ₹":  st.column_config.NumberColumn(format="₹%.2f"),
+        "Cost":    st.column_config.NumberColumn(format="₹%.2f"),
+        "P&L":     st.column_config.NumberColumn(format="₹%.0f"),
+        "P&L%":    st.column_config.NumberColumn(format="%.2f%%"),
+        "Capital": st.column_config.NumberColumn(format="₹%.0f"),
+    }
+    st.dataframe(df_show, use_container_width=True, height=420,
+                 column_config=_col_cfg, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -590,24 +634,58 @@ with tab2:
     if inst_trades:
         fig.update_yaxes(title_text="P&L ₹", row=3, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+    chart_event = st.plotly_chart(
+        fig, on_select="rerun",
+        selection_mode=["points", "box"],
+        width="stretch",
+    )
+
+    # Process chart selection: point click on entry (curve 2) / exit (curve 3) markers
+    # Box selection → date range filter for the table below.
+    try:
+        _ch_box = chart_event.selection.box or []
+        _ch_pts = chart_event.selection.points or []
+    except AttributeError:
+        _ch_box, _ch_pts = [], []
+    ch_date_start = ch_date_end = None
+    ch_hl_entry = ch_hl_exit = None
+    if _ch_box:
+        _bx = _ch_box[0].get("x", [])
+        if len(_bx) >= 2:
+            try:
+                ch_date_start = pd.Timestamp(min(_bx))
+                ch_date_end = pd.Timestamp(max(_bx))
+            except Exception:
+                pass
+    if _ch_pts:
+        pt = _ch_pts[0]
+        cn = pt.get("curve_number", -1)
+        try:
+            norm_x = str(pd.Timestamp(str(pt.get("x", ""))))[:19]
+        except Exception:
+            norm_x = None
+        if norm_x:
+            if cn == 2:    # Entry markers
+                ch_hl_entry = norm_x
+            elif cn == 3:  # Exit markers
+                ch_hl_exit = norm_x
 
     # ── Filtered Trade Table for Selected Instrument ──
     if inst_trades:
         st.subheader(f"Trades: {selected_inst}")
-        df_inst = pd.DataFrame(inst_trades).sort_values("entry_date", ascending=False)
-        
-        # Formatting helper
+
         def _fmt_pnl_pct(row):
             invested = row["entry"] * row["qty"]
             return row["pnl"] / invested * 100 if invested else 0.0
 
+        # Use df_t (which has portfolio-level Capital already computed) for this stock
+        df_inst = df_t[df_t["instrument"] == selected_inst].sort_values("entry_date", ascending=False).copy()
         df_inst["P&L%"] = df_inst.apply(_fmt_pnl_pct, axis=1)
         df_inst["Entry"] = df_inst["entry_date"].astype(str).str[:19]
         df_inst["Exit"] = df_inst["exit_date"].astype(str).str[:19]
-        
+
         df_inst_display = df_inst[[
-            "Entry", "Exit", "entry", "exit", "qty", "pnl", "P&L%", "reason"
+            "Entry", "Exit", "entry", "exit", "qty", "pnl", "P&L%", "Capital", "reason"
         ]].rename(columns={
             "entry": "Entry ₹",
             "exit": "Exit ₹",
@@ -616,17 +694,33 @@ with tab2:
             "reason": "Reason"
         })
 
-        st.dataframe(
-            df_inst_display,
-            use_container_width=True,
-            column_config={
-                "Entry ₹": st.column_config.NumberColumn(format="₹%.2f"),
-                "Exit ₹": st.column_config.NumberColumn(format="₹%.2f"),
-                "P&L": st.column_config.NumberColumn(format="₹%.0f"),
-                "P&L%": st.column_config.NumberColumn(format="%.2f%%"),
-            },
-            hide_index=True
-        )
+        # Apply date filter from box selection
+        df_inst_show = df_inst_display
+        if ch_date_start and ch_date_end:
+            df_inst_show = df_inst_display[
+                (pd.to_datetime(df_inst_display["Entry"]) >= ch_date_start) &
+                (pd.to_datetime(df_inst_display["Entry"]) <= ch_date_end)
+            ]
+
+        # Apply row highlight from marker click
+        if ch_hl_entry or ch_hl_exit:
+            def _ch_hl(row):
+                if ch_hl_entry and row["Entry"] == ch_hl_entry:
+                    return ["background-color: rgba(52,152,219,0.25)"] * len(row)
+                if ch_hl_exit and row["Exit"] == ch_hl_exit:
+                    return ["background-color: rgba(52,152,219,0.25)"] * len(row)
+                return [""] * len(row)
+            df_inst_show = df_inst_show.style.apply(_ch_hl, axis=1)
+
+        _inst_col_cfg = {
+            "Entry ₹": st.column_config.NumberColumn(format="₹%.2f"),
+            "Exit ₹": st.column_config.NumberColumn(format="₹%.2f"),
+            "P&L": st.column_config.NumberColumn(format="₹%.0f"),
+            "P&L%": st.column_config.NumberColumn(format="%.2f%%"),
+            "Capital": st.column_config.NumberColumn(format="₹%.0f"),
+        }
+        st.dataframe(df_inst_show, use_container_width=True,
+                     column_config=_inst_col_cfg, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -677,7 +771,7 @@ with tab3:
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),
         )
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, width="stretch")
 
     # Exit reason breakdown
     with row1_r:
@@ -704,7 +798,7 @@ with tab3:
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),
         )
-        st.plotly_chart(fig_reasons, use_container_width=True)
+        st.plotly_chart(fig_reasons, width="stretch")
 
     row2_l, row2_r = st.columns(2)
 
@@ -734,7 +828,7 @@ with tab3:
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),
         )
-        st.plotly_chart(fig_sc, use_container_width=True)
+        st.plotly_chart(fig_sc, width="stretch")
 
     # Win rate by instrument (horizontal bars)
     with row2_r:
@@ -770,4 +864,4 @@ with tab3:
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),
         )
-        st.plotly_chart(fig_wr, use_container_width=True)
+        st.plotly_chart(fig_wr, width="stretch")

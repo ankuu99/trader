@@ -37,10 +37,10 @@ strategies:
     warmup_bars: 300
     lookback_bars: 600
     threshold: 0.85
-    profit_pct: 10
+    profit_pct: 20
     trail_pct: 2.5
     stop_pct: 5
-    hold_bars: 300
+    hold_bars: 200
     retrain_every: 25
     extrema_order: 5
     trading_start: "09:30"

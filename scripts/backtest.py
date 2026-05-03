@@ -86,8 +86,16 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     win_rate = win_amt / (win_amt + loss_amt) * 100 if (win_amt + loss_amt) > 0 else 0.0
 
     total_costs = sum(t.get("cost", 0.0) for t in trades)
-    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Bars':>5} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
-    print(f"  {'-'*19} {'-'*19} {'-'*4} {'-'*5} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7}  ----  ------")
+    # Effective capital at entry of each trade = initial capital + cumulative P&L of all prior exits
+    sorted_for_capital = sorted(trades, key=lambda t: t.get("entry_date") or "")
+    running_pnl = 0.0
+    capital_at_entry: dict[int, float] = {}
+    for idx, t in enumerate(sorted_for_capital):
+        capital_at_entry[id(t)] = config.total_capital + running_pnl
+        running_pnl += t["pnl"]
+
+    print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Bars':>5} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7} {'Capital':>10}  Prod  Reason")
+    print(f"  {'-'*19} {'-'*19} {'-'*4} {'-'*5} {'-'*15} {'-'*8} {'-'*8} {'-'*5} {'-'*8} {'-'*10} {'-'*7} {'-'*10}  ----  ------")
     for t in trades:
         entry_date_str = str(t["entry_date"])[:19] if t["entry_date"] else "—"
         exit_date_str  = str(t["exit_date"])[:19]
@@ -104,10 +112,11 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         invested = t["entry"] * t["qty"]
         pnl_pct_str = f"{t['pnl'] / invested * 100:+.2f}%" if invested else "—"
         prod = t.get("product", "CNC")
+        cap_str = f"₹{capital_at_entry[id(t)]:,.0f}"
         print(
             f"  {entry_date_str:<19} {exit_date_str:<19} {hold_str:>4} {bars_str:>5} {t['instrument']:<15} "
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
-            f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7}  {prod:<4}  {t['reason']}"
+            f"{cost_str:>8} {pnl_str:>10} {pnl_pct_str:>7} {cap_str:>10}  {prod:<4}  {t['reason']}"
         )
     # Max drawdown — peak-to-trough on cumulative equity curve
     sorted_trades = sorted(trades, key=lambda t: t.get("entry_date") or "")
