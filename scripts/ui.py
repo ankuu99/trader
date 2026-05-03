@@ -173,9 +173,13 @@ with st.sidebar:
     if kite_err:
         st.warning(f"Cache-only mode (Kite auth failed).\n\n`{kite_err}`")
         available = _cached_instruments(config.db_path, config.candle_timeframe)
+        # In cache-only mode intersect watchlist with what's actually cached
+        default_instruments = [s for s in config.watchlist if s in available]
     else:
         st.success("Kite connected")
         available = config.watchlist + config.interested
+        # Default to watchlist only — matches backtest.py; interested are selectable but opt-in
+        default_instruments = config.watchlist
 
     col_reconnect, _ = st.columns([1, 2])
     if col_reconnect.button("Reconnect Kite", use_container_width=True):
@@ -184,19 +188,20 @@ with st.sidebar:
     selected_instruments = st.multiselect(
         "Instruments",
         options=available,
-        default=available,
+        default=default_instruments,
     )
 
     with st.expander("Strategy params", expanded=False):
         p = config.strategy_config("lr_extrema")
-        warmup      = st.number_input("warmup_bars",    value=int(p.get("warmup_bars", 200)),   step=10)
+        warmup      = st.number_input("warmup_bars",    value=int(p.get("warmup_bars", 200)),     step=10)
+        lookback    = st.number_input("lookback_bars",  value=int(p.get("lookback_bars", 600)),   step=50)
         threshold   = st.slider(      "threshold",      0.50, 0.99, float(p.get("threshold", 0.70)), 0.01)
-        profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),  step=0.5)
-        trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),  step=0.25)
-        stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),    step=0.5)
-        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),      step=10)
-        retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),   step=5)
-        extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),    step=1)
+        profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),    step=0.5)
+        trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),    step=0.25)
+        stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),      step=0.5)
+        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),        step=10)
+        retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),     step=5)
+        extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),      step=1)
         tc1, tc2 = st.columns(2)
         trading_start = tc1.text_input("trading_start", value=p.get("trading_start", "09:15"))
         trading_end   = tc2.text_input("trading_end",   value=p.get("trading_end",   "15:30"))
@@ -227,6 +232,7 @@ if run_clicked:
     params = {
         "enabled": True,
         "warmup_bars":    int(warmup),
+        "lookback_bars":  int(lookback),
         "threshold":      float(threshold),
         "profit_pct":     float(profit_pct),
         "trail_pct":      float(trail_pct),
@@ -238,7 +244,7 @@ if run_clicked:
         "trading_end":    trading_end,
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
-    to_dt   = datetime.combine(to_date,   datetime.max.time().replace(microsecond=0))
+    to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)
 
     if kite:
         s2t = {s: sym2tok[s] for s in selected_instruments if s in sym2tok}
