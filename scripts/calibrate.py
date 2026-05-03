@@ -36,12 +36,12 @@ logger = get_logger(__name__)
 PARAM_GRID = {
     "warmup_bars":   [100, 150, 200, 300, 400],
     "lookback_bars": [400, 500, 600, 800],
-    "threshold":     [0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
-    "profit_pct":    [3.0, 4.0, 5.0, 6.0, 8.0, 9.0, 10.0],
+    "threshold":     [0.75, 0.80, 0.85, 0.90],
+    "profit_pct":    [6.0, 8.0, 10.0, 15.0, 20.0],
     "trail_pct":     [1.0, 1.5, 2.0, 2.5],
-    "stop_pct":      [1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
-    "hold_bars":     [100, 150, 200, 250, 300],
-    "retrain_every": [25, 50, 100],
+    "stop_pct":      [2.0, 4.0, 5.0],
+    "hold_bars":     [200, 250, 300],
+    "retrain_every": [25, 50],
     "extrema_order": [3, 5, 7],
 }
 
