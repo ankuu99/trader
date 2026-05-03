@@ -124,12 +124,33 @@ class Store:
                     accepted      INTEGER NOT NULL,
                     reject_reason TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS state (
+                    key   TEXT PRIMARY KEY,
+                    value REAL NOT NULL
+                );
             """)
 
     @staticmethod
     def _to_naive(dt: datetime) -> datetime:
         """Strip timezone info, keeping the wall-clock time (IST)."""
         return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+    def get_state(self, key: str, default: float = 0.0) -> float:
+        """Read a named float value from the state table."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM state WHERE key = ?", (key,)
+            ).fetchone()
+        return float(row[0]) if row else default
+
+    def set_state(self, key: str, value: float) -> None:
+        """Persist a named float value to the state table."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                (key, value),
+            )
 
     def clear_backtest_data(self):
         """Delete all data from all tables."""

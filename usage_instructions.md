@@ -23,6 +23,11 @@
 KITE_API_KEY=your_api_key_here
 KITE_API_SECRET=your_api_secret_here
 KITE_ACCESS_TOKEN=
+KITE_USER_ID=your_zerodha_user_id
+KITE_PASSWORD=your_zerodha_password
+KITE_TOTP_SECRET=your_totp_base32_secret
+TELEGRAM_BOT_TOKEN=optional
+TELEGRAM_CHAT_ID=optional
 ```
 
 Leave `KITE_ACCESS_TOKEN` blank — the login script fills it in every day.
@@ -31,75 +36,91 @@ Leave `KITE_ACCESS_TOKEN` blank — the login script fills it in every day.
 
 ```yaml
 env: paper                  # paper (no real orders) or live (real orders)
-candle_timeframe: 5minute   # 5minute / 15minute / 30minute / day
+candle_timeframe: day       # 5minute / 15minute / 30minute / 60minute / day
 
 capital:
-  total: 50000              # your trading capital in rupees
-  max_risk_per_trade_pct: 2.0   # % of capital risked per trade
-  daily_loss_limit_pct: 3.0     # halt trading if daily loss exceeds this %
+  total: 50000
+  max_risk_per_trade_pct: 7.0
+  daily_loss_limit_pct: 10.0
 
 watchlist:
   - NSE:RELIANCE
   - NSE:INFY
 
+interested:                 # monitored in UI but not traded
+  - NSE:TCS
+
 strategies:
-  zlmtf_macd:
+  lr_extrema:
     enabled: true
-    fast: 12
-    slow: 26
-    signal: 9
-    current_tf_minutes: 5   # must match candle_timeframe numerically
-    htf_minutes: 15         # higher timeframe for trend confirmation
-    lookback_bars: 5        # bars HTF MACD must be rising to confirm entry
+    warmup_bars: 300
+    lookback_bars: 600
+    threshold: 0.85
+    profit_pct: 10
+    trail_pct: 1.5
+    stop_pct: 5
+    hold_bars: 300
+    retrain_every: 25
+    extrema_order: 5
+    trading_start: "09:15"
+    trading_end: "15:30"
 
 risk:
+  gtt_enabled: false
+  order_type: market        # market or limit
   max_open_positions: 5
-  default_sl_pct: 3.0       # stop-loss placed this % below entry price
-  risk_reward: 2.0          # target = entry + (sl_distance × risk_reward)
+  default_sl_pct: 2
+  risk_reward: 4
+  max_capital_per_stock_pct: 25.0
+
+data:
+  db_path: data/market.db
+  historical_cache_days: 90
+
+logging:
+  level: INFO
+  dir: logs
 ```
-
-**Important:** `current_tf_minutes` must match `candle_timeframe`:
-
-| candle_timeframe | current_tf_minutes |
-|---|---|
-| 5minute | 5 |
-| 15minute | 15 |
-| 30minute | 30 |
-| day | 390 |
 
 ---
 
 ## Every Trading Day
 
-### Step 1 — Login (required daily, tokens expire at midnight)
+### Token Refresh (automated on EC2)
+
+On EC2 the TOTP refresh runs automatically at **08:15 IST** every weekday via cron:
 
 ```bash
-python scripts/login.py
+45 2 * * 1-5 /home/trader/.venv/bin/python /opt/trader/scripts/kite_totp_refresh.py >> /opt/trader/logs/totp_refresh.log 2>&1
 ```
 
-This opens Kite login in your browser. After you log in, Kite redirects to localhost and the token is saved to `config/.env` automatically. You will see:
+This logs in headlessly using TOTP, saves the new token to `config/.env`, and restarts the trader service. A Telegram notification confirms success.
 
+**Manual fallback** (if TOTP refresh fails):
+
+```bash
+python scripts/kite_auth_server.py
 ```
-Access token saved to .env
-User: Your Name (AB1234)
 
-You can now run: python main.py
-```
+Runs an OAuth callback server on EC2. Open the printed URL in any browser, log in, and the token is saved automatically.
 
-### Step 2 — Run the trader
+### Run the trader
 
 ```bash
 python main.py
+python main.py --config path/to/config.yaml   # alternate config
 ```
 
 On startup it will:
 1. Verify your Kite session
-2. Fetch the instruments list and validate your watchlist
-3. Warm up the candle cache (downloads last 90 days of history if not already cached)
-4. Start the live WebSocket feed
-5. Process candles and fire signals as they close
+2. Fetch available Kite cash and set effective capital
+3. Fetch instruments and validate watchlist
+4. Refresh and warm up candle cache (last 90 days)
+5. Train `LRExtremaStrategy` on cached history
+6. Reconcile open positions from DB / Kite
+7. Start the live WebSocket feed
 
-At **3:35 PM** the scheduler runs a post-market task that logs your portfolio P&L summary and resets the daily loss counter.
+At **09:00** pre-market warm-up runs. At **15:35** post-market logs P&L summary, resets daily counters, and disconnects the feed.
 
 Press **Ctrl+C** to stop cleanly.
 
@@ -109,125 +130,141 @@ Press **Ctrl+C** to stop cleanly.
 
 ### Entry
 
-When a strategy generates a signal:
-1. The risk manager checks: daily halt, max open positions, already in position
-2. Calculates quantity: `max_risk_per_trade ÷ sl_distance`
-3. Places a **market BUY order** (CNC delivery)
-4. Places a **GTT OCO** (One Cancels Other) with two legs:
-   - **Stop-loss leg** — triggers at `entry × (1 - sl_pct/100)`
-   - **Target leg** — triggers at `entry + (sl_distance × risk_reward)`
+When `LRExtremaStrategy` generates a BUY signal:
+1. RiskManager checks: daily halt, max open positions, already in position, available capital
+2. Sizes quantity: `max_risk_per_trade ÷ sl_distance`, capped by `max_capital_per_stock` and available capital
+3. Places a **market or limit BUY order** (CNC delivery)
 
-Example with `default_sl_pct: 3.0` and `risk_reward: 2.0`:
+### Exit
 
-| Entry | Stop-loss | Target |
-|---|---|---|
-| ₹100 | ₹97 | ₹106 |
-| ₹500 | ₹485 | ₹515 |
-
-When either leg fires, Kite automatically cancels the other.
+Exits are managed entirely by the strategy (GTT is disabled):
+- **Hard stop** — fires on every tick when `price <= entry × (1 - stop_pct/100)`
+- **Trailing stop** — activates once `price >= entry × (1 + profit_pct/100)`; then exits when price pulls back `trail_pct%` from peak
+- **Hold timeout** — exits at candle close after `hold_bars` candles
 
 ### Paper Mode
 
-In `env: paper`, no real orders are placed. Entry orders are simulated as fills at the **next candle's open price**. The GTT OCO legs are not simulated in live feed — use the backtest for full SL/target simulation.
+In `env: paper`, no real orders are placed. BUY orders fill at the **next candle's open**. Exit logic (trailing, hard stop, hold timeout) runs identically to live.
 
 ---
 
 ## Backtesting
 
-### CLI
-
 ```bash
 # Backtest from a start date to today
 python scripts/backtest.py --from 2025-01-01
 
-# Backtest a specific date range
+# Specific date range
 python scripts/backtest.py --from 2025-01-01 --to 2025-06-30
+
+# Override candle timeframe
+python scripts/backtest.py --from 2025-01-01 --timeframe 15minute
 ```
 
-- Uses whichever strategy has `enabled: true` in config
-- Historical data is fetched from Kite and cached locally on first run
-- Simulates GTT OCO: checks each candle's low (SL) and high (target)
-- If both are hit in the same candle, SL is assumed (conservative)
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start date (YYYY-MM-DD) |
+| `--to` | today | End date (YYYY-MM-DD) |
+| `--timeframe` | from config | `5minute / 15minute / 30minute / 60minute / day` |
+
+**Intrabar simulation** — checks each candle's low (hard SL), high (trailing peak), and close (trailing exit) so exits fire at the exact price rather than slipping to the next candle open.
+
+### Rolling backtest
+
+Slides a fixed-width window across a long date range — reveals how the strategy performs across different market regimes.
+
+```bash
+python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31
+python scripts/backtest_rolling.py --from 2024-01-01 --window 6 --step 3 --symbols NSE:RELIANCE NSE:TCS
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Overall start date |
+| `--to` | today | Overall end date |
+| `--window` | 6 | Window width in months |
+| `--step` | 3 | Slide step in months |
+| `--symbols` | watchlist | Override instrument list |
+| `--timeframe` | from config | Candle timeframe |
 
 ### Visual UI (local, browser-based)
 
 ```bash
+source .venv/bin/activate
 streamlit run scripts/ui.py
 ```
 
-Opens at `http://localhost:8501`. Requires `streamlit` and `plotly` (`pip install streamlit plotly`).
-
-**What you get:**
+Opens at `http://localhost:8501`.
 
 | Tab | Contents |
 |-----|----------|
-| **Portfolio** | Metric cards (trades, win rate, P&L, return, avg win/loss, Sharpe*), equity curve, sortable trade table |
-| **Stock Chart** | Interactive candlestick + volume chart with ▲ entry and ▼ exit markers; hover shows exit reason and P&L; per-stock equity subplot |
-| **Trade Breakdown** | P&L histogram, exit reason bar chart (SL / TARGET / STRATEGY / OPEN@END), hold duration vs P&L scatter, win rate by instrument |
+| **Portfolio** | Metric cards (trades, money-weighted win%, P&L, return, max drawdown, avg win/loss, Sharpe*), equity curve, trade table |
+| **Stock Chart** | Candlestick + volume + per-stock equity curve; ▲ entry and ▼ exit markers with exit reason and P&L on hover; optional live trades overlay from EC2 |
+| **Trade Breakdown** | P&L distribution histogram, exit reasons (SL / TRAILING / STRATEGY / OPEN@END), hold duration vs P&L scatter, money-weighted win rate by instrument |
 
-**Sidebar controls:** date range, instrument multi-select, all 7 LRExtrema strategy params — change any param and re-run without leaving the browser.
+**Win rate** shown everywhere is **money-weighted**: `total_profit_from_wins / (total_profit_from_wins + total_loss_from_losses)`. A 30% trade-count win rate with large wins and small losses shows as 80%+ here.
 
-**Cache-only mode:** if the Kite access token is expired, the UI falls back to SQLite-cached candles. Charts and strategy replay still work for already-fetched symbols — useful for evening/weekend analysis without logging in.
-
-Sample output:
-
-```
-=======================================================
-  Backtest: 2025-01-01  →  2025-06-30
-=======================================================
-  Trades     : 12  (W:8  L:4)
-  Win rate   : 66.7%
-  Total P&L  : Rs.4,320.00
-  Return     : 8.64%
-  Avg win    : Rs.810.00
-  Avg loss   : Rs.405.00
-
-  Date                   Instrument      Entry     Exit   Qty        P&L  Reason
-  ...
-=======================================================
-```
+**Cache-only mode** — if the Kite token is expired the UI falls back to SQLite-cached candles. Charts and strategy replay still work for already-fetched symbols.
 
 ---
 
 ## Calibration
 
-Find the best `LRExtremaStrategy` parameters systematically on your watchlist.
+Find the best `LRExtremaStrategy` parameters on your watchlist.
 
 ```bash
-# Random search (default — 50 combinations, fast)
+# Random search — 50 combinations (default, fast)
 python scripts/calibrate.py --from 2024-01-01
 
-# Random search with more iterations
-python scripts/calibrate.py --from 2024-01-01 --to 2025-01-01 --mode random --iterations 200
+# More iterations
+python scripts/calibrate.py --from 2024-01-01 --mode random --iterations 200
 
-# Full grid search (8,640 combinations — slow)
-python scripts/calibrate.py --from 2024-01-01 --mode grid
+# Calibrate only specific params — rest fixed at config values
+python scripts/calibrate.py --from 2024-01-01 --params threshold profit_pct trail_pct
+
+# Grid search over a subset (full grid is too large to be practical)
+python scripts/calibrate.py --from 2024-01-01 --mode grid --params trail_pct stop_pct
+
+# Override timeframe
+python scripts/calibrate.py --from 2024-01-01 --timeframe 15minute
 ```
 
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start date |
+| `--to` | today | End date |
+| `--mode` | random | `grid` or `random` |
+| `--iterations` | 50 | Combinations to try (random mode) |
+| `--params` | all | Params to vary; rest fixed at config |
+| `--timeframe` | from config | Candle timeframe |
+
 **How it works:**
-1. Pre-fetches candle data for all watchlist symbols once (subsequent calls hit SQLite cache)
-2. For each parameter combination, runs a full backtest and computes metrics
+1. Pre-fetches candle data for all watchlist symbols once — subsequent iterations hit SQLite cache, no API calls
+2. For each combination, runs a full backtest and computes metrics
 3. Prints a ranked table sorted by return %
+4. Prints best params ready to paste into `config.yaml`
 
 **Parameter search space:**
 
 | Parameter | Values |
 |-----------|--------|
-| `warmup_bars` | 100, 150, 200, 300 |
+| `warmup_bars` | 100, 150, 200, 300, 400 |
+| `lookback_bars` | 400, 500, 600, 800 |
 | `threshold` | 0.65, 0.70, 0.75, 0.80, 0.85, 0.90 |
-| `profit_pct` | 3.0, 4.0, 5.0, 6.0, 8.0 |
-| `stop_pct` | 1.5, 2.0, 2.5, 3.0 |
-| `hold_bars` | 50, 100, 150, 200 |
+| `profit_pct` | 3.0, 4.0, 5.0, 6.0, 8.0, 9.0, 10.0 |
+| `trail_pct` | 1.0, 1.5, 2.0, 2.5 |
+| `stop_pct` | 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 |
+| `hold_bars` | 100, 150, 200, 250, 300 |
 | `retrain_every` | 25, 50, 100 |
 | `extrema_order` | 3, 5, 7 |
 
-**Output:**
-```
-Rank  warmup  threshold  profit  stop  hold  retrain  extrema  Trades  Win%   P&L       Return%  Sharpe*
-   1     150       0.80     5.0   2.0   100       50        5      12   67%   Rs.4,200    8.40%    1.24
-```
-
-After calibration, copy the best params into `config/config.yaml` under `strategies.lr_extrema`.
+> Full grid is ~1.5M combinations — always use `--mode random` or `--params` to restrict scope.
 
 ---
 
@@ -236,83 +273,30 @@ After calibration, copy the best params into `config/config.yaml` under `strateg
 Backtest `LRExtremaStrategy` against all ~2,000 NSE EQ stocks to find where it performs best. Uses the current `lr_extrema` params from `config.yaml` — run calibration first.
 
 ```bash
-# Scan all NSE EQ stocks
 python scripts/screen.py --from 2025-01-01
-
-# Custom date range, minimum trades filter, output file
-python scripts/screen.py --from 2025-01-01 --to 2025-01-01 --min-trades 3 --output results.csv
+python scripts/screen.py --from 2025-01-01 --to 2025-06-30 --min-trades 3 --output results.csv
+python scripts/screen.py --from 2025-01-01 --timeframe 15minute
 ```
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--from` | required | Backtest start date (YYYY-MM-DD) |
-| `--to` | today | Backtest end date |
+| `--from` | required | Start date |
+| `--to` | today | End date |
 | `--min-trades` | 2 | Min trades to appear in final table |
 | `--output` | screen_results.csv | Output CSV path |
+| `--timeframe` | from config | Candle timeframe |
 
-**Resumable:** If interrupted, re-running the same command resumes from where it left off — already-processed symbols are read from the output CSV and skipped. Stocks that errored are retried; stocks with insufficient data are permanently skipped.
+**Resumable** — re-running the same command resumes from where it left off. Already-processed symbols are skipped; errored symbols are retried.
 
-**Rate limiting:** ~3 req/sec (0.35s sleep between stocks). Full scan of ~2,000 stocks takes roughly 12 minutes.
+**Rate limiting** — ~3 req/sec (0.35s sleep). Full scan of ~2,000 stocks takes ~12 minutes.
 
-**Terminal output during scan:**
-```
-[  42/2134] NSE:RELIANCE         Trades=8  Win=75%  Return=12.40%
-[  43/2134] NSE:INFY             SKIP (insufficient data: 45 candles, need 200)
-```
-
-**Final table** (sorted by return %, filtered by min-trades):
-```
-Instrument          Trades  Win%    P&L          Return%   Sharpe*
-NSE:RELIANCE            8   75%   Rs.12,400      12.40%     1.31
-NSE:TCS                 6   67%    Rs.8,200       8.20%     0.95
-```
-
-Add the top-performing instruments to your `watchlist` in `config.yaml`.
-
----
-
-## Strategies
-
-### RSI
-Buys when RSI crosses **below** the oversold threshold (default 30). Entry only — exit via GTT.
-
-```yaml
-rsi:
-  enabled: true
-  period: 14      # RSI lookback period
-  oversold: 30    # trigger level
-```
-
-### MACD
-Buys when MACD line crosses **above** the signal line. Entry only — exit via GTT.
-
-```yaml
-macd:
-  enabled: true
-  fast: 12
-  slow: 26
-  signal: 9
-```
-
-### Zero Lag MTF MACD *(recommended)*
-Standard EMA-based MACD on current timeframe, with a higher timeframe confirmation using SMA with scaled periods (`htf_period = round(htf_minutes / current_tf_minutes × period)`). Entry requires:
-1. LTF MACD crosses above LTF signal line
-2. HTF MACD has been rising for `lookback_bars` consecutive bars
-
-```yaml
-zlmtf_macd:
-  enabled: true
-  fast: 12
-  slow: 26
-  signal: 9
-  current_tf_minutes: 5   # matches candle_timeframe
-  htf_minutes: 15         # higher timeframe
-  lookback_bars: 5        # bars HTF must be rising
-```
-
-Only one strategy should be `enabled: true` at a time unless you intentionally want multiple signals on the same instrument.
+**Good candidate signals:**
+- `return_pct > 5%` over the period
+- `win_rate >= 50%` (money-weighted)
+- `total_trades >= 3`
+- `avg_win / abs(avg_loss) > 1.5`
 
 ---
 
@@ -320,85 +304,51 @@ Only one strategy should be `enabled: true` at a time unless you intentionally w
 
 ```
 config/
-  config.yaml       — all runtime settings
-  .env              — API credentials (never commit this)
+  config.yaml           — all runtime settings
+  .env                  — API credentials (never commit)
 
 trader/
-  auth/             — Kite session management
-  core/             — config loader, logger
-  data/             — historical data fetch/cache, live WebSocket feed, SQLite store
-  orders/           — order placement (live + paper simulation)
-  portfolio/        — position tracking
-  risk/             — signal validation, position sizing, SL/target calculation
-  scheduler/        — pre/post market jobs (APScheduler)
-  strategies/       — RSI, MACD, ZL-MTF-MACD, base class, registry
+  auth/                 — Kite session management
+  backtest/             — engine shared by all backtest scripts
+  core/                 — config loader, logger
+  costs.py              — Zerodha brokerage calculator (CNC/MIS)
+  data/                 — historical fetch/cache, live WebSocket feed, SQLite store
+  notifications/        — Telegram alerts
+  orders/               — order placement (live + paper simulation)
+  portfolio/            — position tracking
+  risk/                 — signal validation, position sizing, capital tracking
+  scheduler/            — pre/post market jobs (APScheduler)
+  strategies/           — LRExtremaStrategy, base class, registry
 
 scripts/
-  login.py          — daily token refresh
-  backtest.py       — historical replay (CLI, prints table)
-  ui.py             — backtest visualization UI (Streamlit, browser)
+  kite_totp_refresh.py  — automated daily token refresh (runs on EC2 via cron)
+  kite_auth_server.py   — manual OAuth fallback token refresh
+  backtest.py           — historical replay (CLI)
+  backtest_rolling.py   — sliding-window backtest across date range
+  calibrate.py          — parameter search (grid / random)
+  screen.py             — backtest across all NSE EQ stocks
+  ui.py                 — backtest visualisation UI (Streamlit)
+  trader.service        — systemd unit file for EC2
 
 data/
-  market.db         — SQLite: candles, orders, signals (auto-created)
+  market.db             — SQLite: candles, orders, signals, state (auto-created)
 
-logs/               — rotating log files (auto-created)
+logs/                   — rotating log files (auto-created)
 ```
 
 ---
 
 ## Cloud Deployment (AWS EC2)
 
-The bot can run on an AWS EC2 t2.micro (free tier) in ap-south-1 (Mumbai). Full setup details are in `aws_plan.md`. Summary below.
-
-### Infrastructure
-- **Instance**: t2.micro, Ubuntu 24.04 LTS, 20 GB gp3 — free tier
-- **Static IP**: Elastic IP, free while instance is running
-- **SSH port**: 9654 (non-default, key-only auth)
-- **Process manager**: systemd (`trader.service`) — auto-starts on boot, restarts on crash
-
-### Initial Deployment
-
-```bash
-# 1. On your Mac — generate SSH key
-ssh-keygen -t ed25519 -f ~/.ssh/trader_ec2 -C "trader-ec2"
-
-# 2. Add to ~/.ssh/config
-# Host trader
-#     HostName YOUR_ELASTIC_IP
-#     User ubuntu
-#     Port 9654
-#     IdentityFile ~/.ssh/trader_ec2
-#     ServerAliveInterval 60
-
-# 3. On EC2 — clone repo, install deps, set up service
-sudo useradd -r -s /bin/bash -m -d /opt/trader trader
-sudo mkdir -p /opt/trader && sudo chown trader:trader /opt/trader
-sudo -u trader bash -c "cd /opt/trader && git clone https://github.com/YOUR_REPO/trader.git ."
-sudo -u trader bash -c "cd /opt/trader && python3 -m venv .venv && .venv/bin/pip install --no-cache-dir -r requirements.txt"
-
-# 4. Copy and enable the systemd service
-sudo cp /opt/trader/scripts/trader.service /etc/systemd/system/trader.service
-sudo systemctl daemon-reload
-sudo systemctl enable trader
-```
-
-### Daily Token Refresh (required every trading day)
-
-Because `scripts/login.py` opens a browser (must run on your Mac, not EC2), use the helper script:
-
-```bash
-~/scripts/refresh-token.sh
-```
-
-This runs login locally, uploads `config/.env` to EC2, and restarts the service. Run before **9:15 AM IST**. The token expires at midnight IST — do not run the night before.
+- **Instance**: t2.micro, Ubuntu 24.04 LTS, ap-south-1 (Mumbai)
+- **Elastic IP**: `13.202.187.191` — whitelist in Zerodha API settings
+- **SSH port**: 9654
+- **Process manager**: systemd (`trader.service`) — auto-starts on boot, restarts on crash within 10s
 
 ### Deploying Code Changes
 
 ```bash
-# Push from Mac
-git push origin main
-
-# Pull and restart on EC2
+# Pull and restart
 ssh trader "cd /opt/trader && sudo -u trader git pull && sudo systemctl restart trader"
 
 # If requirements.txt changed
@@ -408,51 +358,30 @@ ssh trader "cd /opt/trader && sudo -u trader git pull && sudo -u trader .venv/bi
 ### Monitoring
 
 ```bash
-# Service status
 ssh trader "sudo systemctl status trader"
-
-# Live logs
 ssh trader "sudo journalctl -u trader -f"
-
-# Last 100 lines
 ssh trader "sudo journalctl -u trader -n 100"
-
-# Memory / disk
 ssh trader "free -h && df -h /"
 ```
 
-### Live Dashboard (read-only UI)
-
-The bot includes a lightweight read-only dashboard showing open positions, P&L, recent
-orders, and signals. It binds to loopback only — access it via SSH tunnel:
+### Live Dashboard
 
 ```bash
-# Open tunnel (runs in background)
+# Open SSH tunnel
 ssh -fN -L 8080:localhost:8080 trader
 
-# Then open in browser
+# Open in browser
 open http://localhost:8080
 
-# Close the tunnel when done
+# Close tunnel
 pkill -f "ssh -fN -L 8080"
 ```
 
-The dashboard auto-refreshes every 30 seconds. No port needs to be opened in the EC2
-security group — the SSH tunnel handles access securely.
-
-Enable in `config/config.yaml`:
+Enable in `config.yaml`:
 ```yaml
 ui:
   enabled: true
   port: 8080
-```
-
-### Health Signal
-
-After `refresh-token.sh` runs successfully, the bot sends a Telegram startup notification. If you don't receive it by 9:10 AM IST, check logs:
-
-```bash
-ssh trader "sudo journalctl -u trader -n 50 --no-pager"
 ```
 
 ---
@@ -463,13 +392,16 @@ ssh trader "sudo journalctl -u trader -n 50 --no-pager"
 → Check that `config/.env` exists and has `KITE_API_KEY` and `KITE_API_SECRET`.
 
 **"Access token is invalid or expired"**
-→ Run `python scripts/login.py` to refresh the token.
+→ Run `python scripts/kite_auth_server.py` to refresh the token manually.
 
 **"Instruments not found on NSE"**
-→ Check the symbol format in your watchlist: must be `NSE:SYMBOL` e.g. `NSE:RELIANCE`.
+→ Check symbol format in watchlist: must be `NSE:SYMBOL` e.g. `NSE:RELIANCE`.
 
 **No signals firing**
-→ Confirm a strategy has `enabled: true` in config. For ZL-MTF-MACD, the HTF MACD needs `lookback_bars` consecutive rising bars — this filters out a lot of candles by design.
+→ Confirm `lr_extrema` has `enabled: true`. The model needs `warmup_bars` candles before it starts predicting — check logs for "TRAINED" status.
 
 **Backtest shows no trades**
-→ The strategy may need more historical data. Increase `historical_cache_days` or widen your date range.
+→ Widen the date range or lower `threshold`. Check that candles exist for the symbol and timeframe (`--timeframe` must match what was cached).
+
+**TOTP refresh failed**
+→ Check `logs/totp_refresh.log` on EC2. Common causes: wrong `KITE_TOTP_SECRET`, Zerodha password changed, network issue. Use `kite_auth_server.py` as fallback.

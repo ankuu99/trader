@@ -14,6 +14,3 @@
   `hold_bars` timeout. Fix: in `on_order_update`, add a `REJECTED` branch for
   `signal_type == SignalType.EXIT` that re-sets `_entry_price` to the last known
   entry price (stored separately) so `on_tick` can retry the exit on the next tick.
-
-
-- **Win Rate in ui.py should be shown as weighted by the amount won rather than trade**

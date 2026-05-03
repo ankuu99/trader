@@ -39,13 +39,24 @@ class RiskManager:
         self._capital_deployed: float = 0.0
         self._pending_orders: dict[str, float] = {}   # instrument → expected cost (pre-fill lock)
         self._realised_pnl: float = 0.0
+        self._cumulative_pnl: float = 0.0  # lifetime P&L — never resets; persisted to DB in live mode
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
 
     @property
     def capital_available(self) -> float:
         pending = sum(self._pending_orders.values())
-        return max(0.0, config.total_capital - self._capital_deployed - pending)
+        return max(0.0, config.total_capital + self._cumulative_pnl - self._capital_deployed - pending)
+
+    @property
+    def cumulative_pnl(self) -> float:
+        return self._cumulative_pnl
+
+    def seed_cumulative_pnl(self, pnl: float) -> None:
+        """Restore persisted cumulative P&L on startup (live mode only)."""
+        self._cumulative_pnl = pnl
+        logger.info("Seeded cumulative P&L | pnl=%.2f | effective_capital=%.0f",
+                    pnl, config.total_capital + pnl)
 
     def validate(self, signal: Signal) -> Order | None:
         self._last_reject_reason = None
@@ -243,6 +254,7 @@ class RiskManager:
             entry_price = freed / qty
             pnl = (exit_price - entry_price) * qty
             self._realised_pnl += pnl
+            self._cumulative_pnl += pnl
             logger.info(
                 "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f",
                 instrument, qty, entry_price, exit_price, pnl, self._realised_pnl,

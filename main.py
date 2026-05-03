@@ -55,22 +55,25 @@ def main():
 
     kite = create_kite()
 
+    store = Store(config.db_path)
+    risk = RiskManager()
+
     if config.env == "live":
         try:
             margins = kite.margins(segment="equity")
             kite_cash = float(margins.get("available", {}).get("cash", 0.0))
-            config_cap = config.total_capital
-            effective = min(config_cap, kite_cash)
-            config.set_effective_capital(effective)
+            persisted_pnl = store.get_state("cumulative_pnl", 0.0)
+            tracked_capital = config.total_capital + persisted_pnl
+            # Kite cash acts as a floor — handles withdrawals; extra cash (refunds etc.) is ignored
+            effective = min(tracked_capital, kite_cash)
+            adjusted_pnl = effective - config.total_capital
+            risk.seed_cumulative_pnl(adjusted_pnl)
             logger.info(
-                "Effective capital | kite_cash=%.0f config_cap=%.0f effective=%.0f",
-                kite_cash, config_cap, effective,
+                "Capital seeded | kite_cash=%.0f config_cap=%.0f persisted_pnl=%.0f effective=%.0f",
+                kite_cash, config.total_capital, persisted_pnl, effective,
             )
         except Exception as e:
-            logger.warning("Failed to fetch Kite margins — using config capital as-is: %s", e)
-
-    store = Store(config.db_path)
-    risk = RiskManager()
+            logger.warning("Failed to fetch Kite margins — cumulative P&L not seeded: %s", e)
     orders = OrderManager(kite=kite, store=store, mode=config.env)
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
     bot_state = BotState()
@@ -339,6 +342,8 @@ def main():
             risk.close_position(instrument, fill_price)
             if config.env in ("paper", "live"):
                 store.delete_open_position(instrument)
+            if config.env == "live":
+                store.set_state("cumulative_pnl", risk.cumulative_pnl)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
                                      strategy=strategy, mode=config.env,
