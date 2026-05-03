@@ -189,6 +189,7 @@ with st.sidebar:
         "Instruments",
         options=available,
         default=default_instruments,
+        key="instruments_" + "_".join(sorted(default_instruments)),
     )
 
     with st.expander("Strategy params", expanded=False):

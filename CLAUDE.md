@@ -12,11 +12,10 @@ The system is **long-only, delivery (CNC) only**, targeting multi-day swing trad
 ```bash
 python main.py                        # paper/live trading (uses config/config.yaml)
 python main.py --config <path>        # alternate config
-python scripts/backtest.py --from 2025-01-01
-python scripts/backtest.py --from 2025-01-01 --to 2025-12-31
-python scripts/calibrate.py --from 2025-01-01 [--mode grid|random] [--iterations 50]
-python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31 [--window 6] [--step 3] [--symbols NSE:X]
-python scripts/screen.py --from 2025-01-01 [--min-trades 2] [--output results.csv]
+python scripts/backtest.py --from 2025-01-01 [--to 2025-12-31] [--timeframe 5minute|15minute|...]
+python scripts/calibrate.py --from 2025-01-01 [--mode grid|random] [--iterations 50] [--workers N] [--params profit_pct stop_pct ...]
+python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31 [--window 6] [--step 3] [--symbols NSE:X] [--timeframe ...]
+python scripts/screen.py --from 2025-01-01 [--min-trades 2] [--output results.csv] [--timeframe ...]
 python scripts/kite_auth_server.py    # refresh Kite access token (run on EC2, open URL in any browser)
 ```
 
@@ -51,7 +50,7 @@ trader/
     ├── data/
     │   ├── historical.py          # get_candles(), warm_up() via Kite REST
     │   ├── live.py                # LiveFeed — KiteTicker WebSocket → candle assembly
-    │   └── store.py               # SQLite via Store class (candles, orders, signals tables)
+    │   └── store.py               # SQLite via Store class (candles, orders, signals, state tables)
     ├── notifications/telegram.py  # Telegram bot alerts (order fill, P&L, halt, error, token reminder)
     ├── orders/manager.py          # OrderManager — paper fill simulation + live Kite orders + GTT
     ├── portfolio/tracker.py       # PortfolioTracker — paper position tracking / live Kite fetch
@@ -161,8 +160,11 @@ Key rules:
 - EXIT signals: skips conflict check → returns SELL Order with stored quantity
 - `_open_positions: dict[str, int]` — instrument → quantity
 - `_position_values: dict[str, float]` — instrument → entry_price × qty (for capital tracking)
-- `capital_available` property — `total_capital - capital_deployed`; quantity is capped so portfolio never over-deploys. In live mode `total_capital` is capped at startup by Kite available cash (see Known design decisions)
-- `on_order_filled()` records deployed capital; `close_position()` frees it
+- `_cumulative_pnl: float` — lifetime P&L, never resets; persisted to SQLite `state` table in live mode so it survives restarts
+- `capital_available` property — `total_capital + cumulative_pnl - capital_deployed - pending`; quantity is capped so portfolio never over-deploys. In live mode `total_capital` is capped at startup by Kite available cash (see Known design decisions)
+- `seed_cumulative_pnl(pnl)` — called on startup in live mode to restore cumulative P&L from the `state` table
+- `cumulative_pnl` property — read-only access to `_cumulative_pnl`
+- `on_order_filled()` records deployed capital; `close_position()` frees it and adds to `_cumulative_pnl`
 - `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`); surfaced in UI signals table
 
 ---
@@ -196,8 +198,12 @@ metrics = compute_metrics(trades, capital)
 - `hold_bars` exits fire at candle close (time-based, actual close price used)
 - `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
 
-**`compute_metrics` returns:** `total_trades, wins, losses, win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy`
+**`compute_metrics` returns:** `total_trades, wins, losses, win_rate, money_weighted_win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy, max_drawdown, max_drawdown_pct`
 - `sharpe_proxy = mean(pnl) / std(pnl)` — relative ranking only, labelled "Sharpe*" in output
+- `money_weighted_win_rate = total_win_amt / (total_win_amt + total_loss_amt) * 100` — win rate weighted by P&L amount, not trade count
+- `max_drawdown` — largest peak-to-trough decline on the cumulative P&L equity curve (absolute ₹)
+- `max_drawdown_pct` — max_drawdown as % of capital
+- `kite=None` is supported — workers pass `kite=None` after candles are pre-fetched; engine operates in cache-only mode
 
 **Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
 - `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
@@ -205,8 +211,13 @@ metrics = compute_metrics(trades, capital)
 **Reason values in trade records:** `SL`, `TARGET` (intrabar), `TRAILING` (trailing stop via on_tick), `STRATEGY` (strategy EXIT signal — hold_bars timeout), `OPEN@END`
 
 **UI (scripts/ui.py):**
-- Tab 1 trade table shows `Hold (d)` (calendar days) and `Candles` (held_candles) side by side
+- Tab 1 trade table shows `Hold (d)` (calendar days), `Candles` (held_candles), and `Capital` (effective capital at trade entry) side by side
+- Tab 2 (per-instrument) also has the `Capital` column; both tabs support chart interaction:
+  - **Box-select on equity curve** → filters trade table to the selected date range
+  - **Click on entry/exit marker** → highlights the corresponding trade row in the table
 - Tab 3 hold-duration scatter uses candles on x-axis; hours shown in hover tooltip
+- `lookback_bars` is exposed as a sidebar input (same as `warmup_bars`, `threshold`, etc.)
+- Default instrument selection is `watchlist` only (not `watchlist + interested`) — matches `backtest.py` behaviour
 
 ---
 
@@ -265,7 +276,7 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `warmup_bars` | 200 | Candles before first training |
-| `lookback_bars` | 500 | Rolling training window — deque maxlen; candles older than this are dropped. Must be >= `warmup_bars`. |
+| `lookback_bars` | 600 | Rolling training window — deque maxlen; candles older than this are dropped. Must be >= `warmup_bars`. |
 | `threshold` | 0.70 | Min P(local-min) to trigger BUY (higher = more selective) |
 | `profit_pct` | 3.0 | Minimum profit % floor before trailing activates (not a fixed target) |
 | `trail_pct` | 1.5 | Trailing stop distance % from peak once trailing is active |
@@ -291,13 +302,21 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 
 ### Calibration (`scripts/calibrate.py`)
 
-Grid or random search over warmup/threshold/profit/stop/hold/retrain/extrema params. Pre-fetches candles once; subsequent runs hit SQLite cache. Results ranked by `return_pct`.
+Grid or random search over warmup/lookback/threshold/profit/trail/stop/hold/retrain/extrema params. Pre-fetches candles once; subsequent runs hit SQLite cache. Results ranked by `return_pct`. Runs combinations in parallel via `ProcessPoolExecutor` (uses all CPUs by default).
 
 Use calibration to find the optimal parameter set for a specific stock before adding it to the watchlist.
 
 ```bash
-python scripts/calibrate.py --from 2025-01-01 --symbols NSE:RELIANCE --mode random --iterations 100
+python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100
+python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100 --workers 4
+python scripts/calibrate.py --from 2025-01-01 --params profit_pct stop_pct trail_pct  # vary only specified params
 ```
+
+**CLI flags:**
+- `--workers N` — number of parallel worker processes (default: CPU count)
+- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`
+- `--timeframe` — override candle timeframe for this run
+- Worker processes suppress all logging below `CRITICAL` (spawned processes don't inherit parent logging config)
 
 ### Screening (`scripts/screen.py`)
 
@@ -403,6 +422,8 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Scheduler timezone** — IST (Asia/Kolkata). Pre-market at 09:00, post-market at 15:35.
 - **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
 - **Effective capital in live mode** — on startup, `main.py` fetches `kite.margins(segment="equity")` and applies `effective_capital = min(config.total_capital, kite_available_cash)` via `config.set_effective_capital()`. This ensures the bot never tries to deploy more money than is actually in the account while still respecting the config ceiling. All derived values (`daily_loss_limit`, `max_risk_per_trade`, `max_capital_per_stock`) update automatically since they derive from `config.total_capital`. Paper mode is unaffected — it always uses the config value as-is. If the margins call fails, the system falls back to config capital and logs a warning.
+- **Cumulative P&L persistence** — `RiskManager._cumulative_pnl` is persisted to the SQLite `state` table (key `cumulative_pnl`) in live mode via `store.set_state()` on each close. On startup, `main.py` restores it via `risk.seed_cumulative_pnl(store.get_state("cumulative_pnl"))`. This ensures `capital_available` is correct across restarts (deployed capital freed + lifetime P&L tracked). Paper mode does not persist — resets to 0 on restart.
+- **`state` table in SQLite** — `store.get_state(key, default=0.0)` and `store.set_state(key, value)` provide a simple key/float persistence layer. Currently used only for `cumulative_pnl`.
 
 ---
 
