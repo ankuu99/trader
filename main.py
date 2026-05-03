@@ -136,6 +136,10 @@ def main():
             strat._entry_price = None
             if hasattr(strat, "_held_bars"):
                 strat._held_bars = 0
+            if hasattr(strat, "_peak_close"):
+                strat._peak_close = None
+            if hasattr(strat, "_trailing_active"):
+                strat._trailing_active = False
 
     # Restore paper positions from SQLite so exits fire correctly after restart.
     if config.env == "paper":

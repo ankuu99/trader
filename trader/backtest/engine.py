@@ -252,6 +252,8 @@ def run_backtest(
             logger.debug("Clearing phantom pre-warmup entry state | %s", strategy.instrument)
             strategy._entry_price = None
             strategy._held_bars = 0
+            strategy._peak_close = None
+            strategy._trailing_active = False
 
     prev_date = None
     for candle in merged_candles:
@@ -290,11 +292,18 @@ def run_backtest(
                     # Both levels spanned by this candle — use proximity to open as heuristic
                     sl_dist = abs(candle["open"] - pos["sl"])
                     tgt_dist = abs(candle["open"] - pos["target"])
-                    exit_price, reason = (pos["sl"], "SL") if sl_dist <= tgt_dist else (pos["target"], "TARGET")
+                    reason = "SL" if sl_dist <= tgt_dist else "TARGET"
                 elif sl_hit:
-                    exit_price, reason = pos["sl"], "SL"
+                    reason = "SL"
                 else:
-                    exit_price, reason = pos["target"], "TARGET"
+                    reason = "TARGET"
+                # Gap-adjusted fill: if the candle opened through the SL/target level
+                # (overnight gap), fill at the open price — the SL/target price was never
+                # tradeable. For intraday hits (open is on the safe side), use the exact level.
+                if reason == "SL":
+                    exit_price = min(pos["sl"], candle["open"])
+                else:
+                    exit_price = max(pos["target"], candle["open"])
                 net, cost, product = _net_pnl(
                     pos["entry"], exit_price, pos["qty"],
                     pos["entry_date"], candle["timestamp"]
