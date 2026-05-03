@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 200000
+  total: 10000
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 5
 risk:
@@ -11,7 +11,7 @@ risk:
   max_open_positions: 10
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0
+  max_capital_per_stock_pct: 20.0
 interested:
 - NSE:ATHERENERG
 
@@ -27,8 +27,8 @@ watchlist:
 - NSE:SAIL
 - NSE:TARACHAND
 - NSE:CUPID
-- NSE:IDEA
-- NSE:INDHOTEL
+# - NSE:IDEA
+# - NSE:INDHOTEL
 
 
 strategies:
@@ -37,7 +37,7 @@ strategies:
     warmup_bars: 300
     lookback_bars: 600
     threshold: 0.85
-    profit_pct: 6
+    profit_pct: 10
     trail_pct: 1.5
     stop_pct: 5
     hold_bars: 300

@@ -183,7 +183,7 @@ def run_backtest(
             pre_warmup_from, from_dt - timedelta(minutes=1),
         )
         if pre_df.empty:
-            logger.warning("No pre-warmup candles for %s before %s — model will be cold", symbol, from_dt.date())
+            logger.info("No pre-warmup candles for %s before %s — model will be cold", symbol, from_dt.date())
             continue
         pre_warmup_candles[symbol] = [
             {
@@ -422,7 +422,8 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
     if not trades:
         return {
             "total_trades": 0, "wins": 0, "losses": 0,
-            "win_rate": 0.0, "total_pnl": 0.0, "return_pct": 0.0,
+            "win_rate": 0.0, "money_weighted_win_rate": 0.0,
+            "total_pnl": 0.0, "return_pct": 0.0,
             "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
             "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
         }
@@ -450,11 +451,19 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         if dd > max_dd:
             max_dd = dd
 
+    total_win_amt = sum(wins)
+    total_loss_amt = abs(sum(losses))
+    money_weighted_win_rate = (
+        total_win_amt / (total_win_amt + total_loss_amt) * 100
+        if (total_win_amt + total_loss_amt) > 0 else 0.0
+    )
+
     return {
         "total_trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": len(wins) / len(trades) * 100,
+        "money_weighted_win_rate": money_weighted_win_rate,
         "total_pnl": total_pnl,
         "return_pct": total_pnl / capital * 100 if capital > 0 else 0.0,
         "avg_win": sum(wins) / len(wins) if wins else 0.0,

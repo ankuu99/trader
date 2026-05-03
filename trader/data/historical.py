@@ -67,7 +67,10 @@ def get_candles(
         fetch_from = cached_latest + timedelta(minutes=1)
 
     if fetch_from <= to_dt:
-        _fetch_and_cache(kite, store, instrument_token, instrument, timeframe, fetch_from, to_dt)
+        if kite is None:
+            logger.debug("kite=None — cache-only mode for %s [%s]", instrument, timeframe)
+        else:
+            _fetch_and_cache(kite, store, instrument_token, instrument, timeframe, fetch_from, to_dt)
 
     return store.read_candles(instrument, timeframe, from_dt, to_dt)
 

@@ -60,7 +60,7 @@ def _append_to_csv(path: str, symbol: str, metrics: dict, from_dt: datetime, to_
             "instrument": symbol,
             "trades": metrics["total_trades"],
             "wins": metrics["wins"],
-            "win_rate": f"{metrics['win_rate']:.1f}",
+            "win_rate": f"{metrics['money_weighted_win_rate']:.1f}",
             "total_pnl": f"{metrics['total_pnl']:.2f}",
             "return_pct": f"{metrics['return_pct']:.4f}",
             "sharpe_proxy": f"{metrics['sharpe_proxy']:.4f}",
@@ -82,7 +82,7 @@ def _print_final_table(results: list[dict], min_trades: int):
         print(f"  {'-'*71}")
         for r in filtered:
             print(
-                f"  {r['instrument']:<18}  {r['total_trades']:>6}  {r['win_rate']:>4.0f}%  "
+                f"  {r['instrument']:<18}  {r['total_trades']:>6}  {r['money_weighted_win_rate']:>4.0f}%  "
                 f"₹{r['total_pnl']:>11,.0f}  {r['return_pct']:>7.2f}%  {r['sharpe_proxy']:>8.3f}"
             )
     print(f"{'='*75}\n")
@@ -97,7 +97,12 @@ def main():
                         help="Minimum trades to include in final table (default: 2)")
     parser.add_argument("--output", default="screen_results.csv",
                         help="Output CSV file path (default: screen_results.csv)")
+    parser.add_argument("--timeframe", default=None,
+                        choices=["5minute", "15minute", "30minute", "60minute", "day"],
+                        help="Candle timeframe (default: from config)")
     args = parser.parse_args()
+    if args.timeframe:
+        config._data["candle_timeframe"] = args.timeframe
 
     from_dt = datetime.strptime(args.from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(args.to_date, "%Y-%m-%d").replace(hour=23, minute=59)
@@ -171,7 +176,7 @@ def main():
             print(f"0 trades")
         else:
             print(
-                f"Trades={metrics['total_trades']}  Win={metrics['win_rate']:.0f}%  "
+                f"Trades={metrics['total_trades']}  Wt.Win={metrics['money_weighted_win_rate']:.0f}%  "
                 f"Return={metrics['return_pct']:.2f}%"
             )
 

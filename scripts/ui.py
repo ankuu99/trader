@@ -286,7 +286,7 @@ with tab1:
     # Metric cards
     cols = st.columns(8)
     cols[0].metric("Trades",   metrics["total_trades"])
-    cols[1].metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+    cols[1].metric("Wt. Win%", f"{metrics['money_weighted_win_rate']:.1f}%")
     cols[2].metric("Net P&L",  f"₹{metrics['total_pnl']:,.0f}")
     cols[3].metric("Return",   f"{metrics['return_pct']:.2f}%")
     cols[4].metric("Max DD",   f"₹{metrics['max_drawdown']:,.0f}", delta=f"{metrics['max_drawdown_pct']:.2f}%", delta_color="inverse")
@@ -304,7 +304,16 @@ with tab1:
     xs = df_t["entry_date"].tolist()
     ys = df_t["cum_pnl"].tolist()
 
-    point_colors = ["#2ecc71" if y >= 0 else "#e74c3c" for y in ys]
+    # Identify drops in cumulative P&L (identifying specific loss events)
+    point_colors = []
+    for i in range(len(ys)):
+        if i == 0:
+            # First point is green if it's a win, red if it's a loss
+            color = "#2ecc71" if ys[i] >= 0 else "#e74c3c"
+        else:
+            # Red if cumulative sum reduced compared to previous point
+            color = "#e74c3c" if ys[i] < ys[i-1] else "#2ecc71"
+        point_colors.append(color)
 
     fig_eq = go.Figure()
     fig_eq.add_trace(go.Scatter(
@@ -317,7 +326,7 @@ with tab1:
     ))
     fig_eq.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
     fig_eq.update_layout(
-        title="Equity Curve — Cumulative P&L",
+        title="Equity Curve — Cumulative P&L (Red dots = Drawdown events)",
         xaxis_title="Date",
         yaxis_title="₹",
         height=340,
@@ -389,7 +398,20 @@ with tab2:
         st.info("Run a backtest first to populate the chart.")
         st.stop()
 
-    selected_inst = st.selectbox("Instrument", chart_options, key="chart_inst")
+    # Fixed persistent selection index
+    current_inst_stored = st.session_state.get("selected_inst_chart", chart_options[0])
+    try:
+        default_idx = chart_options.index(current_inst_stored)
+    except ValueError:
+        default_idx = 0
+
+    selected_inst = st.selectbox(
+        "Instrument", 
+        chart_options, 
+        index=default_idx, 
+        key="chart_inst_selector"
+    )
+    st.session_state["selected_inst_chart"] = selected_inst
 
     df_candles = store.read_candles(selected_inst, config.candle_timeframe, from_dt, to_dt)
 
@@ -405,7 +427,7 @@ with tab2:
         im = compute_metrics(inst_trades, config.total_capital)
         mc = st.columns(6)
         mc[0].metric("Trades",   im["total_trades"])
-        mc[1].metric("Win Rate", f"{im['win_rate']:.1f}%")
+        mc[1].metric("Wt. Win%", f"{im['money_weighted_win_rate']:.1f}%")
         mc[2].metric("Net P&L",  f"₹{im['total_pnl']:,.0f}")
         mc[3].metric("Return",   f"{im['return_pct']:.2f}%")
         mc[4].metric("Max DD",   f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
@@ -484,7 +506,16 @@ with tab2:
 
         # Per-stock equity curve
         df_it["cum_pnl"] = df_it["pnl"].cumsum()
-        pt_colors = ["#2ecc71" if v >= 0 else "#e74c3c" for v in df_it["cum_pnl"]]
+        
+        # Fixed: delta-based coloring for stock-specific chart dots
+        inst_pt_colors = []
+        for j in range(len(df_it)):
+            if j == 0:
+                c = "#2ecc71" if df_it["cum_pnl"].iloc[j] >= 0 else "#e74c3c"
+            else:
+                # Red if the cumulative P&L decreased due to the current trade
+                c = "#e74c3c" if df_it["cum_pnl"].iloc[j] < df_it["cum_pnl"].iloc[j-1] else "#2ecc71"
+            inst_pt_colors.append(c)
 
         fig.add_trace(go.Scatter(
             x=df_it["entry_date"],
@@ -492,7 +523,7 @@ with tab2:
             mode="lines+markers",
             name="Stock P&L",
             line=dict(color="#3498db", width=2),
-            marker=dict(size=7, color=pt_colors),
+            marker=dict(size=7, color=inst_pt_colors),
             hovertemplate="%{x|%Y-%m-%d %H:%M}<br>₹%{y:,.0f}<extra></extra>",
         ), row=3, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)",
@@ -534,7 +565,8 @@ with tab2:
                                 line=dict(width=2, color="#e67e22")),
                     customdata=list(zip(df_lv["pnl"], df_lv["qty"])),
                     hovertemplate=(
-                        "<b>LIVE EXIT</b><br>%{x|%Y-%m-%d %H:%M}<br>"
+                        "<b>LIVE EXIT</b><br>"
+                        "%{x|%Y-%m-%d %H:%M}<br>"
                         "₹%{y:.2f}<br>P&L: ₹%{customdata[0]:,.0f}<extra></extra>"
                     ),
                 ), row=1, col=1)
@@ -560,6 +592,42 @@ with tab2:
 
     st.plotly_chart(fig, use_container_width=True)
 
+    # ── Filtered Trade Table for Selected Instrument ──
+    if inst_trades:
+        st.subheader(f"Trades: {selected_inst}")
+        df_inst = pd.DataFrame(inst_trades).sort_values("entry_date", ascending=False)
+        
+        # Formatting helper
+        def _fmt_pnl_pct(row):
+            invested = row["entry"] * row["qty"]
+            return row["pnl"] / invested * 100 if invested else 0.0
+
+        df_inst["P&L%"] = df_inst.apply(_fmt_pnl_pct, axis=1)
+        df_inst["Entry"] = df_inst["entry_date"].astype(str).str[:19]
+        df_inst["Exit"] = df_inst["exit_date"].astype(str).str[:19]
+        
+        df_inst_display = df_inst[[
+            "Entry", "Exit", "entry", "exit", "qty", "pnl", "P&L%", "reason"
+        ]].rename(columns={
+            "entry": "Entry ₹",
+            "exit": "Exit ₹",
+            "qty": "Qty",
+            "pnl": "P&L",
+            "reason": "Reason"
+        })
+
+        st.dataframe(
+            df_inst_display,
+            use_container_width=True,
+            column_config={
+                "Entry ₹": st.column_config.NumberColumn(format="₹%.2f"),
+                "Exit ₹": st.column_config.NumberColumn(format="₹%.2f"),
+                "P&L": st.column_config.NumberColumn(format="₹%.0f"),
+                "P&L%": st.column_config.NumberColumn(format="%.2f%%"),
+            },
+            hide_index=True
+        )
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # Tab 3 — Trade breakdown
@@ -572,7 +640,7 @@ with tab3:
 
     cols = st.columns(8)
     cols[0].metric("Trades",   metrics["total_trades"])
-    cols[1].metric("Win Rate", f"{metrics['win_rate']:.1f}%")
+    cols[1].metric("Wt. Win%", f"{metrics['money_weighted_win_rate']:.1f}%")
     cols[2].metric("Net P&L",  f"₹{metrics['total_pnl']:,.0f}")
     cols[3].metric("Return",   f"{metrics['return_pct']:.2f}%")
     cols[4].metric("Max DD",   f"₹{metrics['max_drawdown']:,.0f}", delta=f"{metrics['max_drawdown_pct']:.2f}%", delta_color="inverse")
@@ -673,11 +741,14 @@ with tab3:
         inst_stats = []
         for inst in df_all["instrument"].unique():
             sub = df_all[df_all["instrument"] == inst]
-            w  = (sub["pnl"] > 0).sum()
             n  = len(sub)
+            win_amt = sub[sub["pnl"] > 0]["pnl"].sum()
+            loss_amt = abs(sub[sub["pnl"] <= 0]["pnl"].sum())
+            denom = win_amt + loss_amt
+            mwwr = win_amt / denom * 100 if denom > 0 else 0.0
             inst_stats.append({
                 "label":    inst.replace("NSE:", ""),
-                "win_rate": w / n * 100,
+                "win_rate": mwwr,
                 "trades":   n,
             })
         df_wr = pd.DataFrame(inst_stats).sort_values("win_rate", ascending=True)
@@ -693,8 +764,8 @@ with tab3:
         ))
         fig_wr.add_vline(x=50, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
         fig_wr.update_layout(
-            title="Win Rate by Instrument",
-            xaxis_title="Win Rate %",
+            title="Money-Weighted Win Rate by Instrument",
+            xaxis_title="Wt. Win Rate %",
             xaxis_range=[0, 115],
             height=320,
             margin=dict(l=10, r=10, t=45, b=10),

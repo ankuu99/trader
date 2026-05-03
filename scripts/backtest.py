@@ -37,7 +37,12 @@ def main():
     parser.add_argument("--from", dest="from_date", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--to", dest="to_date", default=datetime.now().strftime("%Y-%m-%d"),
                         help="End date YYYY-MM-DD (default: today)")
+    parser.add_argument("--timeframe", default=None,
+                        choices=["minute", "5minute", "15minute", "30minute", "60minute", "day"],
+                        help="Candle timeframe (default: from config)")
     args = parser.parse_args()
+    if args.timeframe:
+        config._data["candle_timeframe"] = args.timeframe
 
     from_dt = datetime.strptime(args.from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(args.to_date, "%Y-%m-%d").replace(hour=23, minute=59)
@@ -76,8 +81,9 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     total_pnl = sum(t["pnl"] for t in trades)
     wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] <= 0]
-    win_rate = len(wins) / len(trades) * 100
-
+    win_amt = sum(t["pnl"] for t in wins)
+    loss_amt = abs(sum(t["pnl"] for t in losses))
+    win_rate = win_amt / (win_amt + loss_amt) * 100 if (win_amt + loss_amt) > 0 else 0.0
 
     total_costs = sum(t.get("cost", 0.0) for t in trades)
     print(f"\n  {'Entry Date':<19} {'Exit Date':<19} {'Days':>4} {'Bars':>5} {'Instrument':<15} {'Entry':>8} {'Exit':>8} {'Qty':>5} {'Cost':>8} {'Net P&L':>10} {'P&L%':>7}  Prod  Reason")
@@ -118,7 +124,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     max_dd_pct = max_dd / config.total_capital * 100
 
     print(f"\n  Trades     : {len(trades)}  (W:{len(wins)}  L:{len(losses)})")
-    print(f"  Win rate   : {win_rate:.1f}%")
+    print(f"  Wt. Win%   : {win_rate:.1f}%")
     print(f"  Total cost : ₹{total_costs:,.2f}")
     print(f"  Total P&L  : ₹{total_pnl:,.2f}  (net of costs)")
     print(f"  Return     : {total_pnl / config.total_capital * 100:.2f}%")

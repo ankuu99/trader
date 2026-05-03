@@ -78,7 +78,12 @@ def main():
                         help="Slide step in months (default 3)")
     parser.add_argument("--symbols", nargs="+", default=None,
                         help="Override watchlist e.g. NSE:RELIANCE NSE:TCS")
+    parser.add_argument("--timeframe", default=None,
+                        choices=["5minute", "15minute", "30minute", "60minute", "day"],
+                        help="Candle timeframe (default: from config)")
     args = parser.parse_args()
+    if args.timeframe:
+        config._data["candle_timeframe"] = args.timeframe
 
     from_dt = datetime.strptime(args.from_date, "%Y-%m-%d")
     to_dt   = datetime.strptime(args.to_date,   "%Y-%m-%d").replace(
@@ -129,7 +134,7 @@ def main():
 
         print(
             f"{m['total_trades']:>3} trades | "
-            f"WR {m['win_rate']:>5.1f}% | "
+            f"WR {m['money_weighted_win_rate']:>5.1f}% | "
             f"avg win ₹{m['avg_win']:>7,.0f}  avg loss ₹{m['avg_loss']:>7,.0f} | "
             f"₹{m['total_pnl']:>+9,.0f}  ({m['return_pct']:+.2f}%)"
         )
@@ -160,7 +165,7 @@ def _print_consolidated(results: list[dict], window: int, step: int):
     for r in results:
         sign = "+" if r["total_pnl"] >= 0 else "-"
         print(
-            f"  {r['window']:<25} {r['total_trades']:>6} {r['win_rate']:>5.1f}% "
+            f"  {r['window']:<25} {r['total_trades']:>6} {r['money_weighted_win_rate']:>5.1f}% "
             f"{r['avg_win']:>9,.0f} {r['avg_loss']:>9,.0f} "
             f" {sign}₹{abs(r['total_pnl']):>8,.0f} {r['return_pct']:>8.2f}% "
             f"{r['sharpe_proxy']:>7.2f}"
@@ -169,7 +174,7 @@ def _print_consolidated(results: list[dict], window: int, step: int):
     profitable = [r for r in results if r["total_pnl"] > 0]
     consistency = len(profitable) / len(results) * 100
     avg_return  = sum(r["return_pct"]   for r in results) / len(results)
-    avg_wr      = sum(r["win_rate"]     for r in results) / len(results)
+    avg_wr      = sum(r["money_weighted_win_rate"] for r in results) / len(results)
     total_trades = sum(r["total_trades"] for r in results)
     best  = max(results, key=lambda r: r["return_pct"])
     worst = min(results, key=lambda r: r["return_pct"])
