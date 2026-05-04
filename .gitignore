@@ -26,3 +26,4 @@ venv/
 *.csv
 log*.txt
 
+backtest*.log

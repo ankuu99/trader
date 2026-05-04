@@ -379,6 +379,8 @@ def main():
             candle["open"], candle["high"], candle["low"], candle["close"],
             candle.get("volume", 0), candle.get("timestamp"),
         )
+        if symbol:
+            store.write_candle(symbol, config.candle_timeframe, candle)
 
         for strategy in strategies:
             if strategy.instrument != symbol:

@@ -162,6 +162,23 @@ class Store:
     # Candles                                                              #
     # ------------------------------------------------------------------ #
 
+    def write_candle(self, instrument: str, timeframe: str, candle: dict):
+        """Upsert a single live candle (dict with timestamp, open, high, low, close, volume)."""
+        ts = self._to_naive(candle["timestamp"])
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO candles
+                    (instrument, timeframe, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    instrument, timeframe, ts.isoformat(),
+                    candle["open"], candle["high"], candle["low"], candle["close"],
+                    int(candle["volume"]),
+                ),
+            )
+
     def write_candles(self, instrument: str, timeframe: str, df: pd.DataFrame):
         """
         Upsert candles from a DataFrame with columns:
