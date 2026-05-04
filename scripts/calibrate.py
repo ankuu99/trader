@@ -38,10 +38,10 @@ PARAM_GRID = {
     "lookback_bars": [400, 500, 600, 800],
     "threshold":     [0.75, 0.80, 0.85, 0.90],
     "profit_pct":    [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
-    "trail_pct":     [1.5, 2.0, 2.5, 3.0],
+    "trail_pct":     [0.25, 1, 1.5],
     "stop_pct":      [4.0, 5.0, 6.0],
     "hold_bars":     [200, 250, 300],
-    "retrain_every": [25, 50],
+    "retrain_every": [25],
     "extrema_order": [3, 5, 7],
 }
 

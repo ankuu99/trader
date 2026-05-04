@@ -1513,3 +1513,71 @@ After market close, `kite.positions()["net"]` returns CNC holdings with `quantit
 In LIMIT order mode (`order_type: limit`), strategy EXIT signals produce a SELL LIMIT order at the candle close price. If the stock gaps down the next candle (high < close), the order doesn't fill. At EOD, `clear_pending()` cancels it and dispatches `CANCELLED` — but `on_order_update` only handles `CANCELLED` for ENTRY orders, not EXIT. This leaves the strategy in a zombie state: `is_flat()` = False (position still tracked in base class), `_entry_price = None`. Every subsequent `on_candle` hits `if self._entry_price is None: return None` and bails silently forever. The engine's `candle_count` keeps incrementing until intrabar SL/target fires or `OPEN@END`, producing `held_candles` far exceeding `hold_bars`.
 
 **Fix:** Add `_exit_pending` flag. Don't clear `_entry_price` when emitting EXIT signal — clear it only in `on_order_update(EXIT COMPLETE)`. Handle `CANCELLED EXIT` in `on_order_update` by clearing the flag so the strategy can re-emit exits on subsequent candles.
+
+---
+---
+
+# Round 10 — Backtest Bugs (identified 2026-05-04)
+
+Two compounding bugs confirmed by tracing the COROMANDEL trade with `held_candles=6200` and reason=`STRATEGY`. Both only manifest in **backtest/paper mode with `order_type: limit`**. Live trading is unaffected.
+
+---
+
+## BT-1. LIMIT SELL exit orders cycle indefinitely in backtest — `held_candles` inflates to full backtest duration
+
+**Files:** `trader/orders/manager.py` — `on_candle()`, `trader/strategies/lr_extrema.py` — `on_order_update()`
+
+**What happens:**
+When `hold_bars` fires in `on_candle`, the strategy emits a STRATEGY EXIT signal. `OrderManager` queues a LIMIT SELL paper order at `price_hint = candle close`. The fill check in `on_candle`:
+
+```python
+else:  # SELL
+    if candle["high"] < order.price_hint:
+        continue  # price dropped — order stays pending
+    fill_price = order.price_hint
+```
+
+If price drops after the exit signal fires (stock closed at ₹1700, next session gaps down to ₹1680), the SELL LIMIT never fills. At EOD, `clear_pending()` cancels all pending orders and dispatches `CANCELLED`. `handle_order_update` in the engine calls `strategy.on_order_update(CANCELLED)`. In `LRExtremaStrategy`:
+
+```python
+elif status in ("REJECTED", "CANCELLED"):
+    if signal_type == SignalType.ENTRY:   # ← EXIT cancellations fall through silently
+        ...
+```
+
+Nothing happens. As a result:
+- `open_positions[symbol]` persists in the engine
+- `risk._open_positions` still holds the instrument
+- `strategy.position = Direction.BUY` remains
+- `strategy._held_bars = 0` (was reset when the EXIT signal fired)
+
+The strategy needs another full `hold_bars` candles before it fires again. `candle_count` accumulates all of these. The cycle repeats until price eventually rises above some queued LIMIT SELL price. For COROMANDEL this ran for ~1 year (6200 × 15-minute candles) until the stock reached ₹2185 and a stale LIMIT SELL finally matched.
+
+**Workaround:** Use `order_type: market` — SELL orders always fill at next candle open, so the position closes correctly within one candle.
+
+---
+
+## BT-2. `on_tick` permanently disabled after `hold_bars` fires — trailing/hard-stop dead until SELL fills
+
+**File:** `trader/strategies/lr_extrema.py` — `on_candle()`, `on_tick()`
+
+**What happens:**
+When `hold_bars` fires, `on_candle` clears `_entry_price = None` immediately — before the SELL order fills:
+
+```python
+if self._held_bars >= self._hold_bars:
+    self._entry_price = None   # ← cleared now
+    ...
+    return Signal(direction=Direction.BUY, signal_type=SignalType.EXIT, ...)
+```
+
+`on_tick` guards on this field:
+
+```python
+if self.is_flat() or self._entry_price is None:
+    return None                # ← always returns None after hold_bars fires
+```
+
+From the moment `hold_bars` fires until the SELL fills, **both trailing stop and hard stop from `on_tick` are permanently disabled**, regardless of how far price moves. Combined with BT-1 (SELL LIMIT never filling), this means once the cycle starts in LIMIT mode, no exit mechanism can fire — the position is completely stuck.
+
+**Workaround:** Same as BT-1 — use `order_type: market`.

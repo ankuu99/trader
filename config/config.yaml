@@ -1,34 +1,33 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 10000
+  total: 15000
   max_risk_per_trade_pct: 5.0
-  daily_loss_limit_pct: 5
+  daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
-  order_type: limit          # market | limit  (live mode only; paper always fills at next open)
+  order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 10
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0
+  max_capital_per_stock_pct: 20.0
 interested:
-- NSE:ATHERENERG
+  - NSE:DCXINDIA
+  - NSE:GOKEX
+  - NSE:ABFRL
+  - NSE:COROMANDEL
 
 
 watchlist:
-- NSE:ATHERENERG
-- NSE:SUZLON
-- NSE:ENGINERSIN
-- NSE:GODIGIT
-- NSE:THYROCARE
-- NSE:NATIONALUM
-- NSE:INDIGO
-- NSE:SAIL
-- NSE:TARACHAND
-- NSE:CUPID
-# - NSE:IDEA
-# - NSE:INDHOTEL
+  - NSE:ATHERENERG
+  - NSE:CUPID
+  - NSE:DCXINDIA
+  - NSE:GOKEX
+  - NSE:ABFRL
+  - NSE:COROMANDEL
+  - NSE:GUJALKALI
+
 
 
 strategies:
@@ -38,9 +37,9 @@ strategies:
     lookback_bars: 600
     threshold: 0.85
     profit_pct: 10
-    trail_pct: 2.5
+    trail_pct: 0.25
     stop_pct: 5
-    hold_bars: 200
+    hold_bars: 250
     retrain_every: 25
     extrema_order: 5
     trading_start: "09:30"
