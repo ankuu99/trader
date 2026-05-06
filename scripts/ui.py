@@ -212,6 +212,10 @@ with st.sidebar:
         veto_threshold      = st.slider("veto_threshold",       0.30, 0.90, float(p.get("veto_threshold", 0.50)),      0.01)
         min_hold_before_exit = st.number_input("min_hold_before_exit", value=int(p.get("min_hold_before_exit", 3)), step=1, min_value=1)
         volume_ma_bars      = st.number_input("volume_ma_bars",        value=int(p.get("volume_ma_bars", 20)),       step=5, min_value=5)
+        st.caption("Entry filters")
+        entry_min_volume_ratio   = st.number_input("entry_min_volume_ratio",   value=float(p.get("entry_min_volume_ratio", 0.0)),  step=0.1, min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
+        entry_min_norm_price     = st.number_input("entry_min_norm_price",     value=float(p.get("entry_min_norm_price", 0.0)),    step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
+        entry_require_prior_decline = st.checkbox("entry_require_prior_decline", value=bool(p.get("entry_require_prior_decline", False)), help="Block entry if 20-bar return slope is flat/rising")
 
     _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
@@ -254,6 +258,9 @@ if run_clicked:
         "veto_threshold":      float(veto_threshold),
         "min_hold_before_exit": int(min_hold_before_exit),
         "volume_ma_bars":      int(volume_ma_bars),
+        "entry_min_volume_ratio":      float(entry_min_volume_ratio),
+        "entry_min_norm_price":        float(entry_min_norm_price),
+        "entry_require_prior_decline": bool(entry_require_prior_decline),
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)
