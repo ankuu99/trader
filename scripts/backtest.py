@@ -12,6 +12,7 @@ stop-loss price placed with each order.
 import argparse
 import csv
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,8 @@ def main():
     parser.add_argument("--timeframe", default=None,
                         choices=["minute", "5minute", "15minute", "30minute", "60minute", "day"],
                         help="Candle timeframe (default: from config)")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="Skip Kite authentication and use only locally cached candle data")
     args = parser.parse_args()
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
@@ -47,15 +50,23 @@ def main():
     from_dt = datetime.strptime(args.from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(args.to_date, "%Y-%m-%d").replace(hour=23, minute=59)
 
-    kite = create_kite()
     store = Store(config.db_path)
-    store.clear_backtest_data()
+    if not args.cache_only:
+        store.clear_backtest_data()
 
-    instruments = kite.instruments("NSE")
-    symbol_to_token = {
-        f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
-    }
-    valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
+    if args.cache_only:
+        kite = None
+        valid_watchlist = list(config.watchlist)
+        symbol_to_token = {s: 0 for s in valid_watchlist}
+        logger.info("Cache-only mode — skipping Kite authentication")
+    else:
+        kite = create_kite()
+        instruments = kite.instruments("NSE")
+        symbol_to_token = {
+            f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
+        }
+        valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
+
     if not valid_watchlist:
         print("No valid instruments in watchlist.")
         return
@@ -63,9 +74,13 @@ def main():
     logger.info("Backtest | %s to %s | instruments=%s", args.from_date, args.to_date, valid_watchlist)
 
     params = config.strategy_config("lr_extrema")
+    t0 = time.perf_counter()
     trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt)
+    elapsed = time.perf_counter() - t0
     _print_summary(trades, args.from_date, args.to_date)
     _dump_csv(trades, args.from_date, args.to_date)
+    print(f"  Elapsed    : {elapsed:.2f}s")
+    print(f"  Params     : {', '.join(f'{k}={v}' for k, v in params.items())}")
 
 
 def _print_summary(trades: list[dict], from_date: str, to_date: str):

@@ -206,6 +206,12 @@ with st.sidebar:
         tc1, tc2 = st.columns(2)
         trading_start = tc1.text_input("trading_start", value=p.get("trading_start", "09:15"))
         trading_end   = tc2.text_input("trading_end",   value=p.get("trading_end",   "15:30"))
+        st.caption("Dual-signal params")
+        sell_threshold      = st.slider("sell_threshold",       0.50, 0.99, float(p.get("sell_threshold", 0.65)),      0.01)
+        sell_min_pct        = st.number_input("sell_min_pct",  value=float(p.get("sell_min_pct", 2.0)), step=0.5, min_value=0.5)
+        veto_threshold      = st.slider("veto_threshold",       0.30, 0.90, float(p.get("veto_threshold", 0.50)),      0.01)
+        min_hold_before_exit = st.number_input("min_hold_before_exit", value=int(p.get("min_hold_before_exit", 3)), step=1, min_value=1)
+        volume_ma_bars      = st.number_input("volume_ma_bars",        value=int(p.get("volume_ma_bars", 20)),       step=5, min_value=5)
 
     _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
@@ -239,10 +245,15 @@ if run_clicked:
         "trail_pct":      float(trail_pct),
         "stop_pct":       float(stop_pct),
         "hold_bars":      int(hold_bars),
-        "retrain_every":  int(retrain),
-        "extrema_order":  int(extrema_ord),
-        "trading_start":  trading_start,
-        "trading_end":    trading_end,
+        "retrain_every":       int(retrain),
+        "extrema_order":       int(extrema_ord),
+        "trading_start":       trading_start,
+        "trading_end":         trading_end,
+        "sell_threshold":      float(sell_threshold),
+        "sell_min_pct":        float(sell_min_pct),
+        "veto_threshold":      float(veto_threshold),
+        "min_hold_before_exit": int(min_hold_before_exit),
+        "volume_ma_bars":      int(volume_ma_bars),
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)
@@ -332,6 +343,22 @@ with tab1:
         hovertemplate="%{x|%Y-%m-%d %H:%M}<br><b>₹%{y:,.0f}</b><extra></extra>",
     ))
     fig_eq.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+
+    # Highlight selected trade on equity curve (from table row selection)
+    _hl = st.session_state.get("_hl_trade")
+    if _hl:
+        _hl_rows = df_t[df_t["entry_date"].astype(str).str[:19] == _hl.get("entry", "")]
+        if not _hl_rows.empty:
+            fig_eq.add_trace(go.Scatter(
+                x=[_hl_rows["entry_date"].iloc[0]],
+                y=[_hl_rows["cum_pnl"].iloc[0]],
+                mode="markers",
+                marker=dict(symbol="circle-open", size=20, color="#f1c40f",
+                            line=dict(width=3, color="#f1c40f")),
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+
     fig_eq.update_layout(
         title="Equity Curve — Drag to select range (filters table) · Click dot to highlight row",
         xaxis_title="Date",
@@ -433,8 +460,21 @@ with tab1:
         "P&L%":    st.column_config.NumberColumn(format="%.2f%%"),
         "Capital": st.column_config.NumberColumn(format="₹%.0f"),
     }
-    st.dataframe(df_show, use_container_width=True, height=420,
-                 column_config=_col_cfg, hide_index=True)
+    _t1_event = st.dataframe(df_show, use_container_width=True, height=420,
+                             column_config=_col_cfg, hide_index=True,
+                             on_select="rerun", selection_mode="single-row")
+    _t1_rows = getattr(getattr(_t1_event, "selection", None), "rows", []) or []
+    if _t1_rows:
+        _actual = df_show.data if hasattr(df_show, "data") else df_show
+        _sel = _actual.iloc[_t1_rows[0]]
+        _new_hl = {
+            "entry": str(_sel.get("Entry", ""))[:19],
+            "exit":  str(_sel.get("Exit",  ""))[:19],
+            "inst":  str(_sel.get("Instrument", "")),
+        }
+        if st.session_state.get("_hl_trade") != _new_hl:
+            st.session_state["_hl_trade"] = _new_hl
+            st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -579,6 +619,23 @@ with tab2:
         ), row=3, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)",
                       line_width=1, row=3, col=1)
+
+        # Highlight selected trade entry/exit on chart (from table row selection)
+        _hl = st.session_state.get("_hl_trade")
+        if _hl and _hl.get("inst") == selected_inst:
+            _hl_rows = df_it[df_it["entry_date"].astype(str).str[:19] == _hl.get("entry", "")]
+            if not _hl_rows.empty:
+                _hr = _hl_rows.iloc[0]
+                fig.add_trace(go.Scatter(
+                    x=[_hr["entry_date"], _hr["exit_date"]],
+                    y=[_hr["entry"],      _hr["exit"]],
+                    mode="markers",
+                    marker=dict(symbol="circle-open", size=22, color="#f1c40f",
+                                line=dict(width=3, color="#f1c40f")),
+                    name="Selected",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ), row=1, col=1)
 
     # ── live trades overlay ──
     if st.session_state.get("load_live", False):
@@ -726,8 +783,21 @@ with tab2:
             "P&L%": st.column_config.NumberColumn(format="%.2f%%"),
             "Capital": st.column_config.NumberColumn(format="₹%.0f"),
         }
-        st.dataframe(df_inst_show, use_container_width=True,
-                     column_config=_inst_col_cfg, hide_index=True)
+        _t2_event = st.dataframe(df_inst_show, use_container_width=True,
+                                 column_config=_inst_col_cfg, hide_index=True,
+                                 on_select="rerun", selection_mode="single-row")
+        _t2_rows = getattr(getattr(_t2_event, "selection", None), "rows", []) or []
+        if _t2_rows:
+            _actual = df_inst_show.data if hasattr(df_inst_show, "data") else df_inst_show
+            _sel = _actual.iloc[_t2_rows[0]]
+            _new_hl = {
+                "entry": str(_sel.get("Entry", ""))[:19],
+                "exit":  str(_sel.get("Exit",  ""))[:19],
+                "inst":  selected_inst,
+            }
+            if st.session_state.get("_hl_trade") != _new_hl:
+                st.session_state["_hl_trade"] = _new_hl
+                st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -784,11 +854,12 @@ with tab3:
     with row1_r:
         reason_counts = df_all["reason"].value_counts()
         _reason_colors = {
-            "SL":       "#e74c3c",
-            "TARGET":   "#2ecc71",
-            "TRAILING": "#9b59b6",
-            "STRATEGY": "#3498db",
-            "OPEN@END": "#f39c12",
+            "SL":          "#e74c3c",
+            "TARGET":      "#2ecc71",
+            "TRAILING":    "#9b59b6",
+            "STRATEGY":    "#3498db",
+            "PATTERN_TOP": "#1abc9c",
+            "OPEN@END":    "#f39c12",
         }
         bar_colors = [_reason_colors.get(r, "#95a5a6") for r in reason_counts.index]
         fig_reasons = go.Figure(go.Bar(

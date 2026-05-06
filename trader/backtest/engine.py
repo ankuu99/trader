@@ -76,6 +76,7 @@ def run_backtest(
     open_positions: dict[str, dict] = {}
     trades: list[dict] = []
     current_ts: list = [None]
+    pending_exit_reasons: dict[str, str] = {}  # symbol → exit reason for next strategy EXIT fill
     # Populated after candle fetch; closure captures by reference so handle_order_update
     # sees the final map even though it is defined first.
     strategy_map: dict[str, LRExtremaStrategy] = {}
@@ -113,7 +114,7 @@ def run_backtest(
                 "pnl": net,
                 "cost": cost,
                 "product": product,
-                "reason": "STRATEGY",
+                "reason": pending_exit_reasons.pop(instrument, "STRATEGY"),
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
                 "held_candles": pos.get("candle_count", 0),
@@ -385,6 +386,10 @@ def run_backtest(
         signal = strategy.on_candle(candle)
         if signal is None:
             continue
+        if signal.signal_type == "EXIT":
+            reason = getattr(signal, "exit_reason", None)
+            if reason:
+                pending_exit_reasons[symbol] = reason
         order = risk.validate(signal)
         if order is None:
             continue

@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 15000
+  total: 30000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
@@ -11,7 +11,7 @@ risk:
   max_open_positions: 10
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 20.0
+  max_capital_per_stock_pct: 15.0
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
@@ -30,20 +30,29 @@ watchlist:
 
 
 
+
 strategies:
   lr_extrema:
     enabled: true
     warmup_bars: 300
     lookback_bars: 600
     threshold: 0.85
-    profit_pct: 10
+    profit_pct: 20
     trail_pct: 0.25
-    stop_pct: 5
-    hold_bars: 250
+    sell_min_pct: 7.0
+    sell_threshold: 0.80
+    min_hold_before_exit: 150
+    stop_pct: 20
+    hold_bars: 400
     retrain_every: 25
     extrema_order: 5
     trading_start: "09:30"
     trading_end: "15:30"
+    veto_threshold: 0.4
+    volume_ma_bars: 20
+    entry_min_volume_ratio: 2  # e.g. 1.3 — block if volume < 1.3x average                                                                                 
+    entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range                                                                   
+    entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising     
 
 data:
   db_path: data/market.db

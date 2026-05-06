@@ -34,15 +34,20 @@ setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during cal
 logger = get_logger(__name__)
 
 PARAM_GRID = {
-    "warmup_bars":   [100, 150, 200, 300, 400],
-    "lookback_bars": [400, 500, 600, 800],
-    "threshold":     [0.75, 0.80, 0.85, 0.90],
-    "profit_pct":    [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
-    "trail_pct":     [0.25, 1, 1.5],
-    "stop_pct":      [4.0, 5.0, 6.0],
-    "hold_bars":     [200, 250, 300],
-    "retrain_every": [25],
-    "extrema_order": [3, 5, 7],
+    "warmup_bars":         [100, 150, 200, 300, 400],
+    "lookback_bars":       [400, 500, 600, 800],
+    "threshold":           [0.75, 0.80, 0.85, 0.90],
+    "profit_pct":          [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
+    "trail_pct":           [0.25, 1, 1.5],
+    "stop_pct":            [4.0, 5.0, 6.0],
+    "hold_bars":           [200, 250, 300],
+    "retrain_every":       [25],
+    "extrema_order":       [3, 5, 7],
+    "sell_threshold":      [0.55, 0.60, 0.65, 0.70, 0.75],
+    "sell_min_pct":        [1.0, 2.0, 3.0, 5.0],
+    "veto_threshold":      [0.40, 0.50, 0.60],
+    "min_hold_before_exit": [10, 25, 50],
+    "volume_ma_bars":      [10, 20, 30, 40],
 }
 
 _KEYS = list(PARAM_GRID.keys())
@@ -101,25 +106,28 @@ def _print_results(results: list[dict]):
         print("No results to display.")
         return
 
-    print(f"\n{'='*130}")
+    print(f"\n{'='*172}")
     print(f"  Calibration Results — sorted by Return%")
-    print(f"{'='*130}")
+    print(f"{'='*172}")
     print(
         f"  {'Rank':>4}  {'warmup':>6}  {'lookbk':>6}  {'thresh':>6}  {'profit':>6}  {'trail':>5}  "
         f"{'stop':>5}  {'hold':>5}  {'retrain':>7}  {'extrema':>7}  "
+        f"{'sell_thr':>8}  {'sell_min':>8}  {'veto_thr':>8}  {'min_hold':>8}  "
         f"{'Trades':>6}  {'Win%':>5}  {'P&L':>10}  {'Return%':>8}  {'Sharpe*':>8}"
     )
-    print(f"  {'-'*126}")
+    print(f"  {'-'*168}")
     for i, r in enumerate(results, 1):
         print(
             f"  {i:>4}  {r['warmup_bars']:>6}  {r['lookback_bars']:>6}  {r['threshold']:>6.2f}  "
             f"{r['profit_pct']:>6.1f}  {r['trail_pct']:>5.1f}  "
             f"{r['stop_pct']:>5.1f}  {r['hold_bars']:>5}  {r['retrain_every']:>7}  "
             f"{r['extrema_order']:>7}  "
+            f"{r['sell_threshold']:>8.2f}  {r['sell_min_pct']:>8.1f}  "
+            f"{r['veto_threshold']:>8.2f}  {r['min_hold_before_exit']:>8}  "
             f"{r['total_trades']:>6}  {r['money_weighted_win_rate']:>4.0f}%  "
             f"₹{r['total_pnl']:>9,.0f}  {r['return_pct']:>7.2f}%  {r['sharpe_proxy']:>8.3f}"
         )
-    print(f"{'='*130}\n")
+    print(f"{'='*172}\n")
 
     best = results[0]
     print("Best params to use in config.yaml:")
@@ -204,7 +212,9 @@ def main():
                 f"warmup={params['warmup_bars']} thresh={params['threshold']:.2f} "
                 f"profit={params['profit_pct']} stop={params['stop_pct']} "
                 f"hold={params['hold_bars']} retrain={params['retrain_every']} "
-                f"extrema={params['extrema_order']}"
+                f"extrema={params['extrema_order']} "
+                f"sell={params['sell_threshold']:.2f} sell_min={params['sell_min_pct']:.1f} "
+                f"veto={params['veto_threshold']:.2f} min_hold={params['min_hold_before_exit']}"
             )
             try:
                 result = future.result()

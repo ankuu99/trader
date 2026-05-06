@@ -30,6 +30,7 @@ class Signal:
     atr: float | None = None              # ATR at signal time; used by RiskManager for SL and sizing
     target_price: float | None = None     # ENTRY only: if set, RiskManager uses this as GTT target instead of computing one
     stop_loss_hint: float | None = None   # ENTRY only: if set, RiskManager uses this as GTT SL price instead of computing one
+    exit_reason: str | None = None        # EXIT only: reason code passed to backtest trade record (e.g. "PATTERN_TOP")
 
 
 class Strategy(ABC):
