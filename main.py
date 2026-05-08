@@ -388,7 +388,16 @@ def main():
             signal = strategy.on_candle(candle)
             held = getattr(strategy, "_held_bars", 0)
             if not strategy.is_flat() and strategy.instrument in risk._open_positions:
-                store.update_held_bars(strategy.instrument, held)
+                _entry = getattr(strategy, "_entry_price", None) or 0.0
+                _close = candle["close"]
+                _qty = risk._open_positions[strategy.instrument]
+                _pct = (_close - _entry) / _entry * 100.0 if _entry else 0.0
+                _upnl = (_close - _entry) * _qty if _entry else 0.0
+                _peak = getattr(strategy, "_peak_close", None) or _close
+                _trail = getattr(strategy, "_trailing_active", False)
+                store.update_position_metrics(
+                    strategy.instrument, held, _close, _pct, _upnl, _peak, _trail,
+                )
             filter_block = getattr(strategy, "last_filter_block", None)
             if filter_block:
                 store.log_signal(

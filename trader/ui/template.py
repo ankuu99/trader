@@ -152,7 +152,8 @@ def render_page(bot_state, risk, store, config) -> str:
     # ── open positions from DB ────────────────────────────────────────────────
     positions = _read_db(
         config.db_path,
-        "SELECT instrument, entry_price, quantity, held_bars, entry_time "
+        "SELECT instrument, entry_price, quantity, held_bars, entry_time, "
+        "current_price, pct_change, unrealised_pnl, peak_close, trailing_active "
         "FROM open_positions ORDER BY entry_time ASC",
     )
     # pending orders from risk manager memory
@@ -234,14 +235,26 @@ def render_page(bot_state, risk, store, config) -> str:
             entry_ist = _fmt_ist(
                 datetime.fromisoformat(p["entry_time"]) if p.get("entry_time") else None
             )
+            pct = p.get("pct_change") or 0.0
+            upnl = p.get("unrealised_pnl") or 0.0
+            cur = p.get("current_price") or 0.0
+            peak = p.get("peak_close") or 0.0
+            trailing = bool(p.get("trailing_active", 0))
+            pct_sign = "+" if pct >= 0 else ""
+            pct_class = "green" if pct >= 0 else "red"
+            upnl_sign = "+" if upnl >= 0 else ""
+            trailing_badge = f" {_badge('TRAILING', 'orange')}" if trailing else ""
             rows_html += (
                 f"<tr>"
                 f"<td>{sym}</td>"
                 f"<td>{p['quantity']}</td>"
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
+                f"<td>&#8377; {cur:.2f} <span class='{pct_class}'>({pct_sign}{pct:.2f}%)</span></td>"
+                f"<td class='{pct_class}'>&#8377; {upnl_sign}{upnl:,.2f}</td>"
+                f"<td class='dim'>&#8377; {peak:.2f}</td>"
                 f"<td>{p['held_bars']} bars</td>"
                 f"<td class='dim'>{entry_ist}</td>"
-                f"<td>{_badge('OPEN', 'green')}</td>"
+                f"<td>{_badge('OPEN', 'green')}{trailing_badge}</td>"
                 f"</tr>"
             )
         for inst in pending_orders:
@@ -257,8 +270,9 @@ def render_page(bot_state, risk, store, config) -> str:
             <h2>Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
             <table>
                 <tr>
-                    <th>Symbol</th><th>Qty</th><th>Entry</th>
-                    <th>Held</th><th>Entry time (IST)</th><th>Status</th>
+                    <th>Symbol</th><th>Qty</th><th>Entry price</th>
+                    <th>Current (chg%)</th><th>Unreal. P&amp;L</th>
+                    <th>Peak</th><th>Held</th><th>Entry time</th><th>Status</th>
                 </tr>
                 {rows_html}
             </table>

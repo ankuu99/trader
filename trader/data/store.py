@@ -106,11 +106,16 @@ class Store:
                 );
 
                 CREATE TABLE IF NOT EXISTS open_positions (
-                    instrument  TEXT    PRIMARY KEY,
-                    entry_price REAL    NOT NULL,
-                    quantity    INTEGER NOT NULL,
-                    held_bars   INTEGER NOT NULL DEFAULT 0,
-                    entry_time  TEXT    NOT NULL
+                    instrument      TEXT    PRIMARY KEY,
+                    entry_price     REAL    NOT NULL,
+                    quantity        INTEGER NOT NULL,
+                    held_bars       INTEGER NOT NULL DEFAULT 0,
+                    entry_time      TEXT    NOT NULL,
+                    current_price   REAL    DEFAULT 0,
+                    pct_change      REAL    DEFAULT 0,
+                    unrealised_pnl  REAL    DEFAULT 0,
+                    peak_close      REAL    DEFAULT 0,
+                    trailing_active INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -130,6 +135,18 @@ class Store:
                     value REAL NOT NULL
                 );
             """)
+            # Migration: add new columns to open_positions for existing DBs
+            for col, defn in [
+                ("current_price",   "REAL DEFAULT 0"),
+                ("pct_change",      "REAL DEFAULT 0"),
+                ("unrealised_pnl",  "REAL DEFAULT 0"),
+                ("peak_close",      "REAL DEFAULT 0"),
+                ("trailing_active", "INTEGER DEFAULT 0"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
 
     @staticmethod
     def _to_naive(dt: datetime) -> datetime:
@@ -344,11 +361,18 @@ class Store:
                  self._to_naive(entry_time).isoformat()),
             )
 
-    def update_held_bars(self, instrument: str, held_bars: int):
+    def update_position_metrics(self, instrument: str, held_bars: int,
+                                current_price: float, pct_change: float,
+                                unrealised_pnl: float, peak_close: float,
+                                trailing_active: bool):
         with self._conn() as conn:
             conn.execute(
-                "UPDATE open_positions SET held_bars = ? WHERE instrument = ?",
-                (held_bars, instrument),
+                """UPDATE open_positions
+                   SET held_bars = ?, current_price = ?, pct_change = ?,
+                       unrealised_pnl = ?, peak_close = ?, trailing_active = ?
+                   WHERE instrument = ?""",
+                (held_bars, current_price, pct_change, unrealised_pnl,
+                 peak_close, int(trailing_active), instrument),
             )
 
     def delete_open_position(self, instrument: str):
