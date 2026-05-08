@@ -344,6 +344,13 @@ class Store:
                  self._to_naive(entry_time).isoformat()),
             )
 
+    def update_held_bars(self, instrument: str, held_bars: int):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE open_positions SET held_bars = ? WHERE instrument = ?",
+                (held_bars, instrument),
+            )
+
     def delete_open_position(self, instrument: str):
         with self._conn() as conn:
             conn.execute("DELETE FROM open_positions WHERE instrument = ?", (instrument,))

@@ -386,11 +386,26 @@ def main():
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
+            held = getattr(strategy, "_held_bars", 0)
+            if not strategy.is_flat() and strategy.instrument in risk._open_positions:
+                store.update_held_bars(strategy.instrument, held)
+            filter_block = getattr(strategy, "last_filter_block", None)
+            if filter_block:
+                store.log_signal(
+                    timestamp=candle.get("timestamp") or datetime.now(),
+                    instrument=strategy.instrument,
+                    strategy=strategy.name,
+                    direction="BUY",
+                    signal_type="ENTRY",
+                    price_hint=candle["close"],
+                    accepted=False,
+                    reject_reason=f"FILTER: {filter_block}",
+                )
             if signal is None:
                 logger.debug(
                     "No signal | %s | held_bars=%d entry=%.2f",
                     symbol,
-                    getattr(strategy, "_held_bars", 0),
+                    held,
                     getattr(strategy, "_entry_price", 0) or 0,
                 )
                 continue

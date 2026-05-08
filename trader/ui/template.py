@@ -74,7 +74,7 @@ def _fmt_ist(dt: datetime | None) -> str:
         dt = dt + _NAIVE_TO_IST_DELTA
     else:
         dt = dt.astimezone(_IST)
-    return dt.strftime("%H:%M:%S")
+    return dt.strftime("%d %b %H:%M:%S")
 
 
 def _market_status(now: datetime) -> str:
@@ -167,11 +167,18 @@ def render_page(bot_state, risk, store, config) -> str:
         "ORDER BY placed_at DESC LIMIT 20",
     )
 
-    # ── recent signals ────────────────────────────────────────────────────────
+    # ── recent signals (real) and filtered signals (strategy-blocked) ────────
     signals = _read_db(
         config.db_path,
         "SELECT logged_at, instrument, direction, signal_type, price_hint, accepted, reject_reason "
-        "FROM signals ORDER BY id DESC LIMIT 20",
+        "FROM signals WHERE reject_reason IS NULL OR reject_reason NOT LIKE 'FILTER:%' "
+        "ORDER BY id DESC LIMIT 20",
+    )
+    filtered_signals = _read_db(
+        config.db_path,
+        "SELECT logged_at, instrument, direction, signal_type, price_hint, reject_reason "
+        "FROM signals WHERE reject_reason LIKE 'FILTER:%' "
+        "ORDER BY id DESC LIMIT 30",
     )
 
     # ── strategy config ───────────────────────────────────────────────────────
@@ -337,6 +344,32 @@ def render_page(bot_state, risk, store, config) -> str:
             <span class="dim">No signals logged yet</span>
         </div>"""
 
+    # Filtered signals (strategy-blocked entries)
+    if filtered_signals:
+        rows_html = ""
+        for s in filtered_signals:
+            sym = s["instrument"].split(":")[-1]
+            logged = s.get("logged_at", "")[:16]
+            reason = (s.get("reject_reason") or "").removeprefix("FILTER: ")
+            rows_html += (
+                f"<tr>"
+                f"<td class='dim'>{logged}</td>"
+                f"<td>{sym}</td>"
+                f"<td>&#8377; {s['price_hint']:.2f}</td>"
+                f"<td class='dim'>{reason}</td>"
+                f"</tr>"
+            )
+        filtered_section = f"""
+        <div class="card full">
+            <h2>Filtered Signals — blocked by strategy gates (last 10)</h2>
+            <table>
+                <tr><th>Time</th><th>Symbol</th><th>Price</th><th>Reason</th></tr>
+                {rows_html}
+            </table>
+        </div>"""
+    else:
+        filtered_section = ""
+
     # Strategy config
     if lr:
         params_html = " &nbsp; ".join(
@@ -427,6 +460,7 @@ def render_page(bot_state, risk, store, config) -> str:
     {pos_section}
     {orders_section}
     {signals_section}
+    {filtered_section}
     {strategy_section}
     {watchlist_section}
 </div>

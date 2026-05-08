@@ -91,6 +91,9 @@ class LRExtremaStrategy(Strategy):
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
 
+        # set to the block reason string when an entry is filtered; None otherwise
+        self.last_filter_block: str | None = None
+
     @property
     def name(self) -> str:
         return f"LR-Extrema(w={self._warmup_bars},thr={self._threshold})"
@@ -102,6 +105,7 @@ class LRExtremaStrategy(Strategy):
     def on_candle(self, candle: dict) -> Signal | None:
         self._candles.append(candle)
         close = candle["close"]
+        self.last_filter_block = None  # reset each candle
 
         # --- Pending fill guard (entry order sent, awaiting fill) ---
         if self._entry_price is not None and self.is_flat():
@@ -202,9 +206,10 @@ class LRExtremaStrategy(Strategy):
                     if self._entry_require_prior_decline and x[5] >= 0:
                         blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
                     if blocks:
+                        self.last_filter_block = ", ".join(blocks)
                         logger.debug(
                             "LR-Extrema ENTRY BLOCKED | %s | %s | candle=%s",
-                            self.instrument, ", ".join(blocks), candle.get("timestamp"),
+                            self.instrument, self.last_filter_block, candle.get("timestamp"),
                         )
                         self._candles_since_train += 1
                         return None
