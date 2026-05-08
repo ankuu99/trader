@@ -1,17 +1,17 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 30000
+  total: 30000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 20
+  max_open_positions: 10
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 8.0
+  max_capital_per_stock_pct: 15.0
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
@@ -27,10 +27,6 @@ watchlist:
   - NSE:ABFRL
   - NSE:COROMANDEL
   - NSE:GUJALKALI
-  # - NSE:ASTERDM
-  # - NSE:MEDPLUS
-  # - NSE:PAYTM
-
 
 
 
@@ -62,7 +58,7 @@ data:
   db_path: data/market.db
   historical_cache_days: 50
 logging:
-  level: ERROR
+  level: INFO
   dir: logs/
 ui:
   enabled: true
