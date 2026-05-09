@@ -191,6 +191,43 @@ python scripts/backtest_rolling.py --from 2024-01-01 --window 6 --step 3 --symbo
 | `--symbols` | watchlist | Override instrument list |
 | `--timeframe` | from config | Candle timeframe |
 
+### Walk-forward backtest
+
+True out-of-sample validation. Each fold trains the model on a dedicated training window, then tests on a separate non-overlapping window — the model never sees the test period during training. This is the most reliable measure of live performance.
+
+```bash
+python scripts/walk_forward.py --from 2025-01-01
+python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --train 6 --test 3
+python scripts/walk_forward.py --from 2025-01-01 --cache-only   # if candles already fetched
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Test period start date |
+| `--to` | today | Test period end date |
+| `--train` | 6 | Training window in months (pre-warmup, no trades) |
+| `--test` | 3 | Test window in months; also the slide step |
+| `--symbols` | watchlist | Override instrument list |
+| `--timeframe` | from config | Candle timeframe |
+| `--cache-only` | false | Skip Kite auth, use local SQLite data only |
+
+**Fold structure** (`--train 6 --test 3 --from 2025-01-01`):
+```
+Fold 1: train Jul–Dec 2024  →  test Jan–Mar 2025
+Fold 2: train Oct 2024–Mar 2025  →  test Apr–Jun 2025
+Fold 3: train Jan–Jun 2025  →  test Jul–Sep 2025
+...
+```
+
+**Key metric — Consistency**: percentage of folds that were profitable. Target >60%. A strategy with 80%+ consistency is robust across different market regimes.
+
+**Interpreting the results:**
+- If walk-forward return is significantly below regular backtest → rolling training buffer was seeing test-period data (expected; 10–20% degradation is normal)
+- Stable profit factor >1.2 across all folds → edge is real, not period-specific
+- One or two bad folds in a bear/sideways market → acceptable; check which regime they correspond to
+
 ### Visual UI (local, browser-based)
 
 ```bash
@@ -325,6 +362,7 @@ scripts/
   kite_auth_server.py   — manual OAuth fallback token refresh
   backtest.py           — historical replay (CLI)
   backtest_rolling.py   — sliding-window backtest across date range
+  walk_forward.py       — true out-of-sample walk-forward validation
   calibrate.py          — parameter search (grid / random)
   screen.py             — backtest across all NSE EQ stocks
   ui.py                 — backtest visualisation UI (Streamlit)

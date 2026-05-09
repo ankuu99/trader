@@ -199,12 +199,18 @@ metrics = compute_metrics(trades, capital)
 - `hold_bars` exits fire at candle close (time-based, actual close price used)
 - `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
 
-**`compute_metrics` returns:** `total_trades, wins, losses, win_rate, money_weighted_win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy, max_drawdown, max_drawdown_pct`
+**`compute_metrics` returns:** `total_trades, wins, losses, win_rate, money_weighted_win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy, max_drawdown, max_drawdown_pct, profit_factor, sortino_ratio, calmar_ratio, monthly_returns`
 - `sharpe_proxy = mean(pnl) / std(pnl)` — relative ranking only, labelled "Sharpe*" in output
+- `sortino_ratio = mean(pnl) / downside_std` — penalises losing trades only; more meaningful than Sharpe for asymmetric P&L
+- `calmar_ratio = annualised_return_pct / max_drawdown_pct` — computed from first entry to last exit date
+- `profit_factor = total_wins / |total_losses|` — >1.3 is the minimum acceptable target
 - `money_weighted_win_rate = total_win_amt / (total_win_amt + total_loss_amt) * 100` — win rate weighted by P&L amount, not trade count
 - `max_drawdown` — largest peak-to-trough decline on the cumulative P&L equity curve (absolute ₹)
 - `max_drawdown_pct` — max_drawdown as % of capital
+- `monthly_returns` — dict of `"YYYY-MM": {"pnl", "return_pct", "trades"}` — used for the monthly bar chart in UI and CLI
 - `kite=None` is supported — workers pass `kite=None` after candles are pre-fetched; engine operates in cache-only mode
+
+**Regime candle injection**: `run_backtest()` fetches `NSE:NIFTY 50` and `NSE:INDIA VIX` candles for the full backtest window and injects `_nifty_close` / `_vix_close` into every candle dict (pre-warmup and main). Strategy reads these to compute regime features. Skipped gracefully when tokens unavailable (cache-only mode, tokens not in map).
 
 **Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
 - `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
@@ -233,36 +239,37 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 
 1. **Candle accumulation**: Every candle is appended to an internal buffer. The model does nothing until `warmup_bars` candles have been seen.
 
-2. **Extrema detection (training labels)**:
-   Scans the historical candle buffer for local minima and maxima using a neighbourhood half-window of `extrema_order` bars.
-   - A candle is a **local minimum** (class 0 = buy candidate) if its close is lower than all closes within ±`extrema_order` bars.
-   - A candle is a **local maximum** (class 1 = sell/exit candidate) if its close is higher than all closes within ±`extrema_order` bars.
-   - All other candles are unlabelled and excluded from training.
+2. **Training labels** — controlled by `label_mode`:
+   - **`"extrema"` (default)**: scans the buffer for local minima/maxima using ±`extrema_order` bars. Local minimum = class 0 (buy), local maximum = class 1 (sell). Note: labels use future candles to confirm extrema — a subtle training look-ahead. Classes are naturally ~balanced.
+   - **`"forward_return"`**: labels candle `t` as class 1 (BUY) if `close[t+label_horizon] / close[t] - 1 >= label_buy_threshold`, else class 0. No look-ahead contamination. Classes are heavily imbalanced on short timeframes — requires re-calibrating `threshold`. **Do not enable without re-running calibration.**
 
-3. **Feature engineering (6 features per candle)**:
-   - `volume_ratio` — current candle volume ÷ rolling mean over last `volume_ma_bars` candles. Scale-invariant: a spike reads as e.g. 2.5× regardless of whether the stock's average volume is 50K or 5M.
-   - `norm_price` — `(close - low) / (high - low)` — where within the bar did price close? 0 = at the low (bearish bar), 1 = at the high (bullish bar)
-   - LR slope over last 3 **% returns**
-   - LR slope over last 5 **% returns**
-   - LR slope over last 10 **% returns**
-   - LR slope over last 20 **% returns**
+3. **Feature engineering (11 features per candle)**:
+   - `volume_ratio` — current vol ÷ rolling mean over `volume_ma_bars` candles
+   - `norm_price` — `(close - low) / (high - low)` — close position within bar
+   - LR slope over last 3/5/10/20 **% returns** (stationary, scale-invariant)
+   - `atr_ratio` — ATR-14 / close (normalised volatility)
+   - `rsi14` — RSI-14 (0–100)
+   - `ema20_dist` — `(close - EMA20) / ATR14` (trend position normalised by volatility)
+   - `nifty_slope20` — NIFTY 50 LR slope over last 20 returns (injected by engine; 0.0 if unavailable)
+   - `vix_norm` — India VIX / 30.0, capped at 2.0 (0.5 neutral if unavailable)
 
-   Slopes are computed over first-order % returns (not absolute prices), making them stationary and comparable across price levels and time periods. A local minimum tends to appear at the end of a declining return-slope sequence before a reversal. Requires at least 21 closes (20 returns).
+   Requires at least 21 closes. Regime features (nifty, vix) use values injected into candle dicts by the backtest engine.
 
-4. **Logistic regression classifier**:
-   Trained on the labelled extrema candles. Predicts P(class 0) = probability that the current candle is a local minimum.
+4. **Classifier** — controlled by `model_type`:
+   - **`"lr"` (default)**: LogisticRegression + MinMaxScaler. Fast, interpretable.
+   - **`"xgboost"`**: XGBClassifier, no scaling. Logs top-3 feature importances after each retrain. Requires `xgboost>=1.7,<2.0` (in requirements.txt). On EC2 Ubuntu, `pip install` works directly. On macOS, needs `libomp` via Homebrew.
 
 5. **Entry signal**:
    Two gates must both pass before a BUY is emitted:
    1. `P(local-min) >= threshold` — model thinks current candle is a local minimum
    2. `P(local-max) < veto_threshold` — model does NOT simultaneously think a top is forming
 
-   On entry: `stop_loss_hint = close × (1 - stop_pct/100)`, `target_price = None` — no fixed target; trailing stop and model exit manage the upside.
+   On entry: stop price = `close - atr_stop_mult * ATR14` if `atr_stop_mult > 0`, else `close × (1 - stop_pct/100)`. `atr_stop_mult: 0` (default) preserves original fixed-% behaviour. `target_price = None` — trailing stop and model exit manage the upside.
 
 6. **Exit conditions** — three independent mechanisms across two methods:
 
    **`on_tick` (tick-speed, live ~1 sec / backtest candle-close granularity):**
-   - **Hard stop**: `last_price <= entry_price × (1 - stop_pct/100)` → EXIT immediately (fires regardless of P&L)
+   - **Hard stop**: if `atr_stop_mult > 0`, fires when `last_price <= _entry_stop` (stored ATR price); otherwise `last_price <= entry_price × (1 - stop_pct/100)` → EXIT immediately
    - **Trailing stop activation**: once `last_price >= entry_price × (1 + profit_pct/100)`, trailing activates and `_peak_close` starts tracking the high-water mark
    - **Trailing stop exit**: once trailing is active, fires when `last_price <= _peak_close × (1 - trail_pct/100)`
    - In backtest: engine feeds `candle["high"]` then `candle["close"]` as simulated ticks — high updates `_peak_close`, close checks trail; hard SL still fires intrabar via engine's low-check at exact SL price
@@ -293,6 +300,14 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | `veto_threshold` | 0.50 | Max P(local-max) allowed at entry — blocks entry if model thinks a top is forming simultaneously |
 | `min_hold_before_exit` | 3 | Min held_bars before pattern-top exit can fire — prevents immediate U-turn after entry |
 | `volume_ma_bars` | 20 | Rolling window for volume normalisation (volume_ratio = current / mean). Not sensitive; calibration not needed. |
+| `model_type` | `"lr"` | `"lr"` = LogisticRegression (default, well-calibrated params); `"xgboost"` = XGBClassifier (better for non-linear patterns, same interface) |
+| `n_estimators` | 100 | XGBoost trees — ignored when `model_type: "lr"` |
+| `max_depth` | 3 | XGBoost tree depth — ignored when `model_type: "lr"` |
+| `learning_rate` | 0.1 | XGBoost learning rate — ignored when `model_type: "lr"` |
+| `atr_stop_mult` | 0 | Stop = `entry - mult × ATR14`; `0` disables and falls back to `stop_pct`. Enabling requires re-calibrating all exit params (`profit_pct`, `sell_min_pct`, `trail_pct`) since stop distance changes. |
+| `label_mode` | `"extrema"` | `"extrema"` = local minima/maxima labels (production-ready); `"forward_return"` = future N-bar return labels (no look-ahead, but needs full recalibration before use) |
+| `label_horizon` | 24 | Bars ahead for forward-return label measurement — only used when `label_mode: "forward_return"` |
+| `label_buy_threshold` | 0.04 | Min forward return (+4%) for BUY label — only used when `label_mode: "forward_return"` |
 
 ### What makes this strategy work (and when it fails)
 
@@ -324,7 +339,7 @@ python scripts/calibrate.py --from 2025-01-01 --params sell_threshold veto_thres
 
 **CLI flags:**
 - `--workers N` — number of parallel worker processes (default: CPU count)
-- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`, `sell_threshold`, `veto_threshold`, `min_hold_before_exit`, `volume_ma_bars`
+- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`, `sell_threshold`, `veto_threshold`, `min_hold_before_exit`, `volume_ma_bars`, `atr_stop_mult`, `label_horizon`, `label_buy_threshold`
 - `--timeframe` — override candle timeframe for this run
 - Worker processes suppress all logging below `CRITICAL` (spawned processes don't inherit parent logging config)
 
@@ -436,6 +451,8 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Effective capital in live mode** — on startup, `main.py` fetches `kite.margins(segment="equity")` and applies `effective_capital = min(config.total_capital, kite_available_cash)` via `config.set_effective_capital()`. This ensures the bot never tries to deploy more money than is actually in the account while still respecting the config ceiling. All derived values (`daily_loss_limit`, `max_risk_per_trade`, `max_capital_per_stock`) update automatically since they derive from `config.total_capital`. Paper mode is unaffected — it always uses the config value as-is. If the margins call fails, the system falls back to config capital and logs a warning.
 - **Cumulative P&L persistence** — `RiskManager._cumulative_pnl` is persisted to the SQLite `state` table (key `cumulative_pnl`) in live mode via `store.set_state()` on each close. On startup, `main.py` restores it via `risk.seed_cumulative_pnl(store.get_state("cumulative_pnl"))`. This ensures `capital_available` is correct across restarts (deployed capital freed + lifetime P&L tracked). Paper mode does not persist — resets to 0 on restart.
 - **`state` table in SQLite** — `store.get_state(key, default=0.0)` and `store.set_state(key, value)` provide a simple key/float persistence layer. Currently used only for `cumulative_pnl`.
+- **New strategy params require independent recalibration** — `model_type`, `label_mode`, `atr_stop_mult`, and the new features (ATR/RSI/EMA/regime) were added incrementally. The existing calibrated params (`threshold`, `profit_pct`, `stop_pct`, `sell_min_pct`, etc.) were tuned for LR + extrema labels + fixed stop. Enabling `label_mode: "forward_return"` or `atr_stop_mult > 0` without recalibration will degrade performance — these change the fundamental signal character. Recommended order: (1) enable `model_type: "xgboost"` alone and backtest; (2) separately calibrate `atr_stop_mult`; (3) separately calibrate `label_mode: "forward_return"` with new `threshold` and `label_buy_threshold`.
+- **Regime features in live mode** — `_nifty_close` and `_vix_close` are injected by the backtest engine but not yet by the live `LiveFeed`. In live mode these fields are absent from candles, so features 9 and 10 default to neutral values (0.0 and 0.5). Strategy behaviour is unchanged — it just loses the regime context signal. Wiring live regime data requires subscribing to NIFTY 50 and INDIA VIX tokens in `LiveFeed`.
 
 ---
 

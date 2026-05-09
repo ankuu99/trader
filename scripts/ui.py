@@ -319,6 +319,12 @@ with tab1:
     cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
     cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
 
+    cols2 = st.columns(4)
+    cols2[0].metric("Sortino",        f"{metrics['sortino_ratio']:.2f}")
+    cols2[1].metric("Calmar",         f"{metrics['calmar_ratio']:.2f}")
+    cols2[2].metric("Profit Factor",  f"{metrics['profit_factor']:.2f}")
+    cols2[3].metric("Win Rate",       f"{metrics['win_rate']:.1f}%")
+
     st.divider()
 
     # ── equity curve ──
@@ -402,6 +408,28 @@ with tab1:
             eq_highlight_ts = str(pd.Timestamp(str(_eq_pts[0].get("x", ""))))[:19]
         except Exception:
             pass
+
+    # ── monthly returns chart ──
+    _mr = metrics.get("monthly_returns", {})
+    if _mr:
+        _mr_months = list(_mr.keys())
+        _mr_pnls   = [_mr[m]["pnl"] for m in _mr_months]
+        _mr_colors = ["#2ecc71" if p >= 0 else "#e74c3c" for p in _mr_pnls]
+        fig_monthly = go.Figure(go.Bar(
+            x=_mr_months,
+            y=_mr_pnls,
+            marker_color=_mr_colors,
+            hovertemplate="%{x}<br><b>₹%{y:,.0f}</b><extra></extra>",
+        ))
+        fig_monthly.update_layout(
+            title="Monthly P&L",
+            xaxis_title="Month",
+            yaxis_title="₹",
+            height=220,
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        fig_monthly.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+        st.plotly_chart(fig_monthly, use_container_width=True)
 
     # ── trade table ──
     st.subheader("Trades")
@@ -523,13 +551,15 @@ with tab2:
     # Per-stock summary metrics
     if inst_trades:
         im = compute_metrics(inst_trades, config.total_capital)
-        mc = st.columns(6)
-        mc[0].metric("Trades",   im["total_trades"])
-        mc[1].metric("Wt. Win%", f"{im['money_weighted_win_rate']:.1f}%")
-        mc[2].metric("Net P&L",  f"₹{im['total_pnl']:,.0f}")
-        mc[3].metric("Return",   f"{im['return_pct']:.2f}%")
-        mc[4].metric("Max DD",   f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
-        mc[5].metric("Sharpe*",  f"{im['sharpe_proxy']:.2f}")
+        mc = st.columns(8)
+        mc[0].metric("Trades",        im["total_trades"])
+        mc[1].metric("Wt. Win%",      f"{im['money_weighted_win_rate']:.1f}%")
+        mc[2].metric("Net P&L",       f"₹{im['total_pnl']:,.0f}")
+        mc[3].metric("Return",        f"{im['return_pct']:.2f}%")
+        mc[4].metric("Max DD",        f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
+        mc[5].metric("Sharpe*",       f"{im['sharpe_proxy']:.2f}")
+        mc[6].metric("Sortino",       f"{im['sortino_ratio']:.2f}")
+        mc[7].metric("Profit Factor", f"{im['profit_factor']:.2f}")
         st.divider()
 
     # Build subplots: price | volume | (per-stock equity if trades exist)
@@ -825,6 +855,12 @@ with tab3:
     cols[5].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
     cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
     cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
+
+    cols2 = st.columns(4)
+    cols2[0].metric("Sortino",        f"{metrics['sortino_ratio']:.2f}")
+    cols2[1].metric("Calmar",         f"{metrics['calmar_ratio']:.2f}")
+    cols2[2].metric("Profit Factor",  f"{metrics['profit_factor']:.2f}")
+    cols2[3].metric("Win Rate",       f"{metrics['win_rate']:.1f}%")
 
     st.divider()
 

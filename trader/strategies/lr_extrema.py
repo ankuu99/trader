@@ -27,9 +27,22 @@ Config keys (under strategies.lr_extrema in config.yaml):
                           thinks a top is forming simultaneously           (default 0.50)
     min_hold_before_exit: min held_bars before model-based exit can fire  (default 3)
     volume_ma_bars      : rolling window for volume normalisation          (default 20)
+    label_mode          : "extrema" (default) uses ±order neighbourhood — has look-ahead
+                          in training labels; "forward_return" uses future N-bar return
+                          to label each candle with no look-ahead contamination
+    label_horizon       : bars ahead to measure return for forward_return labels (default 24)
+    label_buy_threshold : minimum return for a BUY label in forward_return mode  (default 0.04)
+    model_type          : "lr" (default LogisticRegression) or "xgboost"
+    n_estimators        : XGBoost trees (default 100, ignored for lr)
+    max_depth           : XGBoost tree depth (default 3)
+    learning_rate       : XGBoost learning rate (default 0.1)
+    atr_stop_mult       : stop = entry - mult * ATR14; 0 (default) uses stop_pct fallback
+    regime_nifty_symbol : injected by backtest engine, no config needed (default "NSE:NIFTY 50")
+    regime_vix_symbol   : injected by backtest engine, no config needed (default "NSE:INDIA VIX")
 
 Based on: github.com/kaneelgit/Trading-strategy-
-Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
+Features (11): volume_ratio, norm_price, slope3/5/10/20, ATR-ratio, RSI14, EMA20-dist,
+               NIFTY-slope20, VIX-norm
 """
 
 from collections import deque
@@ -38,6 +51,12 @@ from datetime import time
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import MinMaxScaler
+
+try:
+    from xgboost import XGBClassifier as _XGBClassifier
+    _XGBOOST_AVAILABLE = True
+except Exception:
+    _XGBOOST_AVAILABLE = False
 
 from trader.core.logger import get_logger
 from trader.strategies.base import Direction, Signal, SignalType, Strategy
@@ -64,6 +83,14 @@ class LRExtremaStrategy(Strategy):
         self._veto_threshold: float = params.get("veto_threshold", 0.50)
         self._min_hold_before_exit: int = params.get("min_hold_before_exit", 3)
         self._volume_ma_bars: int = params.get("volume_ma_bars", 20)
+        self._label_mode: str = params.get("label_mode", "extrema")
+        self._label_horizon: int = params.get("label_horizon", 24)
+        self._label_buy_threshold: float = params.get("label_buy_threshold", 0.04)
+        self._model_type: str = params.get("model_type", "lr")
+        self._xgb_n_estimators: int = params.get("n_estimators", 100)
+        self._xgb_max_depth: int = params.get("max_depth", 3)
+        self._xgb_learning_rate: float = params.get("learning_rate", 0.1)
+        self._atr_stop_mult: float = params.get("atr_stop_mult", 0.0)
 
         # --- Entry filter gates (disabled by default — 0/False means off) ---
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
@@ -87,6 +114,7 @@ class LRExtremaStrategy(Strategy):
 
         # exit tracking
         self._entry_price: float | None = None
+        self._entry_stop: float | None = None   # actual stop price at entry (ATR or pct-based)
         self._held_bars: int = 0
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
@@ -155,9 +183,8 @@ class LRExtremaStrategy(Strategy):
                 and _pct_gain >= self._sell_min_pct):
             x = self._compute_features(self._candles)
             if x is not None:
-                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                proba = self._predict_proba(x)
                 classes = list(self._model.classes_)
-                proba = self._model.predict_proba(x_scaled)[0]
                 if 1 in classes:
                     p_max = proba[classes.index(1)]
                     if p_max >= self._sell_threshold:
@@ -191,9 +218,8 @@ class LRExtremaStrategy(Strategy):
         if self._trained and self.is_flat() and self._entry_price is None:
             x = self._compute_features(self._candles)
             if x is not None:
-                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                proba = self._predict_proba(x)
                 classes = list(self._model.classes_)
-                proba = self._model.predict_proba(x_scaled)[0]
                 p_min = proba[classes.index(0)] if 0 in classes else 0.0
                 p_max = proba[classes.index(1)] if 1 in classes else 1.0
                 if p_min >= self._threshold and p_max >= self._veto_threshold:
@@ -231,13 +257,19 @@ class LRExtremaStrategy(Strategy):
                     self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                     self._held_bars = 0
                     self._candles_since_train += 1
-                    sl_hint = round(close * (1 - self._stop_pct / 100), 2)
+                    atr14 = self._compute_atr(list(self._candles), period=14)
+                    if self._atr_stop_mult > 0 and atr14 > 0:
+                        sl_hint = round(close - self._atr_stop_mult * atr14, 2)
+                    else:
+                        sl_hint = round(close * (1 - self._stop_pct / 100), 2)
+                    self._entry_stop = sl_hint
                     return Signal(
                         instrument=self.instrument,
                         direction=Direction.BUY,
                         signal_type=SignalType.ENTRY,
                         price_hint=close,
                         strategy=self.name,
+                        atr=atr14,
                         stop_loss_hint=sl_hint,
                         target_price=None,  # trailing stop manages upside; no fixed target
                     )
@@ -272,9 +304,12 @@ class LRExtremaStrategy(Strategy):
             )
 
         reason: str | None = None
-        if pct <= -self._stop_pct:
+        if self._entry_stop is not None:
+            if last_price <= self._entry_stop:
+                reason = f"stop-loss @ {self._entry_stop:.2f}"
+        elif pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
-        elif self._trailing_active:
+        if reason is None and self._trailing_active:
             drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
             if drawdown <= -self._trail_pct:
                 reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
@@ -298,6 +333,7 @@ class LRExtremaStrategy(Strategy):
     def _reset_position_state(self) -> None:
         """Clear all position-tracking fields. Called on any exit path."""
         self._entry_price = None
+        self._entry_stop = None
         self._held_bars = 0
         self._peak_close = None
         self._trailing_active = False
@@ -327,19 +363,74 @@ class LRExtremaStrategy(Strategy):
     # ------------------------------------------------------------------
 
     def _train(self) -> None:
-        # Snapshot the deque once — deque does not support slice notation and
-        # a consistent list is needed for indexed access throughout training.
         candles = list(self._candles)
-        closes = [c["close"] for c in candles]
-        minima, maxima = self._find_local_extrema(closes, self._extrema_order)
+        if self._label_mode == "forward_return":
+            rows, labels = self._build_forward_return_labels(candles)
+        else:
+            rows, labels = self._build_extrema_labels(candles)
 
-        if len(minima) < _MIN_SAMPLES_PER_CLASS or len(maxima) < _MIN_SAMPLES_PER_CLASS:
+        if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
+            return
+
+        n_pos = sum(1 for l in labels if l == 1)
+        n_neg = sum(1 for l in labels if l == 0)
+        if n_pos < _MIN_SAMPLES_PER_CLASS or n_neg < _MIN_SAMPLES_PER_CLASS:
             logger.warning(
-                "LR-Extrema | %s | not enough extrema to train (min=%d max=%d)",
-                self.instrument, len(minima), len(maxima),
+                "LR-Extrema | %s | not enough samples per class (buy=%d nobuy=%d)",
+                self.instrument, n_pos, n_neg,
             )
             return
 
+        X = np.array(rows, dtype=float)
+        y = np.array(labels, dtype=int)
+
+        if self._model_type == "xgboost" and _XGBOOST_AVAILABLE:
+            model = _XGBClassifier(
+                n_estimators=self._xgb_n_estimators,
+                max_depth=self._xgb_max_depth,
+                learning_rate=self._xgb_learning_rate,
+                eval_metric="logloss",
+                verbosity=0,
+                random_state=42,
+            )
+            model.fit(X, y)
+            self._scaler = None
+            fi = model.feature_importances_
+            top3 = sorted(enumerate(fi), key=lambda kv: kv[1], reverse=True)[:3]
+            logger.info(
+                "XGB trained | %s | mode=%s samples=%d (buy=%d nobuy=%d) | top features: %s",
+                self.instrument, self._label_mode, len(rows), n_pos, n_neg,
+                [(i, f"{v:.3f}") for i, v in top3],
+            )
+        else:
+            if self._model_type == "xgboost":
+                logger.warning("XGBoost not available — falling back to LogisticRegression")
+            scaler = MinMaxScaler()
+            X_scaled = scaler.fit_transform(X)
+            model = LogisticRegression(max_iter=1000, solver="lbfgs", class_weight="balanced")
+            model.fit(X_scaled, y)
+            self._scaler = scaler
+            logger.info(
+                "LR trained | %s | mode=%s samples=%d (buy=%d nobuy=%d)",
+                self.instrument, self._label_mode, len(rows), n_pos, n_neg,
+            )
+
+        self._model = model
+        self._trained = True
+
+    def _predict_proba(self, x: np.ndarray) -> np.ndarray:
+        """Run inference. Scales for LR; passes raw features for XGBoost."""
+        x_in = self._scaler.transform(x.reshape(1, -1)) if self._scaler is not None else x.reshape(1, -1)
+        return self._model.predict_proba(x_in)[0]
+
+    def _build_extrema_labels(
+        self, candles: list[dict]
+    ) -> tuple[list[np.ndarray], list[int]]:
+        """Original label method — local minima (0) and maxima (1) by neighbourhood window.
+        Has look-ahead contamination in training labels: a candle is confirmed as a minimum
+        only after observing extrema_order future candles."""
+        closes = [c["close"] for c in candles]
+        minima, maxima = self._find_local_extrema(closes, self._extrema_order)
         rows, labels = [], []
         for label, indices in ((0, minima), (1, maxima)):
             for idx in indices:
@@ -347,42 +438,56 @@ class LRExtremaStrategy(Strategy):
                 if feat is not None:
                     rows.append(feat)
                     labels.append(label)
+        return rows, labels
 
-        if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
-            return
-
-        X = np.array(rows, dtype=float)
-        y = np.array(labels, dtype=int)
-
-        scaler = MinMaxScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        model = LogisticRegression(max_iter=1000, solver="lbfgs")
-        model.fit(X_scaled, y)
-
-        self._scaler = scaler
-        self._model = model
-        self._trained = True
-        logger.info(
-            "LR-Extrema trained | %s | samples=%d (min=%d max=%d)",
-            self.instrument, len(rows), labels.count(0), labels.count(1),
-        )
+    def _build_forward_return_labels(
+        self, candles: list[dict]
+    ) -> tuple[list[np.ndarray], list[int]]:
+        """No look-ahead label method.
+        Label = 1 (BUY) if close[t+horizon] / close[t] - 1 >= buy_threshold, else 0.
+        Only candles with at least horizon future candles available are labelled, so
+        the last label_horizon candles are excluded from training."""
+        horizon = self._label_horizon
+        threshold = self._label_buy_threshold
+        rows, labels = [], []
+        # Stop before the last horizon candles — those have no future to measure
+        n = len(candles) - horizon
+        for idx in range(n):
+            feat = self._compute_features(candles[: idx + 1])
+            if feat is None:
+                continue
+            fwd_return = (
+                candles[idx + horizon]["close"] - candles[idx]["close"]
+            ) / candles[idx]["close"]
+            label = 1 if fwd_return >= threshold else 0
+            rows.append(feat)
+            labels.append(label)
+        return rows, labels
 
     # ------------------------------------------------------------------
     # Feature engineering
     # ------------------------------------------------------------------
 
     def _compute_features(self, candles: list[dict]) -> np.ndarray | None:
-        """Return feature vector [volume_ratio, norm_price, slope3, slope5, slope10, slope20]
-        for the last candle in *candles*, or None if not enough history.
+        """Return feature vector for the last candle in *candles*, or None if not enough history.
 
-        Slopes are computed over % returns (first-order differences) rather than
-        absolute prices, making features stationary and scale-invariant across
-        different price levels and time periods.  Volume is normalised as a ratio
-        to the rolling mean over volume_ma_bars candles for the same reason.
+        Features (11 total):
+          0  volume_ratio    — current vol / rolling mean (scale-invariant)
+          1  norm_price      — (close - low) / (high - low) within the bar
+          2  slope3          — LR slope over last 3 % returns
+          3  slope5          — LR slope over last 5 % returns
+          4  slope10         — LR slope over last 10 % returns
+          5  slope20         — LR slope over last 20 % returns
+          6  atr_ratio       — ATR-14 / close (normalised volatility)
+          7  rsi14           — RSI-14 (0-100)
+          8  ema20_dist      — (close - EMA20) / ATR-14 (price position vs trend)
+          9  nifty_slope20   — NIFTY 50 LR slope over last 20 returns (0.0 if unavailable)
+          10 vix_norm        — India VIX / 30.0, capped at 2.0 (0.5 neutral if unavailable)
         """
         if len(candles) < 21:
             return None
+        if not isinstance(candles, list):
+            candles = list(candles)
         last = candles[-1]
         closes = [c["close"] for c in candles]
         high, low, close = last["high"], last["low"], last["close"]
@@ -400,13 +505,41 @@ class LRExtremaStrategy(Strategy):
             (closes[i] - closes[i - 1]) / closes[i - 1]
             for i in range(len(closes) - 20, len(closes))
         ]
-
         slope3  = self._linreg_slope(returns[-3:])
         slope5  = self._linreg_slope(returns[-5:])
         slope10 = self._linreg_slope(returns[-10:])
         slope20 = self._linreg_slope(returns)
 
-        return np.array([volume_ratio, norm_price, slope3, slope5, slope10, slope20], dtype=float)
+        # ATR-14
+        atr14 = self._compute_atr(candles, period=14)
+        atr_ratio = atr14 / close if close > 0 else 0.0
+
+        # RSI-14
+        rsi14 = self._compute_rsi(closes, period=14)
+
+        # EMA-20 distance normalised by ATR
+        ema20 = self._compute_ema(closes, period=20)
+        ema20_dist = (close - ema20) / atr14 if atr14 > 0 else 0.0
+
+        # Feature 9: NIFTY slope-20 — broad market momentum context
+        nifty_vals = [c["_nifty_close"] for c in candles[-21:] if c.get("_nifty_close") is not None]
+        if len(nifty_vals) >= 2:
+            nifty_rets = [(nifty_vals[i] - nifty_vals[i - 1]) / nifty_vals[i - 1]
+                          for i in range(1, len(nifty_vals))]
+            nifty_slope20 = self._linreg_slope(nifty_rets[-20:])
+        else:
+            nifty_slope20 = 0.0  # neutral when regime data not available
+
+        # Feature 10: India VIX normalised — fear/volatility regime
+        # Scan from end to find most recent valid value — avoids full-list scan
+        vix_last = next((c["_vix_close"] for c in reversed(candles) if c.get("_vix_close") is not None), None)
+        vix_norm = min(vix_last / 30.0, 2.0) if vix_last is not None else 0.5
+
+        return np.array(
+            [volume_ratio, norm_price, slope3, slope5, slope10, slope20,
+             atr_ratio, rsi14, ema20_dist, nifty_slope20, vix_norm],
+            dtype=float,
+        )
 
     @staticmethod
     def _linreg_slope(prices: list[float]) -> float:
@@ -419,6 +552,46 @@ class LRExtremaStrategy(Strategy):
         num = sum((i - x_mean) * (prices[i] - y_mean) for i in range(n))
         den = sum((i - x_mean) ** 2 for i in range(n))
         return num / den if den != 0.0 else 0.0
+
+    @staticmethod
+    def _compute_atr(candles: list[dict], period: int = 14) -> float:
+        """Average True Range over the last *period* candles."""
+        if len(candles) < period + 1:
+            # Fall back to a simpler high-low average if not enough history
+            highs = [c["high"] for c in candles[-period:]]
+            lows  = [c["low"]  for c in candles[-period:]]
+            return sum(h - l for h, l in zip(highs, lows)) / len(highs) if highs else 0.0
+        trs = []
+        for i in range(len(candles) - period, len(candles)):
+            h, l, prev_c = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
+            trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+        return sum(trs) / len(trs)
+
+    @staticmethod
+    def _compute_rsi(closes: list[float], period: int = 14) -> float:
+        """RSI using Wilder's smoothed method. Returns value in [0, 100]."""
+        if len(closes) < period + 1:
+            return 50.0  # neutral when insufficient history
+        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+        gains  = [max(d, 0.0) for d in deltas[-(period):]]
+        losses = [abs(min(d, 0.0)) for d in deltas[-(period):]]
+        avg_gain = sum(gains) / period
+        avg_loss = sum(losses) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    @staticmethod
+    def _compute_ema(closes: list[float], period: int = 20) -> float:
+        """Exponential moving average over *closes*, returning the last value."""
+        if len(closes) < period:
+            return closes[-1] if closes else 0.0
+        k = 2.0 / (period + 1)
+        ema = sum(closes[:period]) / period  # seed with SMA
+        for price in closes[period:]:
+            ema = price * k + ema * (1 - k)
+        return ema
 
     @staticmethod
     def _find_local_extrema(
