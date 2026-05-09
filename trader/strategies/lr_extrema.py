@@ -196,7 +196,16 @@ class LRExtremaStrategy(Strategy):
                 proba = self._model.predict_proba(x_scaled)[0]
                 p_min = proba[classes.index(0)] if 0 in classes else 0.0
                 p_max = proba[classes.index(1)] if 1 in classes else 1.0
-                if p_min >= self._threshold and p_max < self._veto_threshold:
+                if p_min >= self._threshold and p_max >= self._veto_threshold:
+                    self.last_filter_block = (
+                        f"veto: P(max)={p_max:.3f}>={self._veto_threshold}"
+                        f" P(min)={p_min:.3f}>={self._threshold}"
+                    )
+                    logger.debug(
+                        "LR-Extrema ENTRY VETOED | %s | %s | candle=%s",
+                        self.instrument, self.last_filter_block, candle.get("timestamp"),
+                    )
+                elif p_min >= self._threshold:
                     # Hard filter gates — collected so all failures are logged together
                     blocks: list[str] = []
                     if self._entry_min_volume_ratio > 0 and x[0] < self._entry_min_volume_ratio:
@@ -332,16 +341,12 @@ class LRExtremaStrategy(Strategy):
             return
 
         rows, labels = [], []
-        for idx in minima:
-            feat = self._compute_features(candles[: idx + 1])
-            if feat is not None:
-                rows.append(feat)
-                labels.append(0)
-        for idx in maxima:
-            feat = self._compute_features(candles[: idx + 1])
-            if feat is not None:
-                rows.append(feat)
-                labels.append(1)
+        for label, indices in ((0, minima), (1, maxima)):
+            for idx in indices:
+                feat = self._compute_features(candles[: idx + 1])
+                if feat is not None:
+                    rows.append(feat)
+                    labels.append(label)
 
         if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
             return
@@ -399,7 +404,7 @@ class LRExtremaStrategy(Strategy):
         slope3  = self._linreg_slope(returns[-3:])
         slope5  = self._linreg_slope(returns[-5:])
         slope10 = self._linreg_slope(returns[-10:])
-        slope20 = self._linreg_slope(returns[-20:])
+        slope20 = self._linreg_slope(returns)
 
         return np.array([volume_ratio, norm_price, slope3, slope5, slope10, slope20], dtype=float)
 

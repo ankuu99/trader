@@ -27,3 +27,4 @@ venv/
 *.txt
 
 backtest*.log
+.coverage
