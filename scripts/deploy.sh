@@ -17,7 +17,7 @@ if [[ -z "$RELEASE_TAG" ]]; then
 fi
 
 echo "=== Deploying $RELEASE_TAG ==="
-ssh "$EC2_HOST" "sudo -u trader git -C /opt/trader fetch --tags && sudo -u trader git -C /opt/trader checkout tags/$RELEASE_TAG"
+ssh "$EC2_HOST" "sudo -u trader git -C /opt/trader fetch --tags --force && sudo -u trader git -C /opt/trader checkout tags/$RELEASE_TAG"
 
 echo "=== Checking for requirements changes ==="
 ssh "$EC2_HOST" "sudo -u trader /opt/trader/.venv/bin/pip install --no-cache-dir -r /opt/trader/requirements.txt 2>&1 | grep -E 'Installing|already satisfied|Successfully' | tail -5"
