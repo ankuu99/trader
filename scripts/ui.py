@@ -216,6 +216,31 @@ with st.sidebar:
         entry_min_volume_ratio   = st.number_input("entry_min_volume_ratio",   value=float(p.get("entry_min_volume_ratio", 0.0)),  step=0.1, min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
         entry_min_norm_price     = st.number_input("entry_min_norm_price",     value=float(p.get("entry_min_norm_price", 0.0)),    step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
         entry_require_prior_decline = st.checkbox("entry_require_prior_decline", value=bool(p.get("entry_require_prior_decline", False)), help="Block entry if 20-bar return slope is flat/rising")
+        st.caption("Model params")
+        _model_opts = ["lr", "xgboost"]
+        model_type    = st.selectbox("model_type", _model_opts,
+                                     index=_model_opts.index(p.get("model_type", "lr")) if p.get("model_type", "lr") in _model_opts else 0)
+        atr_stop_mult = st.number_input("atr_stop_mult", value=float(p.get("atr_stop_mult", 0.0)),
+                                        step=0.1, min_value=0.0,
+                                        help="Stop = entry − mult × ATR14; 0 = disabled (uses stop_pct)")
+        if model_type == "xgboost":
+            n_estimators  = st.number_input("n_estimators",  value=int(p.get("n_estimators", 100)),    step=10, min_value=10)
+            max_depth     = st.number_input("max_depth",     value=int(p.get("max_depth", 3)),          step=1,  min_value=1)
+            learning_rate = st.number_input("learning_rate", value=float(p.get("learning_rate", 0.1)),  step=0.01, min_value=0.001, format="%.3f")
+        else:
+            n_estimators  = int(p.get("n_estimators", 100))
+            max_depth     = int(p.get("max_depth", 3))
+            learning_rate = float(p.get("learning_rate", 0.1))
+        st.caption("Label params")
+        _label_opts = ["extrema", "forward_return"]
+        label_mode = st.selectbox("label_mode", _label_opts,
+                                  index=_label_opts.index(p.get("label_mode", "extrema")) if p.get("label_mode", "extrema") in _label_opts else 0)
+        if label_mode == "forward_return":
+            label_horizon       = st.number_input("label_horizon",       value=int(p.get("label_horizon", 24)),          step=1,    min_value=1)
+            label_buy_threshold = st.number_input("label_buy_threshold", value=float(p.get("label_buy_threshold", 0.04)), step=0.01, min_value=0.0, format="%.3f")
+        else:
+            label_horizon       = int(p.get("label_horizon", 24))
+            label_buy_threshold = float(p.get("label_buy_threshold", 0.04))
 
     _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
@@ -261,6 +286,14 @@ if run_clicked:
         "entry_min_volume_ratio":      float(entry_min_volume_ratio),
         "entry_min_norm_price":        float(entry_min_norm_price),
         "entry_require_prior_decline": bool(entry_require_prior_decline),
+        "atr_stop_mult":               float(atr_stop_mult),
+        "model_type":                  model_type,
+        "n_estimators":                int(n_estimators),
+        "max_depth":                   int(max_depth),
+        "learning_rate":               float(learning_rate),
+        "label_mode":                  label_mode,
+        "label_horizon":               int(label_horizon),
+        "label_buy_threshold":         float(label_buy_threshold),
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)
@@ -272,9 +305,17 @@ if run_clicked:
         s2t = {s: 0 for s in selected_instruments}
 
     st.session_state["_bt_running"] = True
+    _total_days = max((to_dt - from_dt).days, 1)
+    _progress_bar = st.progress(0.0, text="Starting…")
+
+    def _on_progress(current_date, pct):
+        _progress_bar.progress(pct, text=f"Processing {current_date}  ({pct*100:.0f}%)")
+
     with st.spinner("Running backtest…"):
         try:
-            trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt)
+            trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt,
+                                  progress_callback=_on_progress)
+            _progress_bar.progress(1.0, text="Done")
             st.session_state["trades"]      = trades
             st.session_state["from_dt"]     = from_dt
             st.session_state["to_dt"]       = to_dt
@@ -283,6 +324,7 @@ if run_clicked:
             st.error(f"Backtest failed: {exc}")
         finally:
             st.session_state["_bt_running"] = False
+            _progress_bar.empty()
     st.rerun()
 
 # ── pull state ────────────────────────────────────────────────────────────────
@@ -557,9 +599,14 @@ with tab2:
         mc[2].metric("Net P&L",       f"₹{im['total_pnl']:,.0f}")
         mc[3].metric("Return",        f"{im['return_pct']:.2f}%")
         mc[4].metric("Max DD",        f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
-        mc[5].metric("Sharpe*",       f"{im['sharpe_proxy']:.2f}")
-        mc[6].metric("Sortino",       f"{im['sortino_ratio']:.2f}")
-        mc[7].metric("Profit Factor", f"{im['profit_factor']:.2f}")
+        mc[5].metric("Avg Win",       f"₹{im['avg_win']:,.0f}")
+        mc[6].metric("Avg Loss",      f"₹{im['avg_loss']:,.0f}")
+        mc[7].metric("Sharpe*",       f"{im['sharpe_proxy']:.2f}")
+        mc2 = st.columns(4)
+        mc2[0].metric("Sortino",       f"{im['sortino_ratio']:.2f}")
+        mc2[1].metric("Calmar",        f"{im['calmar_ratio']:.2f}")
+        mc2[2].metric("Profit Factor", f"{im['profit_factor']:.2f}")
+        mc2[3].metric("Win Rate",      f"{im['win_rate']:.1f}%")
         st.divider()
 
     # Build subplots: price | volume | (per-stock equity if trades exist)

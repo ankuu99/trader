@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 PARAM_GRID = {
     "warmup_bars":         [100, 150, 200, 300, 400],
     "lookback_bars":       [400, 500, 600, 800],
-    "threshold":           [0.75, 0.80, 0.85, 0.90],
+    "threshold":           [0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
     "profit_pct":          [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
     "trail_pct":           [0.25, 1, 1.5],
     "stop_pct":            [4.0, 5.0, 6.0],
@@ -48,6 +48,16 @@ PARAM_GRID = {
     "veto_threshold":      [0.40, 0.50, 0.60],
     "min_hold_before_exit": [10, 25, 50],
     "volume_ma_bars":      [10, 20, 30, 40],
+    # --- Stop variants ---
+    "atr_stop_mult":       [0, 1.0, 1.5, 2.0],
+    # --- Label mode (forward_return requires separate threshold calibration) ---
+    "label_mode":          ["extrema", "forward_return"],
+    "label_horizon":       [12, 24, 48],
+    "label_buy_threshold": [0.02, 0.03, 0.04, 0.06],
+    # --- Entry filter gates (0 / False = disabled) ---
+    "entry_min_volume_ratio":      [0.0, 0.5, 1.0],
+    "entry_min_norm_price":        [0.0, 0.2, 0.3],
+    "entry_require_prior_decline": [False, True],
 }
 
 _KEYS = list(PARAM_GRID.keys())
@@ -135,6 +145,7 @@ def _print_results(results: list[dict]):
     for k in _KEYS:
         print(f"    {k}: {best[k]}")
     print()
+
 
 
 def main():

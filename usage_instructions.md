@@ -385,12 +385,29 @@ logs/                   — rotating log files (auto-created)
 
 ### Deploying Code Changes
 
-```bash
-# Pull and restart
-ssh trader "cd /opt/trader && sudo -u trader git pull && sudo systemctl restart trader"
+Deployments are tag-based — only explicitly tagged commits are deployed. This prevents unintended code from reaching the server.
 
-# If requirements.txt changed
-ssh trader "cd /opt/trader && sudo -u trader git pull && sudo -u trader .venv/bin/pip install -r requirements.txt && sudo systemctl restart trader"
+**Step 1 — Cut a release tag (on your local machine):**
+```bash
+git tag release-YYYY-MM-DD <commit-sha>
+git push origin release-YYYY-MM-DD
+```
+
+**Step 2 — Deploy the tag:**
+```bash
+./scripts/deploy.sh release-YYYY-MM-DD
+```
+
+The script will fail loudly if no tag is provided.
+
+**Rolling back** to a previous release is just:
+```bash
+./scripts/deploy.sh release-YYYY-MM-DD   # an earlier date
+```
+
+**Check what's running on EC2:**
+```bash
+ssh trader "git -C /opt/trader describe --tags"
 ```
 
 ### Monitoring

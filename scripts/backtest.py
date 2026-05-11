@@ -74,8 +74,14 @@ def main():
     logger.info("Backtest | %s to %s | instruments=%s", args.from_date, args.to_date, valid_watchlist)
 
     params = config.strategy_config("lr_extrema")
+
+    def _progress(date, pct):
+        print(f"\r  Progress: {date}  [{pct*100:5.1f}%]", end="", flush=True)
+
     t0 = time.perf_counter()
-    trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt)
+    trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt,
+                          progress_callback=_progress)
+    print()  # newline after progress line
     elapsed = time.perf_counter() - t0
     _print_summary(trades, args.from_date, args.to_date)
     _dump_csv(trades, args.from_date, args.to_date)

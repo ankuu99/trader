@@ -28,3 +28,4 @@ venv/
 
 backtest*.log
 .coverage
+scripts/migrate_to_new_laptop.sh

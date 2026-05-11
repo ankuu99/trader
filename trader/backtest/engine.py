@@ -52,6 +52,7 @@ def run_backtest(
     from_dt: datetime,
     to_dt: datetime,
     pre_warmup_days: int | None = None,
+    progress_callback=None,
 ) -> list[dict]:
     """
     Replay historical candles through LRExtremaStrategy and return the trades list.
@@ -298,11 +299,18 @@ def run_backtest(
             strategy._peak_close = None
             strategy._trailing_active = False
 
+    _total_days = max((to_dt - from_dt).days, 1)
+    _last_notified_date = None
     prev_date = None
     for candle in merged_candles:
         symbol = candle["_symbol"]
         current_ts[0] = candle["timestamp"]
         candle_date = candle["timestamp"].date()
+
+        if progress_callback is not None and candle_date != _last_notified_date:
+            _last_notified_date = candle_date
+            _elapsed = max((candle_date - from_dt.date()).days, 0)
+            progress_callback(candle_date, min(_elapsed / _total_days, 1.0))
 
         # Simulate Zerodha's EOD LIMIT order cancellation: unfilled LIMIT orders
         # are cancelled at day boundary, not carried forward to the next session.
