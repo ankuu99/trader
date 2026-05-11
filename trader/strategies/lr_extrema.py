@@ -25,7 +25,6 @@ Config keys (under strategies.lr_extrema in config.yaml):
     sell_threshold      : min P(local-max) to trigger pattern-top EXIT   (default 0.65)
     veto_threshold      : max P(local-max) allowed at entry — blocks entry if model
                           thinks a top is forming simultaneously           (default 0.50)
-    min_hold_before_exit: min held_bars before model-based exit can fire  (default 3)
     volume_ma_bars      : rolling window for volume normalisation          (default 20)
     label_mode          : "extrema" (default) uses ±order neighbourhood — has look-ahead
                           in training labels; "forward_return" uses future N-bar return
@@ -81,7 +80,6 @@ class LRExtremaStrategy(Strategy):
         self._sell_threshold: float = params.get("sell_threshold", 0.65)
         self._sell_min_pct: float = params.get("sell_min_pct", 2.0)
         self._veto_threshold: float = params.get("veto_threshold", 0.50)
-        self._min_hold_before_exit: int = params.get("min_hold_before_exit", 3)
         self._volume_ma_bars: int = params.get("volume_ma_bars", 20)
         self._label_mode: str = params.get("label_mode", "extrema")
         self._label_horizon: int = params.get("label_horizon", 24)
@@ -179,7 +177,6 @@ class LRExtremaStrategy(Strategy):
             if self._entry_price else 0.0
         )
         if (not self.is_flat() and self._trained
-                and self._held_bars >= self._min_hold_before_exit
                 and _pct_gain >= self._sell_min_pct):
             x = self._compute_features(self._candles)
             if x is not None:

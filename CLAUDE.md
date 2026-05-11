@@ -298,7 +298,6 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | `sell_threshold` | 0.65 | Min P(local-max) to trigger pattern-top EXIT |
 | `sell_min_pct` | 2.0 | Min profit % required before pattern-top EXIT can fire — prevents exiting on trivial gains; stop_pct handles anything below this |
 | `veto_threshold` | 0.50 | Max P(local-max) allowed at entry — blocks entry if model thinks a top is forming simultaneously |
-| `min_hold_before_exit` | 3 | Min held_bars before pattern-top exit can fire — prevents immediate U-turn after entry |
 | `volume_ma_bars` | 20 | Rolling window for volume normalisation (volume_ratio = current / mean). Not sensitive; calibration not needed. |
 | `model_type` | `"lr"` | `"lr"` = LogisticRegression (default, well-calibrated params); `"xgboost"` = XGBClassifier (better for non-linear patterns, same interface) |
 | `n_estimators` | 100 | XGBoost trees — ignored when `model_type: "lr"` |
