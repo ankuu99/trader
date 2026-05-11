@@ -260,9 +260,8 @@ The model retrains itself every `retrain_every` candles using the most recent hi
    - **`"xgboost"`**: XGBClassifier, no scaling. Logs top-3 feature importances after each retrain. Requires `xgboost>=1.7,<2.0` (in requirements.txt). On EC2 Ubuntu, `pip install` works directly. On macOS, needs `libomp` via Homebrew.
 
 5. **Entry signal**:
-   Two gates must both pass before a BUY is emitted:
+   One gate must pass before a BUY is emitted:
    1. `P(local-min) >= threshold` — model thinks current candle is a local minimum
-   2. `P(local-max) < veto_threshold` — model does NOT simultaneously think a top is forming
 
    On entry: stop price = `close - atr_stop_mult * ATR14` if `atr_stop_mult > 0`, else `close × (1 - stop_pct/100)`. `atr_stop_mult: 0` (default) preserves original fixed-% behaviour. `target_price = None` — trailing stop and model exit manage the upside.
 
@@ -297,7 +296,6 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | `extrema_order` | 5 | Neighbourhood half-window for extrema detection |
 | `sell_threshold` | 0.65 | Min P(local-max) to trigger pattern-top EXIT |
 | `sell_min_pct` | 2.0 | Min profit % required before pattern-top EXIT can fire — prevents exiting on trivial gains; stop_pct handles anything below this |
-| `veto_threshold` | 0.50 | Max P(local-max) allowed at entry — blocks entry if model thinks a top is forming simultaneously |
 | `volume_ma_bars` | 20 | Rolling window for volume normalisation (volume_ratio = current / mean). Not sensitive; calibration not needed. |
 | `model_type` | `"lr"` | `"lr"` = LogisticRegression (default, well-calibrated params); `"xgboost"` = XGBClassifier (better for non-linear patterns, same interface) |
 | `n_estimators` | 100 | XGBoost trees — ignored when `model_type: "lr"` |
@@ -333,12 +331,12 @@ Use calibration to find the optimal parameter set for a specific stock before ad
 python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100
 python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100 --workers 4
 python scripts/calibrate.py --from 2025-01-01 --params profit_pct stop_pct trail_pct  # vary only specified params
-python scripts/calibrate.py --from 2025-01-01 --params sell_threshold veto_threshold min_hold_before_exit
+python scripts/calibrate.py --from 2025-01-01 --params sell_threshold sell_min_pct extrema_order
 ```
 
 **CLI flags:**
 - `--workers N` — number of parallel worker processes (default: CPU count)
-- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`, `sell_threshold`, `veto_threshold`, `min_hold_before_exit`, `volume_ma_bars`, `atr_stop_mult`, `label_horizon`, `label_buy_threshold`
+- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`, `sell_threshold`, `sell_min_pct`, `volume_ma_bars`, `atr_stop_mult`, `n_estimators`, `max_depth`, `learning_rate`
 - `--timeframe` — override candle timeframe for this run
 - Worker processes suppress all logging below `CRITICAL` (spawned processes don't inherit parent logging config)
 

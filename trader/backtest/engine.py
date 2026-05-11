@@ -382,6 +382,7 @@ def run_backtest(
                         "instrument": symbol,
                         "direction": "SELL",
                         "signal_type": "EXIT",
+                        "exit_reason": reason,  # "SL" or "TARGET" — used by strategy for cooldown
                         "quantity": pos["qty"],
                         "price": exit_price,
                         "fill_price": exit_price,

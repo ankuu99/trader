@@ -36,32 +36,29 @@ strategies:
     enabled: true
     warmup_bars: 300
     lookback_bars: 1200
-    # threshold: 0.85
+    threshold: 0.85
+    sell_threshold: 0.65
+    extrema_order: 5
     profit_pct: 15
     trail_pct: 1.5
     sell_min_pct: 7.0
-    # sell_threshold: 0.80
-    # stop_pct: 20
-    atr_stop_mult:  3       # 0 = disabled, falls back to stop_pct above
+    hold_bars: 250           # max candles before time-based exit (extrema mode only)
+    sl_cooldown_bars: 96     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
+    stop_pct: 10             # fallback if atr_stop_mult = 0
+    atr_stop_mult: 0
     retrain_every: 25
-    # extrema_order: 5
     trading_start: "09:30"
     trading_end: "15:30"
-    # veto_threshold: 0.4
     volume_ma_bars: 20
-    # entry_min_volume_ratio: 2
-    # entry_min_norm_price: 0.0
-    # entry_require_prior_decline: false
-    # --- new params from refactor ---
-    # Step 1 (active): swap LR → XGBoost, same labels/features/stops as before
-    # model_type: "xgboost"
+    model_type: "xgboost"
     n_estimators: 100
     max_depth: 3
     learning_rate: 0.1
-    label_mode: "forward_return"
-    label_horizon: 96
-    min_entry_return: 0.10   # enter when expected forward return >= this (regression mode)
-    exit_return_floor: 0.0   # pattern-top exit when expected return drops below this
+    label_mode: "extrema"
+    # regression-mode params (inactive — uncomment when switching to forward_return)
+    # label_horizon: 96
+    # min_entry_return: 0.05
+    # exit_return_floor: 0.0
 
 data:
   db_path: data/market.db

@@ -25,14 +25,6 @@ class _AlwaysMinModel:
         return np.array([[0.99, 0.01]])
 
 
-class _VetoModel:
-    """Predicts p_min >= threshold AND p_max >= veto_threshold simultaneously."""
-    classes_ = [0, 1]
-
-    def predict_proba(self, X):
-        return np.array([[0.80, 0.60]])  # p_min=0.80 >= threshold=0.70, p_max=0.60 >= veto=0.50
-
-
 class _AlwaysMaxModel:
     """Always predicts class 1 (local maximum) with high confidence."""
     classes_ = [0, 1]
@@ -281,27 +273,6 @@ def test_volume_gate_blocks_entry_and_sets_filter_block():
     assert "vol_ratio" in strat.last_filter_block
 
 
-def test_veto_threshold_blocks_entry_no_signal():
-    """When p_max >= veto_threshold the entry must NOT fire even if p_min >= threshold."""
-    strat = _ready_strategy()
-    strat._model = _VetoModel()  # p_min=0.80, p_max=0.60 — both above their thresholds
-
-    signal = strat.on_candle(_candle(100.0))
-
-    assert signal is None
-
-
-def test_veto_threshold_sets_filter_block():
-    """Veto must populate last_filter_block so main.py can log it to the DB."""
-    strat = _ready_strategy()
-    strat._model = _VetoModel()
-
-    strat.on_candle(_candle(100.0))
-
-    assert strat.last_filter_block is not None
-    assert "veto" in strat.last_filter_block
-
-
 def test_below_threshold_no_signal_no_filter_block():
     """When p_min < threshold the model simply isn't confident — no signal and no
     filter_block (a filter_block implies the model WOULD have entered but was gated)."""
@@ -378,17 +349,16 @@ def test_features_insufficient_candles_no_signal():
     assert strat.last_filter_block is None
 
 
-def test_single_class_min_only_model_triggers_veto():
+def test_single_class_min_only_model_generates_entry():
     """A model trained on only local minima (classes_=[0]) has no class 1.
-    The code defaults p_max to 1.0, which exceeds veto_threshold — entry is vetoed."""
+    p_min defaults to proba[0]=1.0 >= threshold — BUY signal fires."""
     strat = _ready_strategy()
-    strat._model = _OnlyMinClassModel()  # classes_=[0], p_max defaults to 1.0
+    strat._model = _OnlyMinClassModel()  # classes_=[0], p_min=1.0
 
     signal = strat.on_candle(_candle(100.0))
 
-    assert signal is None
-    assert strat.last_filter_block is not None
-    assert "veto" in strat.last_filter_block
+    assert signal is not None
+    assert signal.direction.name == "BUY"
 
 
 def test_single_class_max_only_model_no_entry():

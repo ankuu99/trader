@@ -34,30 +34,28 @@ setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during cal
 logger = get_logger(__name__)
 
 PARAM_GRID = {
-    "warmup_bars":         [100, 150, 200, 300, 400],
-    "lookback_bars":       [400, 500, 600, 800],
-    "threshold":           [0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
-    "profit_pct":          [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
-    "trail_pct":           [0.25, 1, 1.5],
-    "stop_pct":            [4.0, 5.0, 6.0],
-    "hold_bars":           [200, 250, 300],
-    "retrain_every":       [25],
-    "extrema_order":       [3, 5, 7],
-    "sell_threshold":      [0.55, 0.60, 0.65, 0.70, 0.75],
-    "sell_min_pct":        [1.0, 2.0, 3.0, 5.0],
-    "veto_threshold":      [0.40, 0.50, 0.60],
-    "min_hold_before_exit": [10, 25, 50],
-    "volume_ma_bars":      [10, 20, 30, 40],
-    # --- Stop variants ---
-    "atr_stop_mult":       [0, 1.0, 1.5, 2.0],
-    # --- Label mode (forward_return requires separate threshold calibration) ---
-    "label_mode":          ["extrema", "forward_return"],
-    "label_horizon":       [12, 24, 48],
-    "label_buy_threshold": [0.02, 0.03, 0.04, 0.06],
-    # --- Entry filter gates (0 / False = disabled) ---
-    "entry_min_volume_ratio":      [0.0, 0.5, 1.0],
-    "entry_min_norm_price":        [0.0, 0.2, 0.3],
-    "entry_require_prior_decline": [False, True],
+    # --- Warmup / training window ---
+    "warmup_bars":      [200, 300, 400],
+    "lookback_bars":    [800, 1000, 1200],
+    "retrain_every":    [25, 50],
+    # --- Entry: classification threshold ---
+    "threshold":        [0.60, 0.65, 0.70, 0.75, 0.80],
+    "extrema_order":    [3, 5, 7],
+    # --- Exit: pattern-top ---
+    "sell_threshold":   [0.55, 0.60, 0.65, 0.70],
+    "sell_min_pct":     [3.0, 5.0, 7.0, 10.0],
+    # --- Exit: trailing stop ---
+    "profit_pct":       [8.0, 12.0, 15.0, 20.0],
+    "trail_pct":        [1.0, 1.5, 2.0],
+    # --- Stop loss ---
+    "atr_stop_mult":    [1.5, 2.0, 2.5, 3.0],
+    # --- Volume normalisation (low sensitivity) ---
+    "volume_ma_bars":   [20],
+    # --- XGBoost classifier ---
+    "label_mode":       ["extrema"],
+    "n_estimators":     [100, 150, 200],
+    "max_depth":        [3, 4, 5],
+    "learning_rate":    [0.05, 0.1, 0.15],
 }
 
 _KEYS = list(PARAM_GRID.keys())
@@ -116,28 +114,29 @@ def _print_results(results: list[dict]):
         print("No results to display.")
         return
 
-    print(f"\n{'='*172}")
+    W = 178
+    print(f"\n{'='*W}")
     print(f"  Calibration Results — sorted by Return%")
-    print(f"{'='*172}")
+    print(f"{'='*W}")
     print(
-        f"  {'Rank':>4}  {'warmup':>6}  {'lookbk':>6}  {'thresh':>6}  {'profit':>6}  {'trail':>5}  "
-        f"{'stop':>5}  {'hold':>5}  {'retrain':>7}  {'extrema':>7}  "
-        f"{'sell_thr':>8}  {'sell_min':>8}  {'veto_thr':>8}  {'min_hold':>8}  "
+        f"  {'Rank':>4}  {'warmup':>6}  {'lookbk':>6}  {'retrain':>7}  "
+        f"{'thresh':>6}  {'extord':>6}  {'sell_thr':>8}  {'sell_min':>8}  "
+        f"{'profit':>6}  {'trail':>5}  {'atr_mult':>8}  "
+        f"{'n_est':>5}  {'depth':>5}  {'lr':>5}  "
         f"{'Trades':>6}  {'Win%':>5}  {'P&L':>10}  {'Return%':>8}  {'Sharpe*':>8}"
     )
-    print(f"  {'-'*168}")
+    print(f"  {'-'*W}")
     for i, r in enumerate(results, 1):
         print(
-            f"  {i:>4}  {r['warmup_bars']:>6}  {r['lookback_bars']:>6}  {r['threshold']:>6.2f}  "
-            f"{r['profit_pct']:>6.1f}  {r['trail_pct']:>5.1f}  "
-            f"{r['stop_pct']:>5.1f}  {r['hold_bars']:>5}  {r['retrain_every']:>7}  "
-            f"{r['extrema_order']:>7}  "
+            f"  {i:>4}  {r['warmup_bars']:>6}  {r['lookback_bars']:>6}  {r['retrain_every']:>7}  "
+            f"{r['threshold']:>6.2f}  {r['extrema_order']:>6}  "
             f"{r['sell_threshold']:>8.2f}  {r['sell_min_pct']:>8.1f}  "
-            f"{r['veto_threshold']:>8.2f}  {r['min_hold_before_exit']:>8}  "
+            f"{r['profit_pct']:>6.1f}  {r['trail_pct']:>5.1f}  {r['atr_stop_mult']:>8.1f}  "
+            f"{r['n_estimators']:>5}  {r['max_depth']:>5}  {r['learning_rate']:>5.2f}  "
             f"{r['total_trades']:>6}  {r['money_weighted_win_rate']:>4.0f}%  "
             f"₹{r['total_pnl']:>9,.0f}  {r['return_pct']:>7.2f}%  {r['sharpe_proxy']:>8.3f}"
         )
-    print(f"{'='*172}\n")
+    print(f"{'='*W}\n")
 
     best = results[0]
     print("Best params to use in config.yaml:")
@@ -221,11 +220,9 @@ def main():
             params = future_to_params[future]
             param_str = (
                 f"warmup={params['warmup_bars']} thresh={params['threshold']:.2f} "
-                f"profit={params['profit_pct']} stop={params['stop_pct']} "
-                f"hold={params['hold_bars']} retrain={params['retrain_every']} "
-                f"extrema={params['extrema_order']} "
-                f"sell={params['sell_threshold']:.2f} sell_min={params['sell_min_pct']:.1f} "
-                f"veto={params['veto_threshold']:.2f} min_hold={params['min_hold_before_exit']}"
+                f"extord={params['extrema_order']} sell_thr={params['sell_threshold']:.2f} "
+                f"sell_min={params['sell_min_pct']:.1f} profit={params['profit_pct']} "
+                f"trail={params['trail_pct']} atr={params['atr_stop_mult']}"
             )
             try:
                 result = future.result()

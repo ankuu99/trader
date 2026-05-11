@@ -208,8 +208,9 @@ with st.sidebar:
         st.caption("Dual-signal params")
         sell_threshold      = st.slider("sell_threshold",       0.50, 0.99, float(p.get("sell_threshold", 0.65)),      0.01)
         sell_min_pct        = st.number_input("sell_min_pct",  value=float(p.get("sell_min_pct", 2.0)), step=0.5, min_value=0.5)
-        veto_threshold      = st.slider("veto_threshold",       0.30, 0.90, float(p.get("veto_threshold", 0.50)),      0.01)
         volume_ma_bars      = st.number_input("volume_ma_bars",        value=int(p.get("volume_ma_bars", 20)),       step=5, min_value=5)
+        sl_cooldown_bars = st.number_input("sl_cooldown_bars", value=int(p.get("sl_cooldown_bars", 0)), step=8, min_value=0,
+                                           help="Bars to block re-entry after SL hit (0 = disabled; 96 ≈ 5 calendar days on 15min)")
         st.caption("Entry filters")
         entry_min_volume_ratio   = st.number_input("entry_min_volume_ratio",   value=float(p.get("entry_min_volume_ratio", 0.0)),  step=0.1, min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
         entry_min_norm_price     = st.number_input("entry_min_norm_price",     value=float(p.get("entry_min_norm_price", 0.0)),    step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
@@ -237,17 +238,18 @@ with st.sidebar:
             label_horizon       = st.number_input("label_horizon",      value=int(p.get("label_horizon", 24)),           step=1,    min_value=1)
             min_entry_return    = st.number_input("min_entry_return",   value=float(p.get("min_entry_return", 0.03)),    step=0.005, min_value=0.0, format="%.3f", help="Enter when expected return >= this")
             exit_return_floor   = st.number_input("exit_return_floor",  value=float(p.get("exit_return_floor", 0.0)),   step=0.005, format="%.3f", help="Pattern-top exit when expected return drops below this")
+            hold_bars           = int(p.get("hold_bars", 150))  # derived from label_horizon in strategy; config value used here
         else:
+            hold_bars           = st.number_input("hold_bars", value=int(p.get("hold_bars", 150)), step=10, min_value=1,
+                                                  help="Max candles to hold before time-based exit (extrema mode)")
             label_horizon       = int(p.get("label_horizon", 24))
             min_entry_return    = float(p.get("min_entry_return", 0.03))
             exit_return_floor   = float(p.get("exit_return_floor", 0.0))
 
-    _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
-        "Running…" if _is_running else "Run Backtest",
+        "Run Backtest",
         type="primary",
         use_container_width=True,
-        disabled=_is_running,
     )
 
     st.divider()
@@ -279,8 +281,8 @@ if run_clicked:
         "trading_end":         trading_end,
         "sell_threshold":      float(sell_threshold),
         "sell_min_pct":        float(sell_min_pct),
-        "veto_threshold":      float(veto_threshold),
         "volume_ma_bars":      int(volume_ma_bars),
+        "sl_cooldown_bars":            int(sl_cooldown_bars),
         "entry_min_volume_ratio":      float(entry_min_volume_ratio),
         "entry_min_norm_price":        float(entry_min_norm_price),
         "entry_require_prior_decline": bool(entry_require_prior_decline),
@@ -289,6 +291,7 @@ if run_clicked:
         "n_estimators":                int(n_estimators),
         "max_depth":                   int(max_depth),
         "learning_rate":               float(learning_rate),
+        "hold_bars":                   int(hold_bars),
         "label_mode":                  label_mode,
         "label_horizon":               int(label_horizon),
         "min_entry_return":            float(min_entry_return),
@@ -303,8 +306,6 @@ if run_clicked:
         # Dummy tokens — get_candles will serve from cache if candles exist
         s2t = {s: 0 for s in selected_instruments}
 
-    st.session_state["_bt_running"] = True
-    _total_days = max((to_dt - from_dt).days, 1)
     _progress_bar = st.progress(0.0, text="Starting…")
 
     def _on_progress(current_date, pct):
@@ -322,7 +323,6 @@ if run_clicked:
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
         finally:
-            st.session_state["_bt_running"] = False
             _progress_bar.empty()
     st.rerun()
 

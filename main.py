@@ -141,6 +141,13 @@ def main():
             if hasattr(strat, "_trailing_active"):
                 strat._trailing_active = False
 
+    # Restore SL cooldowns from SQLite — must be seeded AFTER warm-up so warm-up
+    # candles don't decrement and exhaust the cooldown before trading begins.
+    for strat in strategies:
+        if hasattr(strat, "seed_sl_cooldown"):
+            stored_ts = store.get_state(f"sl_cooldown_{strat.instrument}", 0.0)
+            strat.seed_sl_cooldown(stored_ts)
+
     # Restore paper positions from SQLite so exits fire correctly after restart.
     if config.env == "paper":
         open_paper = store.read_open_positions()
@@ -356,6 +363,11 @@ def main():
         for strat in strategies:
             if strat.instrument == instrument:
                 strat.on_order_update(update)
+                # Persist SL cooldown as Unix timestamp so it survives restarts
+                # and remains valid regardless of candle timeframe changes
+                if direction != "BUY" and hasattr(strat, "sl_cooldown_until"):
+                    until = strat.sl_cooldown_until
+                    store.set_state(f"sl_cooldown_{instrument}", until.timestamp() if until else 0.0)
 
     orders.register_update_callback(handle_order_update)
 

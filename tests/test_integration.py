@@ -44,8 +44,6 @@ _STRATEGY_PARAMS = {
     "extrema_order":        2,
     "sell_threshold":       0.60,
     "sell_min_pct":         1.0,
-    "veto_threshold":       0.50,
-    "min_hold_before_exit": 2,
     "volume_ma_bars":       5,
     "trading_start":        "09:00",
     "trading_end":          "15:30",

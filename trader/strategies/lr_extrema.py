@@ -23,8 +23,6 @@ Config keys (under strategies.lr_extrema in config.yaml):
     trading_start : earliest candle time for ENTRY signals  (default "09:45")
     trading_end   : latest candle time for ENTRY signals    (default "15:15")
     sell_threshold      : min P(local-max) to trigger pattern-top EXIT   (default 0.65)
-    veto_threshold      : max P(local-max) allowed at entry — blocks entry if model
-                          thinks a top is forming simultaneously           (default 0.50)
     volume_ma_bars      : rolling window for volume normalisation          (default 20)
     label_mode          : "extrema" (default) uses ±order neighbourhood — has look-ahead
                           in training labels; "forward_return" uses future N-bar return
@@ -44,7 +42,7 @@ Features (11): volume_ratio, norm_price, slope3/5/10/20, ATR-ratio, RSI14, EMA20
 """
 
 from collections import deque
-from datetime import time
+from datetime import datetime, time, timedelta
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -78,7 +76,6 @@ class LRExtremaStrategy(Strategy):
         self._extrema_order: int = params.get("extrema_order", 5)
         self._sell_threshold: float = params.get("sell_threshold", 0.65)
         self._sell_min_pct: float = params.get("sell_min_pct", 2.0)
-        self._veto_threshold: float = params.get("veto_threshold", 0.50)
         self._volume_ma_bars: int = params.get("volume_ma_bars", 20)
         self._label_mode: str = params.get("label_mode", "extrema")
         self._label_horizon: int = params.get("label_horizon", 24)
@@ -87,9 +84,14 @@ class LRExtremaStrategy(Strategy):
         self._is_regression: bool = (self._label_mode == "forward_return")
         self._min_entry_return: float = params.get("min_entry_return", 0.03)
         self._exit_return_floor: float = params.get("exit_return_floor", 0.0)
-        # ATR period and hold backstop both derived from label_horizon — single source of truth
-        self._atr_period: int = self._label_horizon
-        self._hold_bars: int = int(self._label_horizon * 1.5)
+        if self._is_regression:
+            # Regression: ATR window and hold backstop both derived from label_horizon
+            self._atr_period: int = self._label_horizon
+            self._hold_bars: int = int(self._label_horizon * 1.5)
+        else:
+            # Extrema/classification: independent params — label_horizon is irrelevant
+            self._atr_period = params.get("atr_period", 14)
+            self._hold_bars  = params.get("hold_bars", 150)
         self._xgb_n_estimators: int = params.get("n_estimators", 100)
         self._xgb_max_depth: int = params.get("max_depth", 3)
         self._xgb_learning_rate: float = params.get("learning_rate", 0.1)
@@ -122,6 +124,15 @@ class LRExtremaStrategy(Strategy):
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
 
+        # SL cooldown — block re-entry for sl_cooldown_bars × candle_minutes after a hard SL hit
+        # Default 0 = disabled; set explicitly in config to activate (e.g. sl_cooldown_bars: 96)
+        # In regression mode defaults to label_horizon (the natural prediction window)
+        _default_cooldown = self._label_horizon if self._is_regression else 0
+        self._sl_cooldown_bars: int = params.get("sl_cooldown_bars", _default_cooldown)
+        self._sl_cooldown_until: datetime | None = None
+        self._last_candle_ts: datetime | None = None  # tracks last seen candle timestamp
+        self._candle_minutes: int = 0                  # auto-detected from first candle pair
+
         # set to the block reason string when an entry is filtered; None otherwise
         self.last_filter_block: str | None = None
 
@@ -139,6 +150,15 @@ class LRExtremaStrategy(Strategy):
         self._candles.append(candle)
         close = candle["close"]
         self.last_filter_block = None  # reset each candle
+
+        # Auto-detect candle duration from the first consecutive candle pair seen
+        candle_ts = candle.get("timestamp")
+        if candle_ts is not None:
+            if self._candle_minutes == 0 and self._last_candle_ts is not None:
+                delta_min = (candle_ts - self._last_candle_ts).total_seconds() / 60
+                if 1 <= delta_min <= 1500:
+                    self._candle_minutes = int(round(delta_min))
+            self._last_candle_ts = candle_ts
 
         # --- Pending fill guard (entry order sent, awaiting fill) ---
         if self._entry_price is not None and self.is_flat():
@@ -230,6 +250,14 @@ class LRExtremaStrategy(Strategy):
                 return None
 
         # --- Entry prediction ---
+        if self._sl_cooldown_until is not None and candle_ts is not None:
+            if candle_ts < self._sl_cooldown_until:
+                self.last_filter_block = f"sl_cooldown_until={self._sl_cooldown_until.strftime('%Y-%m-%d %H:%M')}"
+                self._candles_since_train += 1
+                return None
+            else:
+                self._sl_cooldown_until = None  # expired — clear it
+
         if self._trained and self.is_flat() and self._entry_price is None:
             x = self._compute_features(self._candles)
             if x is not None:
@@ -238,22 +266,12 @@ class LRExtremaStrategy(Strategy):
                     expected_return = self._predict_return(x)
                     signal_entry = expected_return >= self._min_entry_return
                 else:
-                    # Classification path (extrema mode): both gates must pass
+                    # Classification path (extrema mode)
                     proba = self._predict_proba(x)
                     classes = list(self._model.classes_)
                     p_min = proba[classes.index(0)] if 0 in classes else 0.0
                     p_max = proba[classes.index(1)] if 1 in classes else 1.0
-                    if p_min >= self._threshold and p_max >= self._veto_threshold:
-                        self.last_filter_block = (
-                            f"veto: P(max)={p_max:.3f}>={self._veto_threshold}"
-                            f" P(min)={p_min:.3f}>={self._threshold}"
-                        )
-                        logger.debug(
-                            "LR-Extrema ENTRY VETOED | %s | %s | candle=%s",
-                            self.instrument, self.last_filter_block, candle.get("timestamp"),
-                        )
-                    else:
-                        signal_entry = p_min >= self._threshold
+                    signal_entry = p_min >= self._threshold
 
                 if signal_entry:
                     # Hard filter gates — shared across both paths
@@ -281,8 +299,8 @@ class LRExtremaStrategy(Strategy):
                         )
                     else:
                         logger.info(
-                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",
-                            self.instrument, p_min, self._threshold, p_max, self._veto_threshold, close,
+                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f | candle=%s",
+                            self.instrument, p_min, self._threshold, close,
                             candle.get("timestamp"),
                         )
                     self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
@@ -350,6 +368,14 @@ class LRExtremaStrategy(Strategy):
                 "LR-Extrema EXIT (tick) | %s | %s | entry=%.2f price=%.2f",
                 self.instrument, reason, self._entry_price, last_price,
             )
+            if "stop-loss" in reason:
+                until = self._compute_sl_cooldown_until()
+                if until is not None:
+                    self._sl_cooldown_until = until
+                    logger.info(
+                        "LR-Extrema SL COOLDOWN | %s | blocking re-entry until %s",
+                        self.instrument, self._sl_cooldown_until,
+                    )
             self._reset_position_state()
             return Signal(
                 instrument=self.instrument,
@@ -360,6 +386,42 @@ class LRExtremaStrategy(Strategy):
             )
 
         return None
+
+    @property
+    def sl_cooldown_until(self) -> datetime | None:
+        return self._sl_cooldown_until
+
+    def seed_sl_cooldown(self, expiry_ts: float) -> None:
+        """Restore SL cooldown from SQLite on restart. expiry_ts is a Unix timestamp; 0.0 means none.
+        Honors current config: if sl_cooldown_bars=0 (disabled), stored value is ignored.
+        If the stored expiry has already passed, it is silently discarded."""
+        if self._sl_cooldown_bars == 0 or expiry_ts <= 0:
+            return
+        until = datetime.fromtimestamp(expiry_ts)
+        if until > datetime.now():
+            self._sl_cooldown_until = until
+            logger.info(
+                "LR-Extrema SL cooldown restored | %s | until=%s",
+                self.instrument, until,
+            )
+
+    def _compute_sl_cooldown_until(self) -> datetime | None:
+        """Return the datetime until which re-entry should be blocked after an SL hit.
+
+        Converts sl_cooldown_bars (market bars) to calendar time so the cooldown
+        remains correct across overnight gaps and weekends.
+
+        Formula: calendar_days = (bars / bars_per_trading_day) × (7/5)
+        The 7/5 factor converts trading days to calendar days (5 trading days per week).
+        For 96 bars on 15min: (96/25) × 1.4 = 5.38 calendar days.
+        """
+        if self._sl_cooldown_bars <= 0 or self._last_candle_ts is None or self._candle_minutes <= 0:
+            return None
+        _MARKET_MINUTES_PER_DAY = 375  # 9:15–15:30
+        bars_per_day = _MARKET_MINUTES_PER_DAY / self._candle_minutes
+        trading_days = self._sl_cooldown_bars / bars_per_day
+        calendar_days = trading_days * 7 / 5
+        return self._last_candle_ts + timedelta(days=calendar_days)
 
     def _reset_position_state(self) -> None:
         """Clear all position-tracking fields. Called on any exit path."""
@@ -382,6 +444,16 @@ class LRExtremaStrategy(Strategy):
                 held_bars = order.get("_held_bars")   
                 self._held_bars = int(held_bars) if held_bars is not None else 0 
             elif signal_type == SignalType.EXIT:
+                # Set SL cooldown if not already set by on_tick (covers backtest intrabar path)
+                exit_reason = order.get("exit_reason", "")
+                if exit_reason == "SL" and self._sl_cooldown_until is None:
+                    until = self._compute_sl_cooldown_until()
+                    if until is not None:
+                        self._sl_cooldown_until = until
+                        logger.info(
+                            "LR-Extrema SL COOLDOWN | %s | blocking re-entry until %s",
+                            self.instrument, self._sl_cooldown_until,
+                        )
                 self._reset_position_state()
         elif status in ("REJECTED", "CANCELLED"):
             if signal_type == SignalType.ENTRY:
