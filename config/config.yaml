@@ -43,7 +43,7 @@ strategies:
     trail_pct: 1.5
     sell_min_pct: 7.0
     hold_bars: 250           # max candles before time-based exit (extrema mode only)
-    sl_cooldown_bars: 96     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
+    sl_cooldown_bars: 48     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
     stop_pct: 10             # fallback if atr_stop_mult = 0
     atr_stop_mult: 0
     retrain_every: 25
