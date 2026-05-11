@@ -30,7 +30,6 @@ Config keys (under strategies.lr_extrema in config.yaml):
                           in training labels; "forward_return" uses future N-bar return
                           to label each candle with no look-ahead contamination
     label_horizon       : bars ahead to measure return for forward_return labels (default 24)
-    label_buy_threshold : minimum return for a BUY label in forward_return mode  (default 0.04)
     model_type          : "lr" (default LogisticRegression) or "xgboost"
     n_estimators        : XGBoost trees (default 100, ignored for lr)
     max_depth           : XGBoost tree depth (default 3)
@@ -52,7 +51,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import MinMaxScaler
 
 try:
-    from xgboost import XGBClassifier as _XGBClassifier
+    from xgboost import XGBClassifier as _XGBClassifier, XGBRegressor as _XGBRegressor
     _XGBOOST_AVAILABLE = True
 except Exception:
     _XGBOOST_AVAILABLE = False
@@ -63,6 +62,7 @@ from trader.strategies.base import Direction, Signal, SignalType, Strategy
 logger = get_logger(__name__)
 
 _MIN_SAMPLES_PER_CLASS = 2   # need at least this many of each class to train
+_MIN_REGRESSION_SAMPLES = 50  # minimum samples for regression training (tail quantiles need more data)
 
 
 class LRExtremaStrategy(Strategy):
@@ -74,7 +74,6 @@ class LRExtremaStrategy(Strategy):
         self._profit_pct: float = params.get("profit_pct", 3.0)
         self._trail_pct: float = params.get("trail_pct", 1.5)
         self._stop_pct: float = params.get("stop_pct", 3.0)
-        self._hold_bars: int = params.get("hold_bars", 150)
         self._retrain_every: int = params.get("retrain_every", 50)
         self._extrema_order: int = params.get("extrema_order", 5)
         self._sell_threshold: float = params.get("sell_threshold", 0.65)
@@ -83,8 +82,14 @@ class LRExtremaStrategy(Strategy):
         self._volume_ma_bars: int = params.get("volume_ma_bars", 20)
         self._label_mode: str = params.get("label_mode", "extrema")
         self._label_horizon: int = params.get("label_horizon", 24)
-        self._label_buy_threshold: float = params.get("label_buy_threshold", 0.04)
         self._model_type: str = params.get("model_type", "lr")
+        # Regression mode: forward_return labels are continuous, model is XGBRegressor
+        self._is_regression: bool = (self._label_mode == "forward_return")
+        self._min_entry_return: float = params.get("min_entry_return", 0.03)
+        self._exit_return_floor: float = params.get("exit_return_floor", 0.0)
+        # ATR period and hold backstop both derived from label_horizon — single source of truth
+        self._atr_period: int = self._label_horizon
+        self._hold_bars: int = int(self._label_horizon * 1.5)
         self._xgb_n_estimators: int = params.get("n_estimators", 100)
         self._xgb_max_depth: int = params.get("max_depth", 3)
         self._xgb_learning_rate: float = params.get("learning_rate", 0.1)
@@ -122,6 +127,8 @@ class LRExtremaStrategy(Strategy):
 
     @property
     def name(self) -> str:
+        if self._is_regression:
+            return f"LR-Extrema(w={self._warmup_bars},ret>={self._min_entry_return:.2f})"
         return f"LR-Extrema(w={self._warmup_bars},thr={self._threshold})"
 
     # ------------------------------------------------------------------
@@ -180,26 +187,39 @@ class LRExtremaStrategy(Strategy):
                 and _pct_gain >= self._sell_min_pct):
             x = self._compute_features(self._candles)
             if x is not None:
-                proba = self._predict_proba(x)
-                classes = list(self._model.classes_)
-                if 1 in classes:
-                    p_max = proba[classes.index(1)]
-                    if p_max >= self._sell_threshold:
+                should_exit = False
+                if self._is_regression:
+                    expected_return = self._predict_return(x)
+                    should_exit = expected_return < self._exit_return_floor
+                    if should_exit:
                         logger.info(
-                            "LR-Extrema PATTERN-TOP EXIT | %s | P(max)=%.3f >= %.3f | price=%.2f | candle=%s",
-                            self.instrument, p_max, self._sell_threshold, close,
+                            "LR-Extrema PATTERN-TOP EXIT | %s | expected_return=%.4f < floor=%.4f | price=%.2f | candle=%s",
+                            self.instrument, expected_return, self._exit_return_floor, close,
                             candle.get("timestamp"),
                         )
-                        self._reset_position_state()
-                        self._candles_since_train += 1
-                        return Signal(
-                            instrument=self.instrument,
-                            direction=Direction.BUY,
-                            signal_type=SignalType.EXIT,
-                            price_hint=close,
-                            strategy=self.name,
-                            exit_reason="PATTERN_TOP",
-                        )
+                else:
+                    proba = self._predict_proba(x)
+                    classes = list(self._model.classes_)
+                    if 1 in classes:
+                        p_max = proba[classes.index(1)]
+                        should_exit = p_max >= self._sell_threshold
+                        if should_exit:
+                            logger.info(
+                                "LR-Extrema PATTERN-TOP EXIT | %s | P(max)=%.3f >= %.3f | price=%.2f | candle=%s",
+                                self.instrument, p_max, self._sell_threshold, close,
+                                candle.get("timestamp"),
+                            )
+                if should_exit:
+                    self._reset_position_state()
+                    self._candles_since_train += 1
+                    return Signal(
+                        instrument=self.instrument,
+                        direction=Direction.BUY,
+                        signal_type=SignalType.EXIT,
+                        price_hint=close,
+                        strategy=self.name,
+                        exit_reason="PATTERN_TOP",
+                    )
 
         # --- Trading window gate (entry only) ---
         ts = candle.get("timestamp")
@@ -210,26 +230,33 @@ class LRExtremaStrategy(Strategy):
                 return None
 
         # --- Entry prediction ---
-        # Both gates must pass: P(local-min) >= threshold AND P(local-max) < veto_threshold.
-        # The veto prevents entering when the model simultaneously thinks a top is forming.
         if self._trained and self.is_flat() and self._entry_price is None:
             x = self._compute_features(self._candles)
             if x is not None:
-                proba = self._predict_proba(x)
-                classes = list(self._model.classes_)
-                p_min = proba[classes.index(0)] if 0 in classes else 0.0
-                p_max = proba[classes.index(1)] if 1 in classes else 1.0
-                if p_min >= self._threshold and p_max >= self._veto_threshold:
-                    self.last_filter_block = (
-                        f"veto: P(max)={p_max:.3f}>={self._veto_threshold}"
-                        f" P(min)={p_min:.3f}>={self._threshold}"
-                    )
-                    logger.debug(
-                        "LR-Extrema ENTRY VETOED | %s | %s | candle=%s",
-                        self.instrument, self.last_filter_block, candle.get("timestamp"),
-                    )
-                elif p_min >= self._threshold:
-                    # Hard filter gates — collected so all failures are logged together
+                signal_entry = False
+                if self._is_regression:
+                    expected_return = self._predict_return(x)
+                    signal_entry = expected_return >= self._min_entry_return
+                else:
+                    # Classification path (extrema mode): both gates must pass
+                    proba = self._predict_proba(x)
+                    classes = list(self._model.classes_)
+                    p_min = proba[classes.index(0)] if 0 in classes else 0.0
+                    p_max = proba[classes.index(1)] if 1 in classes else 1.0
+                    if p_min >= self._threshold and p_max >= self._veto_threshold:
+                        self.last_filter_block = (
+                            f"veto: P(max)={p_max:.3f}>={self._veto_threshold}"
+                            f" P(min)={p_min:.3f}>={self._threshold}"
+                        )
+                        logger.debug(
+                            "LR-Extrema ENTRY VETOED | %s | %s | candle=%s",
+                            self.instrument, self.last_filter_block, candle.get("timestamp"),
+                        )
+                    else:
+                        signal_entry = p_min >= self._threshold
+
+                if signal_entry:
+                    # Hard filter gates — shared across both paths
                     blocks: list[str] = []
                     if self._entry_min_volume_ratio > 0 and x[0] < self._entry_min_volume_ratio:
                         blocks.append(f"vol_ratio={x[0]:.2f}<{self._entry_min_volume_ratio}")
@@ -246,17 +273,24 @@ class LRExtremaStrategy(Strategy):
                         self._candles_since_train += 1
                         return None
 
-                    logger.info(
-                        "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",
-                        self.instrument, p_min, self._threshold, p_max, self._veto_threshold, close,
-                        candle.get("timestamp"),
-                    )
+                    if self._is_regression:
+                        logger.info(
+                            "LR-Extrema ENTRY | %s | expected_return=%.4f >= %.4f | price=%.2f | candle=%s",
+                            self.instrument, expected_return, self._min_entry_return, close,
+                            candle.get("timestamp"),
+                        )
+                    else:
+                        logger.info(
+                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",
+                            self.instrument, p_min, self._threshold, p_max, self._veto_threshold, close,
+                            candle.get("timestamp"),
+                        )
                     self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                     self._held_bars = 0
                     self._candles_since_train += 1
-                    atr14 = self._compute_atr(list(self._candles), period=14)
-                    if self._atr_stop_mult > 0 and atr14 > 0:
-                        sl_hint = round(close - self._atr_stop_mult * atr14, 2)
+                    atr_stop = self._compute_atr(list(self._candles), period=self._atr_period)
+                    if self._atr_stop_mult > 0 and atr_stop > 0:
+                        sl_hint = round(close - self._atr_stop_mult * atr_stop, 2)
                     else:
                         sl_hint = round(close * (1 - self._stop_pct / 100), 2)
                     self._entry_stop = sl_hint
@@ -266,7 +300,7 @@ class LRExtremaStrategy(Strategy):
                         signal_type=SignalType.ENTRY,
                         price_hint=close,
                         strategy=self.name,
-                        atr=atr14,
+                        atr=atr_stop,
                         stop_loss_hint=sl_hint,
                         target_price=None,  # trailing stop manages upside; no fixed target
                     )
@@ -363,32 +397,22 @@ class LRExtremaStrategy(Strategy):
 
     def _train(self) -> None:
         candles = list(self._candles)
-        if self._label_mode == "forward_return":
+
+        if self._is_regression:
+            # Regression path: continuous forward-return labels → XGBRegressor
             rows, labels = self._build_forward_return_labels(candles)
-        else:
-            rows, labels = self._build_extrema_labels(candles)
-
-        if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
-            return
-
-        n_pos = sum(1 for l in labels if l == 1)
-        n_neg = sum(1 for l in labels if l == 0)
-        if n_pos < _MIN_SAMPLES_PER_CLASS or n_neg < _MIN_SAMPLES_PER_CLASS:
-            logger.warning(
-                "LR-Extrema | %s | not enough samples per class (buy=%d nobuy=%d)",
-                self.instrument, n_pos, n_neg,
-            )
-            return
-
-        X = np.array(rows, dtype=float)
-        y = np.array(labels, dtype=int)
-
-        if self._model_type == "xgboost" and _XGBOOST_AVAILABLE:
-            model = _XGBClassifier(
+            if len(rows) < _MIN_REGRESSION_SAMPLES:
+                return
+            if not _XGBOOST_AVAILABLE:
+                logger.warning("LR-Extrema | %s | XGBoost not available — regression requires XGBoost, skipping train", self.instrument)
+                return
+            X = np.array(rows, dtype=float)
+            y = np.array(labels, dtype=float)
+            model = _XGBRegressor(
                 n_estimators=self._xgb_n_estimators,
                 max_depth=self._xgb_max_depth,
                 learning_rate=self._xgb_learning_rate,
-                eval_metric="logloss",
+                objective="reg:squarederror",
                 verbosity=0,
                 random_state=42,
             )
@@ -397,30 +421,66 @@ class LRExtremaStrategy(Strategy):
             fi = model.feature_importances_
             top3 = sorted(enumerate(fi), key=lambda kv: kv[1], reverse=True)[:3]
             logger.info(
-                "XGB trained | %s | mode=%s samples=%d (buy=%d nobuy=%d) | top features: %s",
-                self.instrument, self._label_mode, len(rows), n_pos, n_neg,
-                [(i, f"{v:.3f}") for i, v in top3],
+                "XGB Regressor trained | %s | samples=%d | top features: %s",
+                self.instrument, len(rows), [(i, f"{v:.3f}") for i, v in top3],
             )
         else:
-            if self._model_type == "xgboost":
-                logger.warning("XGBoost not available — falling back to LogisticRegression")
-            scaler = MinMaxScaler()
-            X_scaled = scaler.fit_transform(X)
-            model = LogisticRegression(max_iter=1000, solver="lbfgs", class_weight="balanced")
-            model.fit(X_scaled, y)
-            self._scaler = scaler
-            logger.info(
-                "LR trained | %s | mode=%s samples=%d (buy=%d nobuy=%d)",
-                self.instrument, self._label_mode, len(rows), n_pos, n_neg,
-            )
+            # Classification path: extrema binary labels → XGBClassifier or LR
+            rows, labels = self._build_extrema_labels(candles)
+            if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
+                return
+            n_pos = sum(1 for l in labels if l == 1)
+            n_neg = sum(1 for l in labels if l == 0)
+            if n_pos < _MIN_SAMPLES_PER_CLASS or n_neg < _MIN_SAMPLES_PER_CLASS:
+                logger.warning(
+                    "LR-Extrema | %s | not enough samples per class (buy=%d nobuy=%d)",
+                    self.instrument, n_pos, n_neg,
+                )
+                return
+            X = np.array(rows, dtype=float)
+            y = np.array(labels, dtype=int)
+            if self._model_type == "xgboost" and _XGBOOST_AVAILABLE:
+                model = _XGBClassifier(
+                    n_estimators=self._xgb_n_estimators,
+                    max_depth=self._xgb_max_depth,
+                    learning_rate=self._xgb_learning_rate,
+                    eval_metric="logloss",
+                    verbosity=0,
+                    random_state=42,
+                )
+                model.fit(X, y)
+                self._scaler = None
+                fi = model.feature_importances_
+                top3 = sorted(enumerate(fi), key=lambda kv: kv[1], reverse=True)[:3]
+                logger.info(
+                    "XGB Classifier trained | %s | mode=%s samples=%d (buy=%d nobuy=%d) | top features: %s",
+                    self.instrument, self._label_mode, len(rows), n_pos, n_neg,
+                    [(i, f"{v:.3f}") for i, v in top3],
+                )
+            else:
+                if self._model_type == "xgboost":
+                    logger.warning("XGBoost not available — falling back to LogisticRegression")
+                scaler = MinMaxScaler()
+                X_scaled = scaler.fit_transform(X)
+                model = LogisticRegression(max_iter=1000, solver="lbfgs", class_weight="balanced")
+                model.fit(X_scaled, y)
+                self._scaler = scaler
+                logger.info(
+                    "LR trained | %s | mode=%s samples=%d (buy=%d nobuy=%d)",
+                    self.instrument, self._label_mode, len(rows), n_pos, n_neg,
+                )
 
         self._model = model
         self._trained = True
 
     def _predict_proba(self, x: np.ndarray) -> np.ndarray:
-        """Run inference. Scales for LR; passes raw features for XGBoost."""
+        """Run classifier inference. Scales for LR; passes raw features for XGBoost."""
         x_in = self._scaler.transform(x.reshape(1, -1)) if self._scaler is not None else x.reshape(1, -1)
         return self._model.predict_proba(x_in)[0]
+
+    def _predict_return(self, x: np.ndarray) -> float:
+        """Run regressor inference. Returns expected forward return as a float."""
+        return float(self._model.predict(x.reshape(1, -1))[0])
 
     def _build_extrema_labels(
         self, candles: list[dict]
@@ -441,15 +501,14 @@ class LRExtremaStrategy(Strategy):
 
     def _build_forward_return_labels(
         self, candles: list[dict]
-    ) -> tuple[list[np.ndarray], list[int]]:
-        """No look-ahead label method.
-        Label = 1 (BUY) if close[t+horizon] / close[t] - 1 >= buy_threshold, else 0.
+    ) -> tuple[list[np.ndarray], list[float]]:
+        """Continuous return label method.
+        Label = close[t+horizon] / close[t] - 1 (raw forward return, not binarised).
+        The model learns to predict the magnitude of future return, not just direction.
         Only candles with at least horizon future candles available are labelled, so
         the last label_horizon candles are excluded from training."""
         horizon = self._label_horizon
-        threshold = self._label_buy_threshold
         rows, labels = [], []
-        # Stop before the last horizon candles — those have no future to measure
         n = len(candles) - horizon
         for idx in range(n):
             feat = self._compute_features(candles[: idx + 1])
@@ -458,9 +517,8 @@ class LRExtremaStrategy(Strategy):
             fwd_return = (
                 candles[idx + horizon]["close"] - candles[idx]["close"]
             ) / candles[idx]["close"]
-            label = 1 if fwd_return >= threshold else 0
             rows.append(feat)
-            labels.append(label)
+            labels.append(fwd_return)
         return rows, labels
 
     # ------------------------------------------------------------------

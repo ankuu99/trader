@@ -200,7 +200,6 @@ with st.sidebar:
         profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),    step=0.5)
         trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),    step=0.25)
         stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),      step=0.5)
-        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),        step=10)
         retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),     step=5)
         extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),      step=1)
         tc1, tc2 = st.columns(2)
@@ -235,11 +234,13 @@ with st.sidebar:
         label_mode = st.selectbox("label_mode", _label_opts,
                                   index=_label_opts.index(p.get("label_mode", "extrema")) if p.get("label_mode", "extrema") in _label_opts else 0)
         if label_mode == "forward_return":
-            label_horizon       = st.number_input("label_horizon",       value=int(p.get("label_horizon", 24)),          step=1,    min_value=1)
-            label_buy_threshold = st.number_input("label_buy_threshold", value=float(p.get("label_buy_threshold", 0.04)), step=0.01, min_value=0.0, format="%.3f")
+            label_horizon       = st.number_input("label_horizon",      value=int(p.get("label_horizon", 24)),           step=1,    min_value=1)
+            min_entry_return    = st.number_input("min_entry_return",   value=float(p.get("min_entry_return", 0.03)),    step=0.005, min_value=0.0, format="%.3f", help="Enter when expected return >= this")
+            exit_return_floor   = st.number_input("exit_return_floor",  value=float(p.get("exit_return_floor", 0.0)),   step=0.005, format="%.3f", help="Pattern-top exit when expected return drops below this")
         else:
             label_horizon       = int(p.get("label_horizon", 24))
-            label_buy_threshold = float(p.get("label_buy_threshold", 0.04))
+            min_entry_return    = float(p.get("min_entry_return", 0.03))
+            exit_return_floor   = float(p.get("exit_return_floor", 0.0))
 
     _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
@@ -272,7 +273,6 @@ if run_clicked:
         "profit_pct":     float(profit_pct),
         "trail_pct":      float(trail_pct),
         "stop_pct":       float(stop_pct),
-        "hold_bars":      int(hold_bars),
         "retrain_every":       int(retrain),
         "extrema_order":       int(extrema_ord),
         "trading_start":       trading_start,
@@ -291,7 +291,8 @@ if run_clicked:
         "learning_rate":               float(learning_rate),
         "label_mode":                  label_mode,
         "label_horizon":               int(label_horizon),
-        "label_buy_threshold":         float(label_buy_threshold),
+        "min_entry_return":            float(min_entry_return),
+        "exit_return_floor":           float(exit_return_floor),
     }
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)

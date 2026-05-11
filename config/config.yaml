@@ -35,34 +35,33 @@ strategies:
   lr_extrema:
     enabled: true
     warmup_bars: 300
-    lookback_bars: 600
-    threshold: 0.85
-    profit_pct: 20
-    trail_pct: 0.25
+    lookback_bars: 1200
+    # threshold: 0.85
+    profit_pct: 15
+    trail_pct: 1.5
     sell_min_pct: 7.0
-    sell_threshold: 0.80
-    min_hold_before_exit: 150
-    stop_pct: 20
-    atr_stop_mult: 0        # 0 = disabled, falls back to stop_pct above
-    hold_bars: 400
+    # sell_threshold: 0.80
+    # stop_pct: 20
+    atr_stop_mult:  3       # 0 = disabled, falls back to stop_pct above
     retrain_every: 25
-    extrema_order: 5
+    # extrema_order: 5
     trading_start: "09:30"
     trading_end: "15:30"
-    veto_threshold: 0.4
+    # veto_threshold: 0.4
     volume_ma_bars: 20
-    entry_min_volume_ratio: 2
-    entry_min_norm_price: 0.0
-    entry_require_prior_decline: false
+    # entry_min_volume_ratio: 2
+    # entry_min_norm_price: 0.0
+    # entry_require_prior_decline: false
     # --- new params from refactor ---
     # Step 1 (active): swap LR → XGBoost, same labels/features/stops as before
-    model_type: "lr"
+    # model_type: "xgboost"
     n_estimators: 100
     max_depth: 3
     learning_rate: 0.1
-    label_mode: "extrema"   # forward_return/extrema needs recalibration before enabling
-    # label_horizon: 24     # only relevant when label_mode: "forward_return"
-    # label_buy_threshold: 0.04
+    label_mode: "forward_return"
+    label_horizon: 96
+    min_entry_return: 0.10   # enter when expected forward return >= this (regression mode)
+    exit_return_floor: 0.0   # pattern-top exit when expected return drops below this
 
 data:
   db_path: data/market.db
