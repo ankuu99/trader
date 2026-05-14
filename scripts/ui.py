@@ -200,29 +200,27 @@ with st.sidebar:
         profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),    step=0.5)
         trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),    step=0.25)
         stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),      step=0.5)
-        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),        step=10)
         retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),     step=5)
         extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),      step=1)
         tc1, tc2 = st.columns(2)
         trading_start = tc1.text_input("trading_start", value=p.get("trading_start", "09:15"))
         trading_end   = tc2.text_input("trading_end",   value=p.get("trading_end",   "15:30"))
+        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),        step=10, min_value=1)
         st.caption("Dual-signal params")
-        sell_threshold      = st.slider("sell_threshold",       0.50, 0.99, float(p.get("sell_threshold", 0.65)),      0.01)
-        sell_min_pct        = st.number_input("sell_min_pct",  value=float(p.get("sell_min_pct", 2.0)), step=0.5, min_value=0.5)
-        veto_threshold      = st.slider("veto_threshold",       0.30, 0.90, float(p.get("veto_threshold", 0.50)),      0.01)
+        sell_threshold       = st.slider("sell_threshold",        0.50, 0.99, float(p.get("sell_threshold", 0.65)),  0.01)
+        sell_min_pct         = st.number_input("sell_min_pct",    value=float(p.get("sell_min_pct", 2.0)),   step=0.5, min_value=0.5)
+        veto_threshold       = st.slider("veto_threshold",        0.30, 0.90, float(p.get("veto_threshold", 0.50)),  0.01)
         min_hold_before_exit = st.number_input("min_hold_before_exit", value=int(p.get("min_hold_before_exit", 3)), step=1, min_value=1)
-        volume_ma_bars      = st.number_input("volume_ma_bars",        value=int(p.get("volume_ma_bars", 20)),       step=5, min_value=5)
+        volume_ma_bars       = st.number_input("volume_ma_bars",  value=int(p.get("volume_ma_bars", 20)),    step=5, min_value=5)
         st.caption("Entry filters")
-        entry_min_volume_ratio   = st.number_input("entry_min_volume_ratio",   value=float(p.get("entry_min_volume_ratio", 0.0)),  step=0.1, min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
-        entry_min_norm_price     = st.number_input("entry_min_norm_price",     value=float(p.get("entry_min_norm_price", 0.0)),    step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
+        entry_min_volume_ratio      = st.number_input("entry_min_volume_ratio",      value=float(p.get("entry_min_volume_ratio", 0.0)),   step=0.1,  min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
+        entry_min_norm_price        = st.number_input("entry_min_norm_price",        value=float(p.get("entry_min_norm_price", 0.0)),     step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
         entry_require_prior_decline = st.checkbox("entry_require_prior_decline", value=bool(p.get("entry_require_prior_decline", False)), help="Block entry if 20-bar return slope is flat/rising")
 
-    _is_running = st.session_state.get("_bt_running", False)
     run_clicked = st.button(
-        "Running…" if _is_running else "Run Backtest",
+        "Run Backtest",
         type="primary",
         use_container_width=True,
-        disabled=_is_running,
     )
 
     st.divider()
@@ -248,16 +246,16 @@ if run_clicked:
         "profit_pct":     float(profit_pct),
         "trail_pct":      float(trail_pct),
         "stop_pct":       float(stop_pct),
-        "hold_bars":      int(hold_bars),
         "retrain_every":       int(retrain),
         "extrema_order":       int(extrema_ord),
         "trading_start":       trading_start,
         "trading_end":         trading_end,
-        "sell_threshold":      float(sell_threshold),
-        "sell_min_pct":        float(sell_min_pct),
-        "veto_threshold":      float(veto_threshold),
-        "min_hold_before_exit": int(min_hold_before_exit),
-        "volume_ma_bars":      int(volume_ma_bars),
+        "hold_bars":                   int(hold_bars),
+        "sell_threshold":              float(sell_threshold),
+        "sell_min_pct":                float(sell_min_pct),
+        "veto_threshold":              float(veto_threshold),
+        "min_hold_before_exit":        int(min_hold_before_exit),
+        "volume_ma_bars":              int(volume_ma_bars),
         "entry_min_volume_ratio":      float(entry_min_volume_ratio),
         "entry_min_norm_price":        float(entry_min_norm_price),
         "entry_require_prior_decline": bool(entry_require_prior_decline),
@@ -271,10 +269,16 @@ if run_clicked:
         # Dummy tokens — get_candles will serve from cache if candles exist
         s2t = {s: 0 for s in selected_instruments}
 
-    st.session_state["_bt_running"] = True
+    _progress_bar = st.progress(0.0, text="Starting…")
+
+    def _on_progress(current_date, pct):
+        _progress_bar.progress(pct, text=f"Processing {current_date}  ({pct*100:.0f}%)")
+
     with st.spinner("Running backtest…"):
         try:
-            trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt)
+            trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt,
+                                  progress_callback=_on_progress)
+            _progress_bar.progress(1.0, text="Done")
             st.session_state["trades"]      = trades
             st.session_state["from_dt"]     = from_dt
             st.session_state["to_dt"]       = to_dt
@@ -282,7 +286,7 @@ if run_clicked:
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
         finally:
-            st.session_state["_bt_running"] = False
+            _progress_bar.empty()
     st.rerun()
 
 # ── pull state ────────────────────────────────────────────────────────────────
@@ -318,6 +322,12 @@ with tab1:
     cols[5].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
     cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
     cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
+
+    cols2 = st.columns(4)
+    cols2[0].metric("Sortino",        f"{metrics['sortino_ratio']:.2f}")
+    cols2[1].metric("Calmar",         f"{metrics['calmar_ratio']:.2f}")
+    cols2[2].metric("Profit Factor",  f"{metrics['profit_factor']:.2f}")
+    cols2[3].metric("Win Rate",       f"{metrics['win_rate']:.1f}%")
 
     st.divider()
 
@@ -402,6 +412,28 @@ with tab1:
             eq_highlight_ts = str(pd.Timestamp(str(_eq_pts[0].get("x", ""))))[:19]
         except Exception:
             pass
+
+    # ── monthly returns chart ──
+    _mr = metrics.get("monthly_returns", {})
+    if _mr:
+        _mr_months = list(_mr.keys())
+        _mr_pnls   = [_mr[m]["pnl"] for m in _mr_months]
+        _mr_colors = ["#2ecc71" if p >= 0 else "#e74c3c" for p in _mr_pnls]
+        fig_monthly = go.Figure(go.Bar(
+            x=_mr_months,
+            y=_mr_pnls,
+            marker_color=_mr_colors,
+            hovertemplate="%{x}<br><b>₹%{y:,.0f}</b><extra></extra>",
+        ))
+        fig_monthly.update_layout(
+            title="Monthly P&L",
+            xaxis_title="Month",
+            yaxis_title="₹",
+            height=220,
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        fig_monthly.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+        st.plotly_chart(fig_monthly, use_container_width=True)
 
     # ── trade table ──
     st.subheader("Trades")
@@ -523,13 +555,20 @@ with tab2:
     # Per-stock summary metrics
     if inst_trades:
         im = compute_metrics(inst_trades, config.total_capital)
-        mc = st.columns(6)
-        mc[0].metric("Trades",   im["total_trades"])
-        mc[1].metric("Wt. Win%", f"{im['money_weighted_win_rate']:.1f}%")
-        mc[2].metric("Net P&L",  f"₹{im['total_pnl']:,.0f}")
-        mc[3].metric("Return",   f"{im['return_pct']:.2f}%")
-        mc[4].metric("Max DD",   f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
-        mc[5].metric("Sharpe*",  f"{im['sharpe_proxy']:.2f}")
+        mc = st.columns(8)
+        mc[0].metric("Trades",        im["total_trades"])
+        mc[1].metric("Wt. Win%",      f"{im['money_weighted_win_rate']:.1f}%")
+        mc[2].metric("Net P&L",       f"₹{im['total_pnl']:,.0f}")
+        mc[3].metric("Return",        f"{im['return_pct']:.2f}%")
+        mc[4].metric("Max DD",        f"₹{im['max_drawdown']:,.0f}", delta=f"{im['max_drawdown_pct']:.2f}%", delta_color="inverse")
+        mc[5].metric("Avg Win",       f"₹{im['avg_win']:,.0f}")
+        mc[6].metric("Avg Loss",      f"₹{im['avg_loss']:,.0f}")
+        mc[7].metric("Sharpe*",       f"{im['sharpe_proxy']:.2f}")
+        mc2 = st.columns(4)
+        mc2[0].metric("Sortino",       f"{im['sortino_ratio']:.2f}")
+        mc2[1].metric("Calmar",        f"{im['calmar_ratio']:.2f}")
+        mc2[2].metric("Profit Factor", f"{im['profit_factor']:.2f}")
+        mc2[3].metric("Win Rate",      f"{im['win_rate']:.1f}%")
         st.divider()
 
     # Build subplots: price | volume | (per-stock equity if trades exist)
@@ -825,6 +864,12 @@ with tab3:
     cols[5].metric("Avg Win",  f"₹{metrics['avg_win']:,.0f}")
     cols[6].metric("Avg Loss", f"₹{metrics['avg_loss']:,.0f}")
     cols[7].metric("Sharpe*",  f"{metrics['sharpe_proxy']:.2f}")
+
+    cols2 = st.columns(4)
+    cols2[0].metric("Sortino",        f"{metrics['sortino_ratio']:.2f}")
+    cols2[1].metric("Calmar",         f"{metrics['calmar_ratio']:.2f}")
+    cols2[2].metric("Profit Factor",  f"{metrics['profit_factor']:.2f}")
+    cols2[3].metric("Win Rate",       f"{metrics['win_rate']:.1f}%")
 
     st.divider()
 

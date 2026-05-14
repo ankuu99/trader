@@ -7,6 +7,7 @@ Backtest engine — core replay loop shared by backtest.py, calibrate.py, and sc
     metrics = compute_metrics(trades, capital)
 """
 
+import bisect
 import math
 from datetime import datetime, timedelta
 
@@ -50,6 +51,8 @@ def run_backtest(
     params: dict,
     from_dt: datetime,
     to_dt: datetime,
+    pre_warmup_days: int | None = None,
+    progress_callback=None,
 ) -> list[dict]:
     """
     Replay historical candles through LRExtremaStrategy and return the trades list.
@@ -170,10 +173,45 @@ def run_backtest(
     # populated in chronological order — otherwise get_candles sees cached_latest
     # pointing past from_dt and skips the pre-warmup range entirely.
 
-    pre_warmup_days = config.historical_cache_days
+    pre_warmup_days = pre_warmup_days if pre_warmup_days is not None else config.historical_cache_days
     pre_warmup_from = from_dt - timedelta(days=pre_warmup_days)
 
-    # --- Fetch pre-warmup candles first (DB empty at this point) ---
+    # --- Fetch regime candles (NIFTY 50 + India VIX) for market context features ---
+    # Must come BEFORE stock pre-warmup fetch so _regime_at is defined for injection.
+    # Fetched once for the full window [pre_warmup_from, to_dt] then forward-filled
+    # into every candle dict.  Gracefully skipped when tokens are unavailable.
+    _regime_nifty_sym = params.get("regime_nifty_symbol", "NSE:NIFTY 50")
+    _regime_vix_sym   = params.get("regime_vix_symbol",   "NSE:INDIA VIX")
+    _nifty_ts: list = []
+    _nifty_cl: list[float] = []
+    _vix_ts: list = []
+    _vix_cl: list[float] = []
+
+    for _rsym, _rts, _rcl in (
+        (_regime_nifty_sym, _nifty_ts, _nifty_cl),
+        (_regime_vix_sym,   _vix_ts,   _vix_cl),
+    ):
+        _rtok = symbol_to_token.get(_rsym)
+        if _rtok is None:
+            logger.debug("Regime symbol %s not in token map — skipping", _rsym)
+            continue
+        _rdf = get_candles(kite, store, _rtok, _rsym, config.candle_timeframe,
+                           pre_warmup_from, to_dt)
+        if _rdf.empty:
+            logger.info("No candles for regime symbol %s — regime features will be neutral", _rsym)
+            continue
+        _rts.extend(_rdf["timestamp"].tolist())
+        _rcl.extend(_rdf["close"].astype(float).tolist())
+        logger.info("Regime data | %s | %d candles", _rsym, len(_rdf))
+
+    def _regime_at(ts_list: list, close_list: list[float], ts) -> float | None:
+        """Return the most recent close at or before *ts* (forward-fill)."""
+        if not ts_list:
+            return None
+        idx = bisect.bisect_right(ts_list, ts) - 1
+        return close_list[idx] if idx >= 0 else None
+
+    # --- Fetch pre-warmup candles (DB empty at this point) ---
     pre_warmup_candles: dict[str, list[dict]] = {}
     for symbol in symbols:
         token = symbol_to_token.get(symbol)
@@ -196,6 +234,8 @@ def run_backtest(
                 "close": float(row["close"]),
                 "volume": int(row["volume"]),
                 "_symbol": symbol,
+                "_nifty_close": _regime_at(_nifty_ts, _nifty_cl, row["timestamp"]),
+                "_vix_close":   _regime_at(_vix_ts,   _vix_cl,   row["timestamp"]),
             }
             for _, row in pre_df.iterrows()
         ]
@@ -225,6 +265,8 @@ def run_backtest(
                 "close": float(row["close"]),
                 "volume": int(row["volume"]),
                 "_symbol": symbol,
+                "_nifty_close": _regime_at(_nifty_ts, _nifty_cl, row["timestamp"]),
+                "_vix_close":   _regime_at(_vix_ts,   _vix_cl,   row["timestamp"]),
             }
             for _, row in df.iterrows()
         ]
@@ -252,15 +294,23 @@ def run_backtest(
         if getattr(strategy, "_entry_price", None) is not None and strategy.position is None:
             logger.debug("Clearing phantom pre-warmup entry state | %s", strategy.instrument)
             strategy._entry_price = None
+            strategy._entry_stop = None
             strategy._held_bars = 0
             strategy._peak_close = None
             strategy._trailing_active = False
 
+    _total_days = max((to_dt - from_dt).days, 1)
+    _last_notified_date = None
     prev_date = None
     for candle in merged_candles:
         symbol = candle["_symbol"]
         current_ts[0] = candle["timestamp"]
         candle_date = candle["timestamp"].date()
+
+        if progress_callback is not None and candle_date != _last_notified_date:
+            _last_notified_date = candle_date
+            _elapsed = max((candle_date - from_dt.date()).days, 0)
+            progress_callback(candle_date, min(_elapsed / _total_days, 1.0))
 
         # Simulate Zerodha's EOD LIMIT order cancellation: unfilled LIMIT orders
         # are cancelled at day boundary, not carried forward to the next session.
@@ -332,6 +382,7 @@ def run_backtest(
                         "instrument": symbol,
                         "direction": "SELL",
                         "signal_type": "EXIT",
+                        "exit_reason": reason,  # "SL" or "TARGET" — used by strategy for cooldown
                         "quantity": pos["qty"],
                         "price": exit_price,
                         "fill_price": exit_price,
@@ -425,22 +476,26 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
     Returns dict with:
         total_trades, wins, losses, win_rate (0-100),
         total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy,
-        max_drawdown (absolute ₹), max_drawdown_pct (% of capital)
+        max_drawdown (absolute ₹), max_drawdown_pct (% of capital),
+        profit_factor, sortino_ratio, calmar_ratio,
+        monthly_returns {"YYYY-MM": {"pnl", "return_pct", "trades"}}
 
-    sharpe_proxy = mean(pnl) / std(pnl) across trades — useful for relative
-    ranking only, not a true Sharpe ratio. Labelled "Sharpe*" in output.
-
-    max_drawdown = largest peak-to-trough decline in the cumulative P&L equity
-    curve, ordered by entry_date. Represents the worst losing streak experienced.
+    sharpe_proxy = mean(pnl) / std(pnl) across trades — relative ranking only.
+    sortino_ratio = mean(pnl) / downside_std — penalises losing trades only.
+    calmar_ratio  = annualised_return_pct / max_drawdown_pct.
+    profit_factor = total_wins / |total_losses|.
     """
+    _empty: dict = {
+        "total_trades": 0, "wins": 0, "losses": 0,
+        "win_rate": 0.0, "money_weighted_win_rate": 0.0,
+        "total_pnl": 0.0, "return_pct": 0.0,
+        "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
+        "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
+        "profit_factor": 0.0, "sortino_ratio": 0.0, "calmar_ratio": 0.0,
+        "monthly_returns": {},
+    }
     if not trades:
-        return {
-            "total_trades": 0, "wins": 0, "losses": 0,
-            "win_rate": 0.0, "money_weighted_win_rate": 0.0,
-            "total_pnl": 0.0, "return_pct": 0.0,
-            "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
-            "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
-        }
+        return _empty
 
     pnls = [t["pnl"] for t in trades]
     wins = [p for p in pnls if p > 0]
@@ -451,6 +506,14 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
     variance = sum((p - mean_pnl) ** 2 for p in pnls) / len(pnls)
     std_pnl = math.sqrt(variance)
     sharpe_proxy = mean_pnl / std_pnl if std_pnl > 0 else 0.0
+
+    # Sortino — penalise downside only; use all n trades in denominator
+    neg_pnls = [p for p in pnls if p < 0]
+    if neg_pnls:
+        downside_var = sum(p ** 2 for p in neg_pnls) / len(pnls)
+        sortino_ratio = mean_pnl / math.sqrt(downside_var)
+    else:
+        sortino_ratio = 0.0  # no losses — undefined; 0 is a safe neutral value
 
     # Max drawdown — peak-to-trough on equity curve ordered by entry_date
     sorted_trades = sorted(trades, key=lambda t: t.get("entry_date") or "")
@@ -465,12 +528,58 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         if dd > max_dd:
             max_dd = dd
 
+    max_dd_pct = max_dd / capital * 100 if capital > 0 else 0.0
+
+    # Calmar — annualised return / max drawdown %
+    calmar_ratio = 0.0
+    if max_dd_pct > 0 and capital > 0:
+        try:
+            all_dates = (
+                [t["entry_date"] for t in trades if t.get("entry_date")]
+                + [t["exit_date"] for t in trades if t.get("exit_date")]
+            )
+            if len(all_dates) >= 2:
+                start_d = min(all_dates)
+                end_d = max(all_dates)
+                days = (end_d - start_d).days
+                if days > 0:
+                    years = days / 365.25
+                    total_return = total_pnl / capital
+                    cagr_pct = ((1 + total_return) ** (1 / years) - 1) * 100
+                    calmar_ratio = cagr_pct / max_dd_pct
+        except Exception:
+            pass  # date subtraction failed — leave calmar at 0.0
+
     total_win_amt = sum(wins)
     total_loss_amt = abs(sum(losses))
     money_weighted_win_rate = (
         total_win_amt / (total_win_amt + total_loss_amt) * 100
         if (total_win_amt + total_loss_amt) > 0 else 0.0
     )
+    profit_factor = total_win_amt / total_loss_amt if total_loss_amt > 0 else 0.0
+
+    # Monthly returns — grouped by exit_date month
+    monthly: dict[str, dict] = {}
+    for t in trades:
+        date = t.get("exit_date") or t.get("entry_date")
+        if date is None:
+            continue
+        try:
+            month_key = date.strftime("%Y-%m")
+        except AttributeError:
+            month_key = str(date)[:7]
+        if month_key not in monthly:
+            monthly[month_key] = {"pnl": 0.0, "trades": 0}
+        monthly[month_key]["pnl"] += t["pnl"]
+        monthly[month_key]["trades"] += 1
+    monthly_returns = {
+        k: {
+            "pnl": v["pnl"],
+            "return_pct": v["pnl"] / capital * 100 if capital > 0 else 0.0,
+            "trades": v["trades"],
+        }
+        for k, v in sorted(monthly.items())
+    }
 
     return {
         "total_trades": len(trades),
@@ -484,5 +593,9 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         "avg_loss": sum(losses) / len(losses) if losses else 0.0,
         "sharpe_proxy": sharpe_proxy,
         "max_drawdown": max_dd,
-        "max_drawdown_pct": max_dd / capital * 100 if capital > 0 else 0.0,
+        "max_drawdown_pct": max_dd_pct,
+        "profit_factor": profit_factor,
+        "sortino_ratio": sortino_ratio,
+        "calmar_ratio": calmar_ratio,
+        "monthly_returns": monthly_returns,
     }
