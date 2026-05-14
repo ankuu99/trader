@@ -37,7 +37,7 @@ strategies:
     warmup_bars: 300
     lookback_bars: 1200
     threshold: 0.85
-    sell_threshold: 0.65
+    sell_threshold: 0.8
     extrema_order: 5
     profit_pct: 15
     trail_pct: 1.5
@@ -45,7 +45,7 @@ strategies:
     hold_bars: 250           # max candles before time-based exit (extrema mode only)
     sl_cooldown_bars: 48     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
     stop_pct: 10             # fallback if atr_stop_mult = 0
-    atr_stop_mult: 7
+    atr_stop_mult: 0
     atr_period: 250          # relevant when extrema mode
     retrain_every: 25
     trading_start: "09:30"
