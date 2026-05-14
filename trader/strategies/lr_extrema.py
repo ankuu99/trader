@@ -607,13 +607,14 @@ class LRExtremaStrategy(Strategy):
           3  slope5          — LR slope over last 5 % returns
           4  slope10         — LR slope over last 10 % returns
           5  slope20         — LR slope over last 20 % returns
-          6  atr_ratio       — ATR-14 / close (normalised volatility)
-          7  rsi14           — RSI-14 (0-100)
-          8  ema20_dist      — (close - EMA20) / ATR-14 (price position vs trend)
+          6  atr_ratio       — ATR(atr_period) / close (normalised volatility)
+          7  rsi             — RSI(atr_period) (0-100)
+          8  ema20_dist      — (close - EMA20) / ATR(atr_period) (price position vs trend)
           9  nifty_slope20   — NIFTY 50 LR slope over last 20 returns (0.0 if unavailable)
           10 vix_norm        — India VIX / 30.0, capped at 2.0 (0.5 neutral if unavailable)
         """
-        if len(candles) < 21:
+        min_candles = max(21, self._atr_period + 1)
+        if len(candles) < min_candles:
             return None
         if not isinstance(candles, list):
             candles = list(candles)
@@ -639,16 +640,15 @@ class LRExtremaStrategy(Strategy):
         slope10 = self._linreg_slope(returns[-10:])
         slope20 = self._linreg_slope(returns)
 
-        # ATR-14
-        atr14 = self._compute_atr(candles, period=14)
-        atr_ratio = atr14 / close if close > 0 else 0.0
+        # ATR and RSI both use atr_period for consistency with the stop-loss calculation
+        atr = self._compute_atr(candles, period=self._atr_period)
+        atr_ratio = atr / close if close > 0 else 0.0
 
-        # RSI-14
-        rsi14 = self._compute_rsi(closes, period=14)
+        rsi = self._compute_rsi(closes, period=self._atr_period)
 
         # EMA-20 distance normalised by ATR
         ema20 = self._compute_ema(closes, period=20)
-        ema20_dist = (close - ema20) / atr14 if atr14 > 0 else 0.0
+        ema20_dist = (close - ema20) / atr if atr > 0 else 0.0
 
         # Feature 9: NIFTY slope-20 — broad market momentum context
         nifty_vals = [c["_nifty_close"] for c in candles[-21:] if c.get("_nifty_close") is not None]
@@ -666,7 +666,7 @@ class LRExtremaStrategy(Strategy):
 
         return np.array(
             [volume_ratio, norm_price, slope3, slope5, slope10, slope20,
-             atr_ratio, rsi14, ema20_dist, nifty_slope20, vix_norm],
+             atr_ratio, rsi, ema20_dist, nifty_slope20, vix_norm],
             dtype=float,
         )
 

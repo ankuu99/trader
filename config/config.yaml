@@ -45,12 +45,13 @@ strategies:
     hold_bars: 250           # max candles before time-based exit (extrema mode only)
     sl_cooldown_bars: 48     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
     stop_pct: 10             # fallback if atr_stop_mult = 0
-    atr_stop_mult: 0
+    atr_stop_mult: 7
+    atr_period: 250          # relevant when extrema mode
     retrain_every: 25
     trading_start: "09:30"
     trading_end: "15:30"
     volume_ma_bars: 20
-    model_type: "xgboost"
+    model_type: "lr"
     n_estimators: 100
     max_depth: 3
     learning_rate: 0.1

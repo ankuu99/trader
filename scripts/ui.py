@@ -222,6 +222,8 @@ with st.sidebar:
         atr_stop_mult = st.number_input("atr_stop_mult", value=float(p.get("atr_stop_mult", 0.0)),
                                         step=0.1, min_value=0.0,
                                         help="Stop = entry − mult × ATR14; 0 = disabled (uses stop_pct)")
+        atr_period    = st.number_input("atr_period", value=int(p.get("atr_period", 14)), step=1, min_value=1,
+                                        help="ATR lookback period used for stop and features")
         if model_type == "xgboost":
             n_estimators  = st.number_input("n_estimators",  value=int(p.get("n_estimators", 100)),    step=10, min_value=10)
             max_depth     = st.number_input("max_depth",     value=int(p.get("max_depth", 3)),          step=1,  min_value=1)
@@ -287,6 +289,7 @@ if run_clicked:
         "entry_min_norm_price":        float(entry_min_norm_price),
         "entry_require_prior_decline": bool(entry_require_prior_decline),
         "atr_stop_mult":               float(atr_stop_mult),
+        "atr_period":                  int(atr_period),
         "model_type":                  model_type,
         "n_estimators":                int(n_estimators),
         "max_depth":                   int(max_depth),
