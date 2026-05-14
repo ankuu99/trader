@@ -9,10 +9,10 @@ risk:
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 10
-  default_sl_pct: 3
+  default_sl_pct: 30
   risk_reward: 2.5
   max_capital_per_stock_pct: 15.0
-  sl_cooldown_bars: 0        # bars to block re-entry after SL hit (0=disabled; 96 ≈ 5 calendar days on 15min)
+  sl_cooldown_bars: 100      # bars to block re-entry after SL hit (0=disabled; 96 ≈ 5 calendar days on 15min)
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
@@ -43,7 +43,7 @@ strategies:
     sell_min_pct: 7.0
     sell_threshold: 0.80
     min_hold_before_exit: 1
-    stop_pct: 20
+    stop_pct: 10
     hold_bars: 400
     retrain_every: 25
     extrema_order: 5

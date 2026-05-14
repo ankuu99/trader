@@ -123,7 +123,7 @@ def run_backtest(
                 "exit_date": current_ts[0],
                 "held_candles": pos.get("candle_count", 0),
             })
-            risk.close_position(instrument, fill_price, exit_reason=exit_reason)
+            risk.close_position(instrument, fill_price, exit_reason=exit_reason, as_of=current_ts[0])
             s = strategy_map.get(instrument)
             if s:
                 s.on_order_update(update)
@@ -374,7 +374,7 @@ def run_backtest(
                     "held_candles": pos.get("candle_count", 0),
                 })
                 del open_positions[symbol]
-                risk.close_position(symbol, exit_price, exit_reason=reason)
+                risk.close_position(symbol, exit_price, exit_reason=reason, as_of=candle["timestamp"])
                 # Sync strategy state so it doesn't attempt a duplicate exit
                 s = strategy_map.get(symbol)
                 if s:
@@ -423,7 +423,7 @@ def run_backtest(
                         "exit_date": candle["timestamp"],
                         "held_candles": pos.get("candle_count", 0),
                     })
-                    risk.close_position(symbol, exit_price, exit_reason="TRAILING")
+                    risk.close_position(symbol, exit_price, exit_reason="TRAILING", as_of=candle["timestamp"])
                     strategy.on_order_update({
                         "status": "COMPLETE",
                         "instrument": symbol,
@@ -442,7 +442,7 @@ def run_backtest(
             reason = getattr(signal, "exit_reason", None)
             if reason:
                 pending_exit_reasons[symbol] = reason
-        order = risk.validate(signal)
+        order = risk.validate(signal, as_of=candle["timestamp"])
         if order is None:
             continue
         orders.place(order)

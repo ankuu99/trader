@@ -62,7 +62,7 @@ class RiskManager:
         logger.info("Seeded cumulative P&L | pnl=%.2f | effective_capital=%.0f",
                     pnl, config.total_capital + pnl)
 
-    def validate(self, signal: Signal) -> Order | None:
+    def validate(self, signal: Signal, as_of: datetime | None = None) -> Order | None:
         self._last_reject_reason = None
         if self._halted:
             if signal.signal_type == SignalType.EXIT:
@@ -75,7 +75,10 @@ class RiskManager:
             return self._validate_exit(signal)
 
         # SL cooldown — block re-entry for a period after a hard stop-loss
-        now = datetime.now()
+        # as_of: candle timestamp in backtest; datetime.now() in live mode
+        now = as_of if as_of is not None else datetime.now()
+        if hasattr(now, "to_pydatetime"):
+            now = now.to_pydatetime().replace(tzinfo=None)
         until = self._sl_cooldown.get(signal.instrument)
         if until is not None:
             if now < until:
@@ -262,11 +265,13 @@ class RiskManager:
     def realised_pnl(self) -> float:
         return self._realised_pnl
 
-    def close_position(self, instrument: str, exit_price: float = 0.0, exit_reason: str = ""):
+    def close_position(self, instrument: str, exit_price: float = 0.0, exit_reason: str = "",
+                       as_of: datetime | None = None):
         """Remove a position from tracking and accumulate realised P&L.
 
         exit_reason: pass explicitly (backtest engine) or omit to use the reason captured
         in _validate_exit() (live/paper mode). When "SL", applies the configured cooldown.
+        as_of: candle timestamp in backtest; datetime.now() in live mode.
         """
         qty = self._open_positions.pop(instrument, None)
         freed = self._position_values.pop(instrument, 0.0)
@@ -302,7 +307,10 @@ class RiskManager:
             cooldown_bars = int(config._data.get("risk", {}).get("sl_cooldown_bars", 0))
             if cooldown_bars > 0:
                 delta = self._bars_to_timedelta(cooldown_bars)
-                until = datetime.now() + delta
+                now = as_of if as_of is not None else datetime.now()
+                if hasattr(now, "to_pydatetime"):
+                    now = now.to_pydatetime().replace(tzinfo=None)
+                until = now + delta
                 self._sl_cooldown[instrument] = until
                 logger.info(
                     "SL cooldown set | %s | bars=%d | until=%s",
@@ -331,8 +339,16 @@ class RiskManager:
         calendar_days = trading_days * (7 / 5)
         return timedelta(days=calendar_days)
 
-    def reset_day(self):
+    def reset_day(self, as_of: datetime | None = None):
         self._realised_pnl = 0.0
         self._halted = False
+        # Sweep expired SL cooldowns at day boundary so they don't linger
+        # when validate() is never called for an instrument (no signals generated)
+        now = as_of if as_of is not None else datetime.now()
+        if hasattr(now, "to_pydatetime"):
+            now = now.to_pydatetime().replace(tzinfo=None)
+        expired = [k for k, v in self._sl_cooldown.items() if v <= now]
+        for k in expired:
+            logger.warning("SL cooldown expired | %s | cleared at day boundary", k)
+            del self._sl_cooldown[k]
         logger.info("Risk manager daily reset")
-        # SL cooldowns are multi-day — intentionally NOT reset here
