@@ -106,6 +106,7 @@ def run_backtest(
 
         if direction == "SELL" and instrument in open_positions:
             pos = open_positions.pop(instrument)
+            exit_reason = pending_exit_reasons.pop(instrument, "STRATEGY")
             net, cost, product = _net_pnl(
                 pos["entry"], fill_price, pos["qty"], pos["entry_date"], current_ts[0]
             )
@@ -117,12 +118,12 @@ def run_backtest(
                 "pnl": net,
                 "cost": cost,
                 "product": product,
-                "reason": pending_exit_reasons.pop(instrument, "STRATEGY"),
+                "reason": exit_reason,
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
                 "held_candles": pos.get("candle_count", 0),
             })
-            risk.close_position(instrument, fill_price)
+            risk.close_position(instrument, fill_price, exit_reason=exit_reason)
             s = strategy_map.get(instrument)
             if s:
                 s.on_order_update(update)
@@ -373,7 +374,7 @@ def run_backtest(
                     "held_candles": pos.get("candle_count", 0),
                 })
                 del open_positions[symbol]
-                risk.close_position(symbol, exit_price)
+                risk.close_position(symbol, exit_price, exit_reason=reason)
                 # Sync strategy state so it doesn't attempt a duplicate exit
                 s = strategy_map.get(symbol)
                 if s:
@@ -422,7 +423,7 @@ def run_backtest(
                         "exit_date": candle["timestamp"],
                         "held_candles": pos.get("candle_count", 0),
                     })
-                    risk.close_position(symbol, exit_price)
+                    risk.close_position(symbol, exit_price, exit_reason="TRAILING")
                     strategy.on_order_update({
                         "status": "COMPLETE",
                         "instrument": symbol,

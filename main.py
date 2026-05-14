@@ -306,6 +306,13 @@ def main():
                 instrument, qty, estimated_cost,
             )
 
+        # Restore SL cooldowns from SQLite so blocks survive nightly restarts
+        for symbol in config.watchlist:
+            key = f"sl_cooldown_{symbol}"
+            ts = store.get_state(key, 0.0)
+            if ts > 0:
+                risk.seed_sl_cooldown(symbol, ts)
+
     # Dashboard (read-only UI)
     if config.ui_enabled:
         from trader.ui.server import start_dashboard
@@ -348,6 +355,10 @@ def main():
                 store.delete_open_position(instrument)
             if config.env == "live":
                 store.set_state("cumulative_pnl", risk.cumulative_pnl)
+                # Persist SL cooldown so it survives nightly restarts
+                cooldown_until = risk._sl_cooldown.get(instrument)
+                if cooldown_until is not None:
+                    store.set_state(f"sl_cooldown_{instrument}", cooldown_until.timestamp())
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
         telegram.notify_order_filled(instrument, direction, quantity, fill_price,
                                      strategy=strategy, mode=config.env,

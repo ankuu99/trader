@@ -12,6 +12,7 @@ risk:
   default_sl_pct: 3
   risk_reward: 2.5
   max_capital_per_stock_pct: 15.0
+  sl_cooldown_bars: 0        # bars to block re-entry after SL hit (0=disabled; 96 ≈ 5 calendar days on 15min)
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
@@ -35,7 +36,7 @@ strategies:
   lr_extrema:
     enabled: true
     warmup_bars: 300
-    lookback_bars: 600
+    lookback_bars: 1200
     threshold: 0.85
     profit_pct: 20
     trail_pct: 0.25
@@ -50,7 +51,7 @@ strategies:
     trading_end: "15:30"
     veto_threshold: 0.4
     volume_ma_bars: 20
-    entry_min_volume_ratio: 2  # e.g. 1.3 — block if volume < 1.3x average                                                                                 
+    entry_min_volume_ratio: 0  # e.g. 1.3 — block if volume < 1.3x average                                                                                 
     entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range                                                                   
     entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising     
 
@@ -58,7 +59,7 @@ data:
   db_path: data/market.db
   historical_cache_days: 50
 logging:
-  level: INFO
+  level: WARNING
   dir: logs/
 ui:
   enabled: true

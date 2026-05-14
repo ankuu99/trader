@@ -5,11 +5,13 @@ Checks:
   1. Daily loss limit — halt if breached
   2. Max open positions
   3. Already in a position for this instrument
+  4. SL cooldown — blocks re-entry after a hard stop-loss for a configurable period
 
 Sizing: fixed % stop-loss, quantity = max_risk_per_trade / sl_distance
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from trader.core.config import config
 from trader.core.logger import get_logger
@@ -42,6 +44,8 @@ class RiskManager:
         self._cumulative_pnl: float = 0.0  # lifetime P&L — never resets; persisted to DB in live mode
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
+        self._sl_cooldown: dict[str, datetime] = {}          # instrument → cooldown expiry (set after SL hit)
+        self._pending_exit_reasons: dict[str, str] = {}      # instrument → exit_reason (set in _validate_exit, consumed in close_position)
 
     @property
     def capital_available(self) -> float:
@@ -69,6 +73,20 @@ class RiskManager:
 
         if signal.signal_type == SignalType.EXIT:
             return self._validate_exit(signal)
+
+        # SL cooldown — block re-entry for a period after a hard stop-loss
+        now = datetime.now()
+        until = self._sl_cooldown.get(signal.instrument)
+        if until is not None:
+            if now < until:
+                logger.warning(
+                    "Signal rejected — SL cooldown active | %s | until=%s",
+                    signal.instrument, until.strftime("%Y-%m-%d %H:%M"),
+                )
+                self._last_reject_reason = "sl_cooldown"
+                return None
+            else:
+                del self._sl_cooldown[signal.instrument]  # expired — clear it
 
         if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
             logger.warning("Signal rejected — max open positions | %s", signal.instrument)
@@ -162,6 +180,10 @@ class RiskManager:
         if quantity <= 0:
             logger.warning("Exit signal for instrument not in positions | %s", signal.instrument)
             return None
+        # Capture exit_reason so close_position() can apply SL cooldown without needing the param
+        reason = getattr(signal, "exit_reason", None) or ""
+        if reason:
+            self._pending_exit_reasons[signal.instrument] = reason
         logger.info("Exit approved | %s x%d @ ~%.2f", signal.instrument, quantity, signal.price_hint)
         return Order(
             instrument=signal.instrument,
@@ -240,11 +262,19 @@ class RiskManager:
     def realised_pnl(self) -> float:
         return self._realised_pnl
 
-    def close_position(self, instrument: str, exit_price: float = 0.0):
-        """Remove a position from tracking and accumulate realised P&L."""
+    def close_position(self, instrument: str, exit_price: float = 0.0, exit_reason: str = ""):
+        """Remove a position from tracking and accumulate realised P&L.
+
+        exit_reason: pass explicitly (backtest engine) or omit to use the reason captured
+        in _validate_exit() (live/paper mode). When "SL", applies the configured cooldown.
+        """
         qty = self._open_positions.pop(instrument, None)
         freed = self._position_values.pop(instrument, 0.0)
         self._capital_deployed = max(0.0, self._capital_deployed - freed)
+
+        # Resolve exit_reason — prefer explicit arg, fall back to what _validate_exit stored
+        reason = exit_reason or self._pending_exit_reasons.pop(instrument, "")
+
         if qty and freed and not exit_price:
             logger.warning(
                 "close_position called with exit_price=0 for %s — P&L and halt check skipped",
@@ -256,8 +286,8 @@ class RiskManager:
             self._realised_pnl += pnl
             self._cumulative_pnl += pnl
             logger.info(
-                "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f",
-                instrument, qty, entry_price, exit_price, pnl, self._realised_pnl,
+                "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f | reason=%s",
+                instrument, qty, entry_price, exit_price, pnl, self._realised_pnl, reason or "?",
             )
             if not self._halted and self._realised_pnl <= -config.daily_loss_limit:
                 self._halted = True
@@ -267,7 +297,42 @@ class RiskManager:
                 )
                 telegram.notify_halt(self._realised_pnl, config.daily_loss_limit, config.env)
 
+        # SL cooldown — block re-entry after a hard stop
+        if reason == "SL":
+            cooldown_bars = int(config._data.get("risk", {}).get("sl_cooldown_bars", 0))
+            if cooldown_bars > 0:
+                delta = self._bars_to_timedelta(cooldown_bars)
+                until = datetime.now() + delta
+                self._sl_cooldown[instrument] = until
+                logger.info(
+                    "SL cooldown set | %s | bars=%d | until=%s",
+                    instrument, cooldown_bars, until.strftime("%Y-%m-%d %H:%M"),
+                )
+
+    def seed_sl_cooldown(self, instrument: str, expiry_ts: float) -> None:
+        """Restore a persisted SL cooldown on startup (live mode only).
+
+        expiry_ts: Unix timestamp (float) as stored in SQLite state table.
+        Ignores already-expired entries so stale DB rows are harmless.
+        """
+        until = datetime.fromtimestamp(expiry_ts)
+        if until > datetime.now():
+            self._sl_cooldown[instrument] = until
+            logger.info("Seeded SL cooldown | %s | until=%s", instrument, until.strftime("%Y-%m-%d %H:%M"))
+
+    def _bars_to_timedelta(self, bars: int) -> timedelta:
+        """Convert a bar count to a calendar timedelta.
+
+        Uses config.candle_minutes and assumes a 6.5-hour trading day (375 minutes),
+        then scales to calendar days (×7/5 for weekends).
+        """
+        bars_per_day = 375 / max(config.candle_minutes, 1)
+        trading_days = bars / bars_per_day
+        calendar_days = trading_days * (7 / 5)
+        return timedelta(days=calendar_days)
+
     def reset_day(self):
         self._realised_pnl = 0.0
         self._halted = False
         logger.info("Risk manager daily reset")
+        # SL cooldowns are multi-day — intentionally NOT reset here
