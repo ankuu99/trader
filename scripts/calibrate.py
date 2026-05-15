@@ -34,20 +34,20 @@ setup(log_dir=config.log_dir, level="WARNING")  # suppress info noise during cal
 logger = get_logger(__name__)
 
 PARAM_GRID = {
-    "warmup_bars":         [100, 150, 200, 300, 400],
-    "lookback_bars":       [400, 500, 600, 800],
+    "warmup_bars":         [300],
+    "lookback_bars":       [600, 1200, 2400],
     "threshold":           [0.75, 0.80, 0.85, 0.90],
-    "profit_pct":          [6.0, 8.0, 10.0, 15.0, 20.0, 25.0, 30.0],
+    "profit_pct":          [10, 15, 20],
     "trail_pct":           [0.25, 1, 1.5],
-    "stop_pct":            [4.0, 5.0, 6.0],
-    "hold_bars":           [200, 250, 300],
+    "stop_pct":            [5, 7, 10, 15, 20],
+    "hold_bars":           [250, 400, 600],
     "retrain_every":       [25],
-    "extrema_order":       [3, 5, 7],
+    "extrema_order":       [5, 10],
     "sell_threshold":      [0.55, 0.60, 0.65, 0.70, 0.75],
-    "sell_min_pct":        [1.0, 2.0, 3.0, 5.0],
+    "sell_min_pct":        [5.0, 7, 10, 15],
     "veto_threshold":      [0.40, 0.50, 0.60],
-    "min_hold_before_exit": [10, 25, 50],
-    "volume_ma_bars":      [10, 20, 30, 40],
+    "min_hold_before_exit": [1, 5, 10, 25, 50],
+    "volume_ma_bars":      [20],
 }
 
 _KEYS = list(PARAM_GRID.keys())
@@ -229,7 +229,7 @@ def main():
             except Exception as exc:
                 print(f"[{done:{width}}/{len(combinations)}] {param_str}  ERROR: {exc}", flush=True)
 
-    results.sort(key=lambda r: r["return_pct"], reverse=True)
+    results.sort(key=lambda r: r["sharpe_proxy"], reverse=True)
     _print_results(results)
 
 
