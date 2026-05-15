@@ -1,4 +1,5 @@
 import os
+from datetime import time
 from pathlib import Path
 
 import yaml
@@ -141,6 +142,18 @@ class Config:
     @property
     def ui_port(self) -> int:
         return int(self._data.get("ui", {}).get("port", 8080))
+
+    @property
+    def trading_start(self) -> time:
+        val = self._data["risk"].get("trading_start", "09:30")
+        h, m = val.split(":")
+        return time(int(h), int(m))
+
+    @property
+    def trading_end(self) -> time:
+        val = self._data["risk"].get("trading_end", "15:30")
+        h, m = val.split(":")
+        return time(int(h), int(m))
 
     @property
     def log_level(self) -> str:

@@ -20,8 +20,6 @@ Config keys (under strategies.lr_extrema in config.yaml):
     hold_bars     : max candles to stay in a position        (default 150)
     retrain_every : retrain model every N new candles       (default 50)
     extrema_order : neighbourhood half-window for extrema   (default 5)
-    trading_start : earliest candle time for ENTRY signals  (default "09:45")
-    trading_end   : latest candle time for ENTRY signals    (default "15:15")
     sell_threshold      : min P(local-max) to trigger pattern-top EXIT   (default 0.65)
     veto_threshold      : max P(local-max) allowed at entry — blocks entry if model
                           thinks a top is forming simultaneously           (default 0.50)
@@ -33,12 +31,12 @@ Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
 
 from collections import deque
-from datetime import time
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import MinMaxScaler
 
+from trader.core.config import config
 from trader.core.logger import get_logger
 from trader.strategies.base import Direction, Signal, SignalType, Strategy
 
@@ -69,15 +67,6 @@ class LRExtremaStrategy(Strategy):
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
         self._entry_min_norm_price: float = params.get("entry_min_norm_price", 0.0)
         self._entry_require_prior_decline: bool = bool(params.get("entry_require_prior_decline", False))
-
-        def _parse_time(val: str | None, default: time) -> time:
-            if val is None:
-                return default
-            h, m = val.split(":")
-            return time(int(h), int(m))
-
-        self._trading_start: time = _parse_time(params.get("trading_start"), time(9, 30))
-        self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 30))
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -177,11 +166,13 @@ class LRExtremaStrategy(Strategy):
                             exit_reason="PATTERN_TOP",
                         )
 
-        # --- Trading window gate (entry only) ---
+        # --- Trading window pre-filter (entry only) ---
+        # Must run before _entry_price is set so the pending-fill guard is never
+        # triggered by a candle that the risk manager would reject anyway.
         ts = candle.get("timestamp")
         if ts is not None:
             candle_time = ts.time() if hasattr(ts, "time") else None
-            if candle_time is not None and not (self._trading_start <= candle_time <= self._trading_end):
+            if candle_time is not None and not (config.trading_start <= candle_time <= config.trading_end):
                 self._candles_since_train += 1
                 return None
 
@@ -231,6 +222,7 @@ class LRExtremaStrategy(Strategy):
                         strategy=self.name,
                         stop_loss_hint=sl_hint,
                         target_price=None,  # trailing stop manages upside; no fixed target
+                        timestamp=candle.get("timestamp"),
                     )
 
         self._candles_since_train += 1

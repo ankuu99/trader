@@ -10,8 +10,29 @@ Sizing: fixed % stop-loss, quantity = max_risk_per_trade / sl_distance
 """
 
 from dataclasses import dataclass
+from datetime import time
+from zoneinfo import ZoneInfo
 
 from trader.core.config import config
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+# TODO: move _signal_time_ist to a shared trader/core/time_utils.py utility and
+#       replace all other raw .time() calls on candle/tick timestamps throughout
+#       the codebase (lr_extrema.py, live.py, etc.) with it for consistency.
+def _signal_time_ist(ts) -> time | None:
+    """Extract the time component of a timestamp, normalised to IST.
+
+    Kite returns naive IST datetimes, but handles tz-aware datetimes safely
+    by converting to IST before extracting .time(), preventing stale UTC
+    comparisons if the data source ever changes.
+    """
+    if ts is None or not hasattr(ts, "time"):
+        return None
+    if getattr(ts, "tzinfo", None) is not None:
+        ts = ts.astimezone(_IST)
+    return ts.time()
 from trader.core.logger import get_logger
 from trader.notifications import telegram
 from trader.strategies.base import Direction, Signal, SignalType
@@ -83,6 +104,15 @@ class RiskManager:
         if signal.instrument in self._pending_orders:
             logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
             self._last_reject_reason = "pending_order_exists"
+            return None
+
+        candle_time = _signal_time_ist(signal.timestamp)
+        if candle_time is not None and not (config.trading_start <= candle_time <= config.trading_end):
+            logger.debug(
+                "Signal rejected — outside trading window | %s | %s not in [%s, %s]",
+                signal.instrument, candle_time, config.trading_start, config.trading_end,
+            )
+            self._last_reject_reason = "outside_trading_window"
             return None
 
         price = signal.price_hint
