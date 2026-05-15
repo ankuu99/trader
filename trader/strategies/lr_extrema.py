@@ -130,6 +130,7 @@ class LRExtremaStrategy(Strategy):
                 signal_type=SignalType.EXIT,
                 price_hint=close,
                 strategy=self.name,
+                timestamp=candle.get("timestamp"),
             )
 
         # --- Model-based exit (pattern top detection, on-candle) ---
@@ -164,11 +165,12 @@ class LRExtremaStrategy(Strategy):
                             price_hint=close,
                             strategy=self.name,
                             exit_reason="PATTERN_TOP",
+                            timestamp=candle.get("timestamp"),
                         )
 
         # --- Trading window pre-filter (entry only) ---
         # Must run before _entry_price is set so the pending-fill guard is never
-        # triggered by a candle that the risk manager would reject anyway.
+        # triggered by a candle the risk manager would reject anyway.
         ts = candle.get("timestamp")
         if ts is not None:
             candle_time = ts.time() if hasattr(ts, "time") else None
@@ -274,6 +276,7 @@ class LRExtremaStrategy(Strategy):
                 signal_type=SignalType.EXIT,
                 price_hint=last_price,
                 strategy=self.name,
+                timestamp=tick.get("timestamp"),
             )
 
         return None
@@ -294,9 +297,9 @@ class LRExtremaStrategy(Strategy):
                 fill_price = order.get("price") or order.get("average_price")
                 if fill_price:
                     self._entry_price = float(fill_price)
-                # Restore held_bars from synthetic fill on restart; normal fills pass 0 
-                held_bars = order.get("_held_bars")   
-                self._held_bars = int(held_bars) if held_bars is not None else 0 
+                # Restore held_bars from synthetic fill on restart; normal fills pass 0
+                held_bars = order.get("_held_bars")
+                self._held_bars = int(held_bars) if held_bars is not None else 0
             elif signal_type == SignalType.EXIT:
                 self._reset_position_state()
         elif status in ("REJECTED", "CANCELLED"):

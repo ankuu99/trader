@@ -91,6 +91,16 @@ class RiskManager:
         if signal.signal_type == SignalType.EXIT:
             return self._validate_exit(signal)
 
+        # Trading window — entry signals only (safety net; strategies should pre-filter too).
+        candle_time = _signal_time_ist(signal.timestamp)
+        if candle_time is not None and not (config.trading_start <= candle_time <= config.trading_end):
+            logger.debug(
+                "Signal rejected — outside trading window | %s | %s not in [%s, %s]",
+                signal.instrument, candle_time, config.trading_start, config.trading_end,
+            )
+            self._last_reject_reason = "outside_trading_window"
+            return None
+
         if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
             logger.warning("Signal rejected — max open positions | %s", signal.instrument)
             self._last_reject_reason = "max_positions"
@@ -104,15 +114,6 @@ class RiskManager:
         if signal.instrument in self._pending_orders:
             logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
             self._last_reject_reason = "pending_order_exists"
-            return None
-
-        candle_time = _signal_time_ist(signal.timestamp)
-        if candle_time is not None and not (config.trading_start <= candle_time <= config.trading_end):
-            logger.debug(
-                "Signal rejected — outside trading window | %s | %s not in [%s, %s]",
-                signal.instrument, candle_time, config.trading_start, config.trading_end,
-            )
-            self._last_reject_reason = "outside_trading_window"
             return None
 
         price = signal.price_hint
