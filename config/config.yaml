@@ -42,7 +42,7 @@ strategies:
     sell_min_pct: 7.0
     sell_threshold: 0.60
     min_hold_before_exit: 1
-    stop_pct: 20
+    stop_pct: 10
     hold_bars: 400
     retrain_every: 25
     extrema_order: 10
