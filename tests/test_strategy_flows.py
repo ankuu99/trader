@@ -7,7 +7,8 @@ so tests are deterministic and fast without requiring real training data.
 """
 import numpy as np
 import pytest
-from datetime import datetime
+from datetime import datetime, time
+from unittest.mock import patch, PropertyMock
 
 from trader.strategies.lr_extrema import LRExtremaStrategy
 from trader.strategies.base import Direction, SignalType
@@ -69,6 +70,7 @@ def _ready_strategy(*, entry_price: float | None = None) -> LRExtremaStrategy:
     strat._candles = [_candle(100.0) for _ in range(25)]
     if entry_price is not None:
         strat._entry_price = entry_price
+        strat._fill_price = entry_price  # simulate confirmed fill
         strat.position = Direction.BUY
     return strat
 
@@ -111,19 +113,25 @@ def test_no_exit_while_order_pending():
 # Exit conditions
 # ---------------------------------------------------------------------------
 
-def test_exit_on_profit_target():
+def test_exit_on_trailing_stop():
+    """Trailing stop fires once profit floor is hit then price pulls back by trail_pct."""
     strat = _ready_strategy(entry_price=100.0)
 
-    signal = strat.on_candle(_candle(104.5))  # +4.5% > profit_pct=4.0
+    # Tick 1: +5% > profit_pct=4.0 — activates trailing, no exit yet
+    signal1 = strat.on_tick({"last_price": 105.0})
+    assert signal1 is None
+    assert strat._trailing_active
 
-    assert signal is not None
-    assert signal.signal_type == SignalType.EXIT
+    # Tick 2: drop > trail_pct=1.5% from peak 105 → 105 * 0.985 = 103.425
+    signal2 = strat.on_tick({"last_price": 103.4})
+    assert signal2 is not None
+    assert signal2.signal_type == SignalType.EXIT
 
 
 def test_exit_on_stop_loss():
     strat = _ready_strategy(entry_price=100.0)
 
-    signal = strat.on_candle(_candle(97.5))  # -2.5% < -stop_pct=-2.0
+    signal = strat.on_tick({"last_price": 97.5})  # -2.5% < -stop_pct=-2.0
 
     assert signal is not None
     assert signal.signal_type == SignalType.EXIT
@@ -188,3 +196,61 @@ def test_no_new_entry_while_in_position():
     # Either None or an EXIT — never an ENTRY
     if signal is not None:
         assert signal.signal_type == SignalType.EXIT
+
+
+# ---------------------------------------------------------------------------
+# Bug: SL cancel retrigger
+# ---------------------------------------------------------------------------
+
+def test_sl_retriggers_after_exit_order_cancelled():
+    """
+    When an EXIT order (stop-loss) is cancelled or rejected, the strategy must
+    re-emit the EXIT signal on the next tick so the position can still be closed.
+
+    Root cause: _reset_position_state() clears _entry_price at signal-emission
+    time, so on_tick short-circuits on the next tick and the SL never fires again.
+    """
+    strat = _ready_strategy(entry_price=100.0)
+
+    # Tick below stop-loss (-2.5% < -stop_pct=-2.0) → EXIT emitted, state reset
+    signal1 = strat.on_tick({"last_price": 97.5})
+    assert signal1 is not None
+    assert signal1.signal_type == SignalType.EXIT
+
+    # Simulate the EXIT order being cancelled (e.g. user cancels on Kite)
+    strat.on_order_update({
+        "status":      "CANCELLED",
+        "signal_type": SignalType.EXIT,
+        "direction":   "SELL",
+    })
+
+    # Price is still below stop-loss — SL must retrigger
+    signal2 = strat.on_tick({"last_price": 97.5})
+    assert signal2 is not None, "SL must retrigger after EXIT order is cancelled"
+    assert signal2.signal_type == SignalType.EXIT
+
+
+# ---------------------------------------------------------------------------
+# Bug: exit signals bypass trading window
+# ---------------------------------------------------------------------------
+
+def test_no_exit_signal_outside_trading_window():
+    """
+    A candle-based exit (hold_bars timeout) must NOT emit a signal when the
+    candle timestamp falls outside the configured trading window.
+
+    The window is enforced via config.trading_start / config.trading_end.
+    """
+    strat = _ready_strategy(entry_price=100.0)
+    strat._held_bars = _PARAMS["hold_bars"] - 1  # one away from hold_bars limit
+
+    # Candle at 09:15 — before trading_start (09:30)
+    early_candle = _candle(100.0)
+    early_candle["timestamp"] = datetime(2025, 6, 1, 9, 15)
+
+    with patch("trader.strategies.lr_extrema.config") as mock_cfg:
+        mock_cfg.trading_start = time(9, 30)
+        mock_cfg.trading_end   = time(15, 30)
+        signal = strat.on_candle(early_candle)
+
+    assert signal is None, "Hold-bars exit must not fire outside the trading window"

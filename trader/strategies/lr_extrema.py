@@ -76,6 +76,7 @@ class LRExtremaStrategy(Strategy):
 
         # exit tracking
         self._entry_price: float | None = None
+        self._fill_price: float | None = None   # confirmed fill price; survives _reset_position_state()
         self._held_bars: int = 0
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
@@ -112,6 +113,20 @@ class LRExtremaStrategy(Strategy):
         if not self._trained or self._candles_since_train >= self._retrain_every:
             self._train()
             self._candles_since_train = 0
+
+        # --- Trading window gate (all signals, entry and exit) ---
+        # Checked once here so all exit paths (hold_bars, pattern_top) and entry
+        # are gated in a single place.  Does NOT modify state — the position survives
+        # outside the window; the SL / hold_bars exit will fire on the next in-window candle.
+        ts = candle.get("timestamp")
+        _candle_time = ts.time() if (ts is not None and hasattr(ts, "time")) else None
+        _outside_window = (
+            _candle_time is not None
+            and not (config.trading_start <= _candle_time <= config.trading_end)
+        )
+        if _outside_window:
+            self._candles_since_train += 1
+            return None
 
         # --- Hold-bars timeout (candle-granularity time cap) ---
         # Hard stop and trailing stop fire tick-by-tick via on_tick; hold_bars is
@@ -167,16 +182,6 @@ class LRExtremaStrategy(Strategy):
                             exit_reason="PATTERN_TOP",
                             timestamp=candle.get("timestamp"),
                         )
-
-        # --- Trading window pre-filter (entry only) ---
-        # Must run before _entry_price is set so the pending-fill guard is never
-        # triggered by a candle the risk manager would reject anyway.
-        ts = candle.get("timestamp")
-        if ts is not None:
-            candle_time = ts.time() if hasattr(ts, "time") else None
-            if candle_time is not None and not (config.trading_start <= candle_time <= config.trading_end):
-                self._candles_since_train += 1
-                return None
 
         # --- Entry prediction ---
         # Both gates must pass: P(local-min) >= threshold AND P(local-max) < veto_threshold.
@@ -239,6 +244,12 @@ class LRExtremaStrategy(Strategy):
         if self.is_flat() or self._entry_price is None:
             return None
 
+        # Trading window gate — no SL/trailing exits outside the window
+        ts = tick.get("timestamp")
+        tick_time = ts.time() if (ts is not None and hasattr(ts, "time")) else None
+        if tick_time is not None and not (config.trading_start <= tick_time <= config.trading_end):
+            return None
+
         last_price = tick.get("last_price")
         if last_price is None:
             return None
@@ -297,6 +308,7 @@ class LRExtremaStrategy(Strategy):
                 fill_price = order.get("price") or order.get("average_price")
                 if fill_price:
                     self._entry_price = float(fill_price)
+                    self._fill_price = float(fill_price)  # preserve confirmed fill for retrigger
                 # Restore held_bars from synthetic fill on restart; normal fills pass 0
                 held_bars = order.get("_held_bars")
                 self._held_bars = int(held_bars) if held_bars is not None else 0
@@ -309,6 +321,14 @@ class LRExtremaStrategy(Strategy):
                     self.instrument, status,
                 )
                 self._reset_position_state()
+            elif signal_type == SignalType.EXIT:
+                # EXIT order cancelled/rejected — restore entry state so SL/trailing can retrigger
+                logger.warning(
+                    "LR-Extrema | %s | EXIT order %s — restoring entry state for retrigger",
+                    self.instrument, status,
+                )
+                if self._fill_price is not None:
+                    self._entry_price = self._fill_price
 
     # ------------------------------------------------------------------
     # Training
