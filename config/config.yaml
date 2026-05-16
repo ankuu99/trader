@@ -50,6 +50,7 @@ strategies:
     extrema_order: 10
     veto_threshold: 0.5
     volume_ma_bars: 20
+    atr_period: 14              # lookback for ATR, RSI, and EMA-dist features
     entry_min_volume_ratio: 0  # e.g. 1.3 — block if volume < 1.3x average
     entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range
     entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising
