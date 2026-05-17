@@ -25,10 +25,9 @@ Config keys (under strategies.lr_extrema in config.yaml):
                           thinks a top is forming simultaneously           (default 0.50)
     min_hold_before_exit: min held_bars before model-based exit can fire  (default 3)
     volume_ma_bars      : rolling window for volume normalisation          (default 20)
-    atr_period          : lookback for ATR, RSI, and EMA-dist features    (default 14)
 
 Based on: github.com/kaneelgit/Trading-strategy-
-Features (9): volume_ratio, norm_price, slope3/5/10/20, ATR-ratio, RSI, EMA20-dist.
+Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
 
 from collections import deque
@@ -63,7 +62,6 @@ class LRExtremaStrategy(Strategy):
         self._veto_threshold: float = params.get("veto_threshold", 0.50)
         self._min_hold_before_exit: int = params.get("min_hold_before_exit", 3)
         self._volume_ma_bars: int = params.get("volume_ma_bars", 20)
-        self._atr_period: int = params.get("atr_period", 14)
 
         # --- Entry filter gates (disabled by default — 0/False means off) ---
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
@@ -387,24 +385,16 @@ class LRExtremaStrategy(Strategy):
     # ------------------------------------------------------------------
 
     def _compute_features(self, candles: list[dict]) -> np.ndarray | None:
-        """Return feature vector for the last candle in *candles*, or None if not enough history.
+        """Return feature vector [volume_ratio, norm_price, slope3, slope5, slope10, slope20]
+        for the last candle in *candles*, or None if not enough history.
 
-        Features (9):
-          0  volume_ratio  — current vol / rolling mean (scale-invariant)
-          1  norm_price    — (close - low) / (high - low) within the bar
-          2  slope3        — LR slope over last 3 % returns
-          3  slope5        — LR slope over last 5 % returns
-          4  slope10       — LR slope over last 10 % returns
-          5  slope20       — LR slope over last 20 % returns
-          6  atr_ratio     — ATR(atr_period) / close (normalised volatility)
-          7  rsi           — RSI(atr_period) (0–100)
-          8  ema20_dist    — (close - EMA20) / ATR(atr_period) (trend position vs volatility)
+        Slopes are computed over % returns (first-order differences) rather than
+        absolute prices, making features stationary and scale-invariant across
+        different price levels and time periods.  Volume is normalised as a ratio
+        to the rolling mean over volume_ma_bars candles for the same reason.
         """
-        min_candles = max(21, self._atr_period + 1)
-        if len(candles) < min_candles:
+        if len(candles) < 21:
             return None
-        if not isinstance(candles, list):
-            candles = list(candles)
         last = candles[-1]
         closes = [c["close"] for c in candles]
         high, low, close = last["high"], last["low"], last["close"]
@@ -428,21 +418,7 @@ class LRExtremaStrategy(Strategy):
         slope10 = self._linreg_slope(returns[-10:])
         slope20 = self._linreg_slope(returns[-20:])
 
-        # ATR and RSI both use atr_period for consistency with the stop-loss calculation
-        atr = self._compute_atr(candles, period=self._atr_period)
-        atr_ratio = atr / close if close > 0 else 0.0
-
-        rsi = self._compute_rsi(closes, period=self._atr_period)
-
-        # EMA-20 distance normalised by ATR
-        ema20 = self._compute_ema(closes, period=20)
-        ema20_dist = (close - ema20) / atr if atr > 0 else 0.0
-
-        return np.array(
-            [volume_ratio, norm_price, slope3, slope5, slope10, slope20,
-             atr_ratio, rsi, ema20_dist],
-            dtype=float,
-        )
+        return np.array([volume_ratio, norm_price, slope3, slope5, slope10, slope20], dtype=float)
 
     @staticmethod
     def _linreg_slope(prices: list[float]) -> float:
@@ -455,45 +431,6 @@ class LRExtremaStrategy(Strategy):
         num = sum((i - x_mean) * (prices[i] - y_mean) for i in range(n))
         den = sum((i - x_mean) ** 2 for i in range(n))
         return num / den if den != 0.0 else 0.0
-
-    @staticmethod
-    def _compute_atr(candles: list[dict], period: int = 14) -> float:
-        """Average True Range over the last *period* candles."""
-        if len(candles) < period + 1:
-            highs = [c["high"] for c in candles[-period:]]
-            lows  = [c["low"]  for c in candles[-period:]]
-            return sum(h - l for h, l in zip(highs, lows)) / len(highs) if highs else 0.0
-        trs = []
-        for i in range(len(candles) - period, len(candles)):
-            h, l, prev_c = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
-            trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
-        return sum(trs) / len(trs)
-
-    @staticmethod
-    def _compute_rsi(closes: list[float], period: int = 14) -> float:
-        """RSI using Wilder's smoothed method. Returns value in [0, 100]."""
-        if len(closes) < period + 1:
-            return 50.0
-        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-        gains  = [max(d, 0.0) for d in deltas[-period:]]
-        losses = [abs(min(d, 0.0)) for d in deltas[-period:]]
-        avg_gain = sum(gains) / period
-        avg_loss = sum(losses) / period
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1.0 + rs))
-
-    @staticmethod
-    def _compute_ema(closes: list[float], period: int = 20) -> float:
-        """Exponential moving average over *closes*, returning the last value."""
-        if len(closes) < period:
-            return closes[-1] if closes else 0.0
-        k = 2.0 / (period + 1)
-        ema = sum(closes[:period]) / period
-        for price in closes[period:]:
-            ema = price * k + ema * (1 - k)
-        return ema
 
     @staticmethod
     def _find_local_extrema(
