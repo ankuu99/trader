@@ -133,20 +133,54 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             f"{t.get('product','CNC'):<4}  {t['reason']}"
         )
 
-    print(f"\n  {'─'*W}")
-    print(f"  Trades       : {m['total_trades']}  (W:{m['wins']}  L:{m['losses']})")
-    print(f"  Win Rate     : {m['win_rate']:.1f}%  (count)   Wt. Win%: {m['money_weighted_win_rate']:.1f}%  (by ₹)")
-    print(f"  Avg Win      : ₹{m['avg_win']:>10,.2f}    Avg Loss : ₹{m['avg_loss']:>10,.2f}")
-    print(f"  Profit Factor: {m['profit_factor']:.2f}")
+    C = 28  # width of each column (excluding separator)
+    col1 = [
+        f"{'Trades':<12}: {m['total_trades']}",
+        f"{'W / L':<12}: {m['wins']} / {m['losses']}",
+        f"{'Win Rate':<12}: {m['win_rate']:.1f}%",
+        f"{'Wt. Win%':<12}: {m['money_weighted_win_rate']:.1f}%",
+        f"{'Avg Win':<12}: ₹{m['avg_win']:,.2f}",
+        f"{'Avg Loss':<12}: ₹{m['avg_loss']:,.2f}",
+        f"{'Prof.Factor':<12}: {m['profit_factor']:.2f}",
+    ]
+    col2 = [
+        f"{'Total costs':<12}: ₹{total_costs:,.2f}",
+        f"{'Total P&L':<12}: ₹{m['total_pnl']:,.2f}",
+        f"{'Return':<12}: {m['return_pct']:.2f}%",
+        f"{'Max DD':<12}: ₹{m['max_drawdown']:,.0f}  ({m['max_drawdown_pct']:.1f}%)",
+    ]
+    col3 = [
+        f"{'Sharpe*':<8}: {m['sharpe_proxy']:.3f}",
+        f"{'Sortino':<8}: {m['sortino_ratio']:.3f}",
+        f"{'Calmar':<8}: {m['calmar_ratio']:.3f}",
+    ]
+    n = max(len(col1), len(col2), len(col3))
+    col1 += [""] * (n - len(col1))
+    col2 += [""] * (n - len(col2))
+    col3 += [""] * (n - len(col3))
+
+    print(f"\n  {'─'*(C*3+6)}")
+    for a, b, c in zip(col1, col2, col3):
+        print(f"  {a:<{C}}  │  {b:<{C}}  │  {c}")
+
+    from collections import defaultdict
+    reason_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0})
+    for t in trades:
+        r = t.get("reason", "UNKNOWN")
+        reason_stats[r]["count"] += 1
+        reason_stats[r]["pnl"] += t["pnl"]
+        if t["pnl"] > 0:
+            reason_stats[r]["wins"] += 1
     print(f"  {'─'*W}")
-    print(f"  Total costs  : ₹{total_costs:,.2f}")
-    print(f"  Total P&L    : ₹{m['total_pnl']:,.2f}  (net of costs)")
-    print(f"  Return       : {m['return_pct']:.2f}%")
-    print(f"  Max DD       : ₹{m['max_drawdown']:,.2f}  ({m['max_drawdown_pct']:.2f}% of capital)")
-    print(f"  {'─'*W}")
-    print(f"  Sharpe*      : {m['sharpe_proxy']:.3f}")
-    print(f"  Sortino      : {m['sortino_ratio']:.3f}")
-    print(f"  Calmar       : {m['calmar_ratio']:.3f}")
+    print(f"  Exit reasons:")
+    max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
+    for reason in ["SL", "TRAILING", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
+        if reason not in reason_stats:
+            continue
+        s = reason_stats[reason]
+        bar = "█" * int(s["count"] / max_count * 20)
+        wr = s["wins"] / s["count"] * 100
+        print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar}")
 
     mr = m.get("monthly_returns", {})
     if mr:
