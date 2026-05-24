@@ -1,472 +1,73 @@
-# Trader — Project Reference for Claude Agents
+# CLAUDE.md
 
-## What this is
-An automated equity trading system for Indian markets (NSE) using Zerodha/Kite. Supports paper and live modes. Strategies emit signals; a risk layer sizes and places orders; a live WebSocket feed assembles candles.
-
-The system is **long-only, delivery (CNC) only**, targeting multi-day swing trades on NSE-listed equities. It is not an intraday system.
+Behavioral guidelines for Claude agents working in this repo. For full project architecture, strategy details, and operational runbooks, see [`docs/project_reference.md`](docs/project_reference.md).
 
 ---
 
-## Running the system
+## Project snapshot
 
-```bash
-python main.py                        # paper/live trading (uses config/config.yaml)
-python main.py --config <path>        # alternate config
-python scripts/backtest.py --from 2025-01-01 [--to 2025-12-31] [--timeframe 5minute|15minute|...]
-python scripts/calibrate.py --from 2025-01-01 [--mode grid|random] [--iterations 50] [--workers N] [--params profit_pct stop_pct ...]
-python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31 [--window 6] [--step 3] [--symbols NSE:X] [--timeframe ...]
-python scripts/screen.py --from 2025-01-01 [--min-trades 2] [--output results.csv] [--timeframe ...]
-python scripts/kite_auth_server.py    # refresh Kite access token (run on EC2, open URL in any browser)
+Automated NSE equity trading system (Zerodha/Kite). Long-only, CNC delivery, multi-day swing trades. Strategies emit signals → RiskManager sizes positions → OrderManager places orders. Paper and live modes share the same strategy/risk code; only the order execution layer differs.
+
+Key entry points: `main.py` (live/paper), `scripts/backtest.py`, `scripts/calibrate.py`, `scripts/screen.py`.
+
+---
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 ```
 
----
-
-## Project layout
-
-```
-trader/
-├── main.py                        # entry point — wires everything together
-├── config/
-│   ├── config.yaml                # all runtime config (env, capital, strategies, risk)
-│   └── .env                       # secrets: KITE_API_KEY, KITE_API_SECRET, KITE_ACCESS_TOKEN,
-│                                  #          TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-├── scripts/
-│   ├── backtest.py                # standalone backtest runner (thin wrapper over engine)
-│   ├── calibrate.py               # grid/random param search for LRExtremaStrategy
-│   ├── screen.py                  # backtest LRExtrema against all NSE EQ stocks
-│   ├── backtest_rolling.py        # rolling-window backtest — slides window across date range, consolidated output
-│   ├── kite_auth_server.py        # OAuth flow — runs on EC2, works from any SSH client
-│   ├── trader.service             # systemd unit file for EC2 deployment
-│   └── test_telegram.py           # smoke test for Telegram notifications
-└── trader/
-    ├── auth/session.py            # create_kite() — authenticates and validates token
-    ├── backtest/
-    │   ├── __init__.py
-    │   └── engine.py              # run_backtest() + compute_metrics() — shared by all scripts
-    ├── core/
-    │   ├── config.py              # Config class + singleton `config`
-    │   └── logger.py              # get_logger(), setup()
-    ├── costs.py                   # Zerodha brokerage calculator (CNC/MIS)
-    ├── data/
-    │   ├── historical.py          # get_candles(), warm_up() via Kite REST
-    │   ├── live.py                # LiveFeed — KiteTicker WebSocket → candle assembly
-    │   └── store.py               # SQLite via Store class (candles, orders, signals, state tables)
-    ├── notifications/telegram.py  # Telegram bot alerts (order fill, P&L, halt, error, token reminder)
-    ├── orders/manager.py          # OrderManager — paper fill simulation + live Kite orders + GTT
-    ├── portfolio/tracker.py       # PortfolioTracker — paper position tracking / live Kite fetch
-    ├── risk/manager.py            # RiskManager — signal validation, position sizing, exit routing
-    ├── scheduler/jobs.py          # APScheduler — pre-market (09:00), post-market (15:35), token reminder (08:30)
-    └── strategies/
-        ├── base.py                # Strategy ABC, Signal dataclass, Direction/SignalType enums
-        ├── registry.py            # build_strategies(instrument, config) factory
-        └── lr_extrema.py          # LRExtremaStrategy — self-training logistic regression
-```
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ---
 
-## Config keys (config/config.yaml)
-
-```yaml
-env: paper | live
-candle_timeframe: 5minute | 15minute | 30minute | 60minute | day
-capital:
-  total: 50000
-  max_risk_per_trade_pct: 7.0
-  daily_loss_limit_pct: 10.0
-watchlist:
-  - NSE:SYMBOL
-interested:          # instruments shown in UI but not traded
-  - NSE:SYMBOL
-strategies:
-  <name>:
-    enabled: true | false
-    ...params
-risk:
-  gtt_enabled: true | false       # master GTT on/off switch
-  order_type: market | limit      # live mode only; paper always fills at next candle open
-  max_open_positions: 5
-  default_sl_pct: 2               # fallback SL% when signal has no stop_loss_hint
-  risk_reward: 4                  # fallback target multiplier when signal has no target_price
-  max_capital_per_stock_pct: 25.0
-data:
-  db_path: data/market.db
-  historical_cache_days: 90
-```
-
----
-
-## Core data flow
-
-```
-LiveFeed (KiteTicker ticks)
-  └─ assemble candles by timeframe
-      └─ handle_candle() in main.py
-          ├─ orders.on_candle()         → fills pending paper orders at open price
-          └─ strategy.on_candle()       → returns Signal | None
-              └─ risk.validate(signal)  → returns Order | None
-                  └─ orders.place(order)
-                      ├─ paper: queues in _pending_paper (fills next candle open)
-                      └─ live:  kite.place_order() + optional GTT OCO
-
-LiveFeed (KiteTicker on_order_update) [live mode only]
-  └─ orders.on_kite_order_update()
-      └─ _dispatch(record)
-          └─ handle_order_update() in main.py
-              ├─ BUY fill → risk.on_order_filled(), portfolio.on_order_filled()
-              ├─ SELL fill → risk.close_position()
-              ├─ telegram.notify_order_filled()
-              └─ strategy.on_order_update()   → updates strategy position state + _entry_price
-```
-
----
-
-## Signal contract
-
-`Signal` fields (from `trader/strategies/base.py`):
-- `instrument`: `"NSE:SYMBOL"`
-- `direction`: `Direction.BUY | Direction.SELL`
-- `signal_type`: `SignalType.ENTRY | SignalType.EXIT`
-- `price_hint`: float — indicative price (LTP / candle close)
-- `strategy`: str — strategy name
-- `atr`: float | None — optional ATR for risk sizing
-- `target_price`: float | None — if set, RiskManager uses this as target (overrides risk_reward fallback)
-- `stop_loss_hint`: float | None — if set, RiskManager uses this as SL price (overrides default_sl_pct fallback)
-- `exit_reason`: str | None — EXIT only; reason code forwarded to backtest trade record (e.g. `"PATTERN_TOP"`); defaults to `"STRATEGY"` if absent
-
-**EXIT signals** bypass RiskManager's position-conflict check. RiskManager returns a SELL Order using the quantity stored from the original ENTRY fill.
-
-**`signal_type` flows through the Order and dispatched record** — `strategy.on_order_update()` reads it to distinguish entry fills (sets `_entry_price`) from exit fills (clears state).
-
----
-
-## Adding a new strategy
-
-1. Create `trader/strategies/<name>.py` — subclass `Strategy`, implement `name` property and `on_candle(candle) -> Signal | None`
-2. Register in `trader/strategies/registry.py` — add to `build_strategies()`
-3. Add config block under `strategies:` in `config/config.yaml`
-
-Key rules:
-- Strategies never import from `orders/` or `risk/`
-- Use `self.is_flat()` to gate entries
-- Set `self._entry_price = price_hint` at signal time to guard against re-entry while awaiting fill; override with real fill price in `on_order_update()`
-- Pass `stop_loss_hint` and `target_price` in the ENTRY signal so RiskManager and the backtest engine use the strategy's own levels rather than config fallbacks
-- Override `on_order_update()` if strategy needs to track fill state (e.g. `_entry_price`)
-- For strategy-driven exits: emit `Signal(direction=BUY, signal_type=EXIT, ...)`
-
----
-
-## RiskManager behaviour
-
-- ENTRY signals: checks halt, max positions, duplicate instrument → sizes quantity
-- EXIT signals: skips conflict check → returns SELL Order with stored quantity
-- `_open_positions: dict[str, int]` — instrument → quantity
-- `_position_values: dict[str, float]` — instrument → entry_price × qty (for capital tracking)
-- `_cumulative_pnl: float` — lifetime P&L, never resets; persisted to SQLite `state` table in live mode so it survives restarts
-- `capital_available` property — `total_capital + cumulative_pnl - capital_deployed - pending`; quantity is capped so portfolio never over-deploys. In live mode `total_capital` is capped at startup by Kite available cash (see Known design decisions)
-- `seed_cumulative_pnl(pnl)` — called on startup in live mode to restore cumulative P&L from the `state` table
-- `cumulative_pnl` property — read-only access to `_cumulative_pnl`
-- `on_order_filled()` records deployed capital; `close_position()` frees it and adds to `_cumulative_pnl`
-- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`); surfaced in UI signals table
-
----
-
-## OrderManager behaviour
-
-- **Paper mode**: queues orders in `_pending_paper`; MARKET fills at next candle open, LIMIT fills only if price touches the limit level during a candle (low <= limit for BUY, high >= limit for SELL); fill price = limit price exactly
-- **Live mode**: places order via `kite.place_order()` with `order_type=MARKET` (uses `market_protection=-1`) or `order_type=LIMIT` (uses `price=limit_price`); optionally places GTT OCO after BUY fill confirmation
-- **EOD cancellation (LIMIT mode)**: unfilled LIMIT orders are cancelled at day boundary — `clear_pending()` dispatches CANCELLED for each so strategy clears `_entry_price` and risk releases capital
-- GTT only placed on BUY/ENTRY orders, never on SELL/EXIT orders
-- Dispatched fill records include `signal_type` and `target_price` from the original Order so callbacks can distinguish entry vs exit fills
-
----
-
-## Backtest engine (`trader/backtest/engine.py`)
-
-Shared by `backtest.py`, `calibrate.py`, and `screen.py`. Never called in live trading.
-
-```python
-trades = run_backtest(kite, store, symbols, symbol_to_token, params, from_dt, to_dt)
-metrics = compute_metrics(trades, capital)
-```
-
-**Key behaviours:**
-- Fetches all symbol candles upfront, merges into a single chronological stream — multi-stock portfolio simulation is correct (RiskManager sees competing signals at the real timestamp)
-- Calls `strategy.on_order_update()` after every paper fill so `_entry_price` is updated to the actual fill price
-- **Intrabar SL/target simulation always active** — checks `candle["low"] <= sl_price` and `candle["high"] >= target_price` on every candle; exits at the exact SL/target price (not next-candle open). **Gap-adjusted fills**: if the candle opens through the SL/target level (overnight gap), exit price is `min(sl, candle["open"])` for SL and `max(target, candle["open"])` for TARGET — the exact level is used only when the candle opens on the safe side of it. Notifies strategy via `on_order_update` so internal state is reset
-- **LIMIT fill simulation** — in LIMIT mode, entry orders only fill when price actually touches the limit level; unfilled orders persist across candles within the day and are cancelled at day boundary
-- **Daily loss limit is per-day** — `risk.reset_day()` is called at every day boundary, so a daily-loss-limit halt on one day does not carry over to subsequent days
-- SL/target prices come from the signal's `stop_loss_hint` / `target_price` (strategy-supplied), falling back to `trigger_price` / RR computation
-- `hold_bars` exits fire at candle close (time-based, actual close price used)
-- `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
-
-**`compute_metrics` returns:** `total_trades, wins, losses, win_rate, money_weighted_win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy, max_drawdown, max_drawdown_pct, profit_factor, sortino_ratio, calmar_ratio, monthly_returns`
-- `sharpe_proxy = mean(pnl) / std(pnl)` — relative ranking only, labelled "Sharpe*" in output
-- `sortino_ratio = mean(pnl) / downside_std` — penalises losing trades only; more meaningful than Sharpe for asymmetric P&L
-- `calmar_ratio = annualised_return_pct / max_drawdown_pct` — computed from first entry to last exit date
-- `profit_factor = total_wins / |total_losses|` — >1.3 is the minimum acceptable target
-- `money_weighted_win_rate = total_win_amt / (total_win_amt + total_loss_amt) * 100` — win rate weighted by P&L amount, not trade count
-- `max_drawdown` — largest peak-to-trough decline on the cumulative P&L equity curve (absolute ₹)
-- `max_drawdown_pct` — max_drawdown as % of capital
-- `monthly_returns` — dict of `"YYYY-MM": {"pnl", "return_pct", "trades"}` — used for the monthly bar chart in UI and CLI
-- `kite=None` is supported — workers pass `kite=None` after candles are pre-fetched; engine operates in cache-only mode
-
-**Regime candle injection**: `run_backtest()` fetches `NSE:NIFTY 50` and `NSE:INDIA VIX` candles for the full backtest window and injects `_nifty_close` / `_vix_close` into every candle dict (pre-warmup and main). Strategy reads these to compute regime features. Skipped gracefully when tokens unavailable (cache-only mode, tokens not in map).
-
-**Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
-- `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
-
-**Reason values in trade records:** `SL`, `TARGET` (intrabar), `TRAILING` (trailing stop via on_tick), `STRATEGY` (strategy EXIT signal — hold_bars timeout), `PATTERN_TOP` (model detected local maximum while profitable), `OPEN@END`
-
-**UI (scripts/ui.py):**
-- Tab 1 trade table shows `Hold (d)` (calendar days), `Candles` (held_candles), and `Capital` (effective capital at trade entry) side by side
-- Tab 2 (per-instrument) also has the `Capital` column; both tabs support chart interaction:
-  - **Box-select on equity curve** → filters trade table to the selected date range
-  - **Click on entry/exit marker** → highlights the corresponding trade row in the table
-- Tab 3 hold-duration scatter uses candles on x-axis; hours shown in hover tooltip
-- `lookback_bars` is exposed as a sidebar input (same as `warmup_bars`, `threshold`, etc.)
-- Default instrument selection is `watchlist` only (not `watchlist + interested`) — matches `backtest.py` behaviour
-
----
-
-## LRExtremaStrategy — deep dive (`trader/strategies/lr_extrema.py`)
-
-### What it does
-LRExtremaStrategy is a **self-training swing entry detector**. It learns what local price minima look like on a given stock using historical candles, then fires a BUY signal when the current candle looks like a local minimum — i.e., the price is likely near a short-term bottom and about to bounce.
-
-The model retrains itself every `retrain_every` candles using the most recent history, so it adapts to the stock's current behaviour over time.
-
-### How it works — step by step
-
-1. **Candle accumulation**: Every candle is appended to an internal buffer. The model does nothing until `warmup_bars` candles have been seen.
-
-2. **Training labels** — controlled by `label_mode`:
-   - **`"extrema"` (default)**: scans the buffer for local minima/maxima using ±`extrema_order` bars. Local minimum = class 0 (buy), local maximum = class 1 (sell). Note: labels use future candles to confirm extrema — a subtle training look-ahead. Classes are naturally ~balanced.
-   - **`"forward_return"`**: labels candle `t` as class 1 (BUY) if `close[t+label_horizon] / close[t] - 1 >= label_buy_threshold`, else class 0. No look-ahead contamination. Classes are heavily imbalanced on short timeframes — requires re-calibrating `threshold`. **Do not enable without re-running calibration.**
-
-3. **Feature engineering (11 features per candle)**:
-   - `volume_ratio` — current vol ÷ rolling mean over `volume_ma_bars` candles
-   - `norm_price` — `(close - low) / (high - low)` — close position within bar
-   - LR slope over last 3/5/10/20 **% returns** (stationary, scale-invariant)
-   - `atr_ratio` — ATR(`atr_period`) / close (normalised volatility)
-   - `rsi` — RSI(`atr_period`) (0–100)
-   - `ema20_dist` — `(close - EMA20) / ATR(atr_period)` (trend position normalised by volatility)
-   - `nifty_slope20` — NIFTY 50 LR slope over last 20 returns (injected by engine; 0.0 if unavailable)
-   - `vix_norm` — India VIX / 30.0, capped at 2.0 (0.5 neutral if unavailable)
-
-   ATR and RSI both use `atr_period` for consistency with the stop-loss calculation. EMA remains fixed at 20 (trend-position indicator, different concept). Requires at least `max(21, atr_period + 1)` closes. Regime features (nifty, vix) use values injected into candle dicts by the backtest engine.
-
-4. **Classifier** — controlled by `model_type`:
-   - **`"lr"` (default)**: LogisticRegression + MinMaxScaler. Fast, interpretable.
-   - **`"xgboost"`**: XGBClassifier, no scaling. Logs top-3 feature importances after each retrain. Requires `xgboost>=1.7,<2.0` (in requirements.txt). On EC2 Ubuntu, `pip install` works directly. On macOS, needs `libomp` via Homebrew.
-
-5. **Entry signal**:
-   One gate must pass before a BUY is emitted:
-   1. `P(local-min) >= threshold` — model thinks current candle is a local minimum
-
-   On entry: stop price = `close - atr_stop_mult * ATR(atr_period)` if `atr_stop_mult > 0`, else `close × (1 - stop_pct/100)`. `atr_stop_mult: 0` (default) preserves original fixed-% behaviour. `target_price = None` — trailing stop and model exit manage the upside.
-
-6. **Exit conditions** — three independent mechanisms across two methods:
-
-   **`on_tick` (tick-speed, live ~1 sec / backtest candle-close granularity):**
-   - **Hard stop**: if `atr_stop_mult > 0`, fires when `last_price <= _entry_stop` (stored ATR price); otherwise `last_price <= entry_price × (1 - stop_pct/100)` → EXIT immediately
-   - **Trailing stop activation**: once `last_price >= entry_price × (1 + profit_pct/100)`, trailing activates and `_peak_close` starts tracking the high-water mark
-   - **Trailing stop exit**: once trailing is active, fires when `last_price <= _peak_close × (1 - trail_pct/100)`
-   - In backtest: engine feeds `candle["high"]` then `candle["close"]` as simulated ticks — high updates `_peak_close`, close checks trail; hard SL still fires intrabar via engine's low-check at exact SL price
-
-   **`on_candle` (candle-granularity):**
-   - **Max hold**: held `hold_bars` candles → EXIT at current close (reason: `STRATEGY`)
-   - **Pattern top exit**: `P(local-max) >= sell_threshold` AND `gain >= sell_min_pct` → EXIT at current close (reason: `PATTERN_TOP`). Only fires when gain meets the minimum floor — stop_pct handles anything below. Supplements trailing stop; whichever fires first exits.
-
-   **`target_price=None`** means the backtest engine's fixed intrabar target check is disabled (`target=0`) when `trail_pct` is configured — trailing and pattern-top are the sole upside exits.
-
-7. **Retraining**: every `retrain_every` new candles, the model is retrained on the updated buffer. This lets it adapt to regime changes (trending vs ranging periods).
-
-### Config params
-
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `warmup_bars` | 200 | Candles before first training |
-| `lookback_bars` | 600 | Rolling training window — deque maxlen; candles older than this are dropped. Must be >= `warmup_bars`. |
-| `threshold` | 0.70 | Min P(local-min) to trigger BUY entry (higher = more selective) |
-| `profit_pct` | 3.0 | Minimum profit % floor before trailing activates (not a fixed target) |
-| `trail_pct` | 1.5 | Trailing stop distance % from peak once trailing is active |
-| `stop_pct` | 3.0 | Hard stop-loss % from entry price |
-| `hold_bars` | 150 | Max candles to hold before time-based exit |
-| `retrain_every` | 50 | Retrain every N new candles |
-| `extrema_order` | 5 | Neighbourhood half-window for extrema detection |
-| `sell_threshold` | 0.65 | Min P(local-max) to trigger pattern-top EXIT |
-| `sell_min_pct` | 2.0 | Min profit % required before pattern-top EXIT can fire — prevents exiting on trivial gains; stop_pct handles anything below this |
-| `volume_ma_bars` | 20 | Rolling window for volume normalisation (volume_ratio = current / mean). Not sensitive; calibration not needed. |
-| `sl_cooldown_bars` | 0 | Bars to block re-entry after a hard SL hit (0 = disabled). Converted to calendar days internally accounting for weekends. e.g. 96 bars on 15min ≈ 5.4 calendar days. Persisted to SQLite and restored after nightly restart. |
-| `model_type` | `"lr"` | `"lr"` = LogisticRegression (default, well-calibrated params); `"xgboost"` = XGBClassifier (better for non-linear patterns, same interface) |
-| `n_estimators` | 100 | XGBoost trees — ignored when `model_type: "lr"` |
-| `max_depth` | 3 | XGBoost tree depth — ignored when `model_type: "lr"` |
-| `learning_rate` | 0.1 | XGBoost learning rate — ignored when `model_type: "lr"` |
-| `atr_period` | 14 | Lookback period for ATR, RSI, and EMA-dist features, and for ATR-based stop. All three use the same period for consistency. |
-| `atr_stop_mult` | 0 | Stop = `entry - mult × ATR(atr_period)`; `0` disables and falls back to `stop_pct`. Enabling requires re-calibrating all exit params (`profit_pct`, `sell_min_pct`, `trail_pct`) since stop distance changes. |
-| `label_mode` | `"extrema"` | `"extrema"` = local minima/maxima labels (production-ready); `"forward_return"` = future N-bar return labels (no look-ahead, but needs full recalibration before use) |
-| `label_horizon` | 24 | Bars ahead for forward-return label measurement — only used when `label_mode: "forward_return"`. In regression mode also drives `hold_bars` and `atr_period` internally. |
-| `label_buy_threshold` | 0.04 | Min forward return (+4%) for BUY label — only used when `label_mode: "forward_return"` |
-
-### What makes this strategy work (and when it fails)
-
-**Works well on stocks that:**
-- Exhibit clear mean-reverting or oscillating price behaviour — price bounces between loose support/resistance levels rather than trending strongly in one direction
-- Have consistent volume patterns — volume spikes at local extrema (a key feature)
-- Have moderate volatility — enough to reach the profit target within `hold_bars` candles without constantly hitting the stop
-- Have sufficient liquidity — thin stocks have wide spreads and erratic candle patterns that confuse the features
-- Are not in a strong one-directional trend — a stock in a confirmed uptrend may have very few "local minima" and the model won't generalise well
-
-**Fails on stocks that:**
-- Are strongly trending (all entries look like local minima in a falling market)
-- Have extremely low volume / liquidity (penny stocks with days of zero volume)
-- Have highly irregular candle patterns driven by news/events rather than technical structure
-- Are in a prolonged sideways range so narrow that neither profit_pct nor stop_pct is reached within hold_bars
-
-### Calibration (`scripts/calibrate.py`)
-
-Grid or random search over all strategy params. Pre-fetches candles once; subsequent runs hit SQLite cache. Results ranked by `return_pct`. Runs combinations in parallel via `ProcessPoolExecutor` (uses all CPUs by default).
-
-Use calibration to find the optimal parameter set for a specific stock before adding it to the watchlist.
-
-```bash
-python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100
-python scripts/calibrate.py --from 2025-01-01 --mode random --iterations 100 --workers 4
-python scripts/calibrate.py --from 2025-01-01 --params profit_pct stop_pct trail_pct  # vary only specified params
-python scripts/calibrate.py --from 2025-01-01 --params sell_threshold sell_min_pct extrema_order
-```
-
-**CLI flags:**
-- `--workers N` — number of parallel worker processes (default: CPU count)
-- `--params PARAM [PARAM ...]` — restrict search to these params; remaining params are fixed at config values. Choices: `warmup_bars`, `lookback_bars`, `threshold`, `profit_pct`, `trail_pct`, `stop_pct`, `hold_bars`, `retrain_every`, `extrema_order`, `sell_threshold`, `sell_min_pct`, `volume_ma_bars`, `atr_period`, `atr_stop_mult`, `n_estimators`, `max_depth`, `learning_rate`
-- `--timeframe` — override candle timeframe for this run
-- Worker processes suppress all logging below `CRITICAL` (spawned processes don't inherit parent logging config)
-
-### Screening (`scripts/screen.py`)
-
-Backtests the current config params against all ~2,000 NSE EQ stocks. Resumable — already-processed symbols read from output CSV. Rate-limited to ~3 req/sec.
-
-```bash
-python scripts/screen.py --from 2025-01-01 --output results.csv --min-trades 3
-```
-
----
-
-## Stock selection guidance (for AI agents helping identify candidates)
-
-### Goal
-Find NSE-listed equity stocks where the LRExtremaStrategy has historically generated profitable trades with the current (or calibrated) parameters.
-
-### Primary workflow
-1. Run `screen.py` over a representative backtest period (minimum 6 months, ideally 1–2 years)
-2. Filter the results CSV for candidates worth investigating further
-3. Run `calibrate.py` on promising candidates to find their optimal parameters
-4. Paper trade candidates for 2–4 weeks before adding to live watchlist
-
-### Screening result interpretation
-
-The output CSV has columns: `symbol, total_trades, wins, losses, win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy`
-
-**Good candidate signals:**
-- `return_pct > 5%` over the backtest period (net of all costs)
-- `win_rate >= 50%` — the strategy should be right more often than wrong
-- `total_trades >= 3` — enough trades to have statistical signal (not just one lucky trade)
-- `avg_win / abs(avg_loss) > 1.5` — wins should be meaningfully larger than losses (R:R)
-- `sharpe_proxy > 0.3` — consistent, not just a few big wins masking many losses
-
-**Red flags to exclude:**
-- `total_trades == 1` — a single trade result is noise
-- `total_pnl > 0` but `win_rate < 30%` — one outlier win masking systematic losses
-- Very high `total_trades` with low `return_pct` — churning; transaction costs eating gains
-- Stocks with erratic volume (check manually — `screen.py` doesn't filter for this)
-
-### Fundamental / market context to layer on top
-The screener is purely quantitative. When shortlisting, also consider:
-- **Sector momentum**: prefer stocks in sectors with broad market tailwind
-- **Liquidity**: daily average volume should be at least ₹50L turnover to ensure LIMIT orders fill without slippage
-- **Corporate events**: avoid stocks near earnings, AGM, bonus/split record dates — these create abnormal candle patterns that confuse the model
-- **Price band**: stocks in T-group or trade-to-trade (BE) segment have settlement constraints — avoid
-- **Promoter holding**: very low promoter holding stocks can be targets for pump-and-dump, generating false extrema signals
-
-### Watchlist management
-- `watchlist` in config.yaml — stocks actively traded by the system
-- `interested` in config.yaml — stocks shown in the UI for monitoring but not traded
-- Move a stock from `interested` to `watchlist` only after calibration + paper trading validation
-
----
-
-## Costs (`trader/costs.py`)
-
-```python
-from trader.costs import order_cost, round_trip_cost
-order_cost(product="CNC", side="BUY", quantity=100, price=500.0)
-round_trip_cost(product="CNC", quantity=100, entry_price=500.0, exit_price=510.0)
-```
-
-Covers: brokerage, STT, NSE transaction charges, SEBI charges, GST, stamp duty. CNC brokerage = zero.
-
-**Cost dominance:** STT is 0.1% on both buy and sell sides for CNC (0.2% round-trip). A trade must move ~0.22% just to break even. Favour high-threshold, high-profit-pct params in calibration to keep trade count low and move size large.
-
-**MIS vs CNC in backtest:** engine detects same-day entry+exit and applies MIS charges; multi-day positions use CNC charges.
-
----
-
-## Notifications (`trader/notifications/telegram.py`)
-
-Configured via `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Safe to call when unconfigured (logs warning, no crash).
-
-Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `notify_halt`, `notify_error`, `notify_startup`, `notify_token_reminder`
-
-**Token reminder:** scheduler fires `notify_token_reminder()` at 08:30 IST daily — prompts to run `python scripts/kite_auth_server.py` on EC2 before market open.
-
----
-
-## Cloud deployment (AWS EC2)
-
-- Instance: t2.micro, ap-south-1 (Mumbai), Ubuntu 24.04 LTS
-- Elastic IP: `13.202.187.191` — whitelist this in Zerodha API settings
-- SSH port: 9654 (not 22)
-- Service: `systemd` unit at `scripts/trader.service`, managed as `trader` user
-- Deploy: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo systemctl restart trader"`
-- Deploy with deps change: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo -u trader .venv/bin/pip install -r requirements.txt && sudo systemctl restart trader"`
-- Token refresh: automated via TOTP cron (runs daily 08:15 IST). Manual fallback: `python scripts/kite_auth_server.py` on EC2
-- KITE_ACCESS_TOKEN expires midnight IST — auto-refreshed by cron at 02:45 UTC (08:15 IST) via `scripts/kite_totp_refresh.py`
-
----
-
-## Known design decisions
-
-- **Product is always CNC** (delivery) — hardcoded in `Config.product`. No intraday/MIS support.
-- **Long-only** — all signals are BUY direction. No short selling.
-- **Paper state is in-memory** — does not survive restarts. Live mode re-fetches from Kite on startup.
-- **Paper fill timing** — ENTRY orders fill at next candle open (realistic slippage). EXIT orders (stop/target) are simulated intrabar in the backtest engine at the exact SL/target price; in live mode orders fill within seconds.
-- **Strategy exit price_hint** — trailing/stop exits set `price_hint` to the tick `last_price` at the moment of exit; time-based (hold_bars) exits use candle close.
-- **Tick-speed exits (`on_tick`)** — hard stop and trailing stop are checked on every raw Kite tick in live mode (~1 sec granularity). `on_candle` handles entry signals, hold_bars timeout, and pattern-top exit. In backtest the engine simulates ticks by calling `strategy.on_tick` with `candle["high"]` then `candle["close"]` per candle. Hard SL still fires intrabar at the exact low price via the engine's own check. Trailing exits record as reason `"TRAILING"` in the trades list. `_peak_close` (the trailing high-water mark) is in-memory only and resets to current price on restart — see todo.md.
-- **Pattern-top exit** — fires in `on_candle` when `P(local-max) >= sell_threshold` and `gain >= sell_min_pct`. Reason: `"PATTERN_TOP"`. Does not fire when underwater — stop_pct handles that. Supplements trailing stop; both can be active simultaneously and whichever fires first wins. Features (return-based slopes + volume ratio) are the same as used for entry, making the model's buy/sell predictions symmetric.
-- **Warmup phantom-state clearing** — both the backtest engine (`engine.py`) and live startup (`main.py`) feed historical candles through `on_candle` before trading begins; this can trigger signals that never receive a fill, leaving `_entry_price`, `_held_bars`, `_peak_close`, and `_trailing_active` in a stale state. Both paths explicitly clear all four fields when `_entry_price is not None and position is None` at the end of warmup, preventing phantom trailing-stop exits on the first real trade.
-- **GTT is disabled (`gtt_enabled: false`)** — strategy exit logic (profit%, stop%, hold_bars) is the sole exit mechanism in live trading, consistent with backtest behaviour. GTT was disabled because: (1) backtest never uses GTT so enabling it creates a live/backtest divergence; (2) GTT-triggered exits were not confirmed via `on_order_update`, leaving strategy state inconsistent after a GTT fire. Safety net is `Restart=always` + `RestartSec=10` in the systemd unit — bot restarts within 10s on any failure and resumes exit monitoring on the next candle.
-- **Scheduler timezone** — IST (Asia/Kolkata). Pre-market at 09:00, post-market at 15:35.
-- **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
-- **Effective capital in live mode** — on startup, `main.py` fetches `kite.margins(segment="equity")` and applies `effective_capital = min(config.total_capital, kite_available_cash)` via `config.set_effective_capital()`. This ensures the bot never tries to deploy more money than is actually in the account while still respecting the config ceiling. All derived values (`daily_loss_limit`, `max_risk_per_trade`, `max_capital_per_stock`) update automatically since they derive from `config.total_capital`. Paper mode is unaffected — it always uses the config value as-is. If the margins call fails, the system falls back to config capital and logs a warning.
-- **Cumulative P&L persistence** — `RiskManager._cumulative_pnl` is persisted to the SQLite `state` table (key `cumulative_pnl`) in live mode via `store.set_state()` on each close. On startup, `main.py` restores it via `risk.seed_cumulative_pnl(store.get_state("cumulative_pnl"))`. This ensures `capital_available` is correct across restarts (deployed capital freed + lifetime P&L tracked). Paper mode does not persist — resets to 0 on restart.
-- **`state` table in SQLite** — `store.get_state(key, default=0.0)` and `store.set_state(key, value)` provide a simple key/float persistence layer. Used for `cumulative_pnl` and `sl_cooldown_<instrument>` (Unix timestamp expiry per instrument).
-- **SL cooldown persistence** — after a hard stop-loss, `LRExtremaStrategy` sets `_sl_cooldown_until` (a datetime) and persists it as a Unix timestamp to the `state` table (key `sl_cooldown_<instrument>`). On startup, `main.py` calls `strategy.seed_sl_cooldown(store.get_state(...))` after warm-up (not before, or warm-up would consume it). The cooldown is stored in calendar time, not bar count, so it is unaffected by timeframe or config changes. `sl_cooldown_bars=0` disables the feature entirely — stored values are ignored.
-- **New strategy params require independent recalibration** — `model_type`, `label_mode`, `atr_stop_mult`, and the new features (ATR/RSI/EMA/regime) were added incrementally. The existing calibrated params (`threshold`, `profit_pct`, `stop_pct`, `sell_min_pct`, etc.) were tuned for LR + extrema labels + fixed stop. Enabling `label_mode: "forward_return"` or `atr_stop_mult > 0` without recalibration will degrade performance — these change the fundamental signal character. Recommended order: (1) enable `model_type: "xgboost"` alone and backtest; (2) separately calibrate `atr_stop_mult`; (3) separately calibrate `label_mode: "forward_return"` with new `threshold` and `label_buy_threshold`.
-- **Regime features in live mode** — `_nifty_close` and `_vix_close` are injected by the backtest engine but not yet by the live `LiveFeed`. In live mode these fields are absent from candles, so features 9 and 10 default to neutral values (0.0 and 0.5). Strategy behaviour is unchanged — it just loses the regime context signal. Wiring live regime data requires subscribing to NIFTY 50 and INDIA VIX tokens in `LiveFeed`.
-
----
-
-## Zerodha CNC order EOD rules (important)
-
-| Order type | Used by this system | EOD behaviour |
-|---|---|---|
-| CNC Limit | Yes (when `order_type: limit`) | Cancelled at 3:30 PM if unfilled — simulated in backtest at day boundary |
-| CNC SL / SL-M | No | Cancelled at 3:30 PM — must re-place next day |
-| CNC Market | Yes (when `order_type: market`) | Fills immediately during market hours — no cancellation risk |
-| GTT (Good Till Triggered) | **Disabled** (`gtt_enabled: false`) | Persists across days — not cancelled at EOD |
-
-**Paper vs live simulation mismatch for end-of-day signals:**
-In live mode a market order placed at e.g. 15:15 fills within seconds (same day). In paper mode the same signal queues and fills at the **next candle's open** (next trading day 09:15 if it's the last candle of the day). This means:
-- Paper mode overstates overnight gap risk for entry signals that fire during market hours
-- Backtest P&L will be slightly more pessimistic than live for late-day entry signals
-- This is an accepted approximation — fixing it would require intraday fill simulation
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
