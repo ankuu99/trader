@@ -121,6 +121,8 @@ def run_backtest(
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
                 "held_candles": pos.get("candle_count", 0),
+                "sl": pos.get("sl", 0.0),
+                "peak_high": pos.get("peak_high", pos["entry"]),
             })
             risk.close_position(instrument, fill_price)
             s = strategy_map.get(instrument)
@@ -324,10 +326,13 @@ def run_backtest(
 
         orders.on_candle(candle)
 
-        # Increment candle counter for the open position on this symbol.
+        # Increment candle counter and update peak_high for the open position.
         # Done after order fill so the entry candle itself counts as 1.
         if symbol in open_positions:
             open_positions[symbol]["candle_count"] += 1
+            h = candle["high"]
+            if h > open_positions[symbol].get("peak_high", 0.0):
+                open_positions[symbol]["peak_high"] = h
 
         # Intrabar SL/target simulation — always active in backtest.
         # Checks candle low/high against stored SL/target prices so exits fire
@@ -371,6 +376,8 @@ def run_backtest(
                     "entry_date": pos["entry_date"],
                     "exit_date": candle["timestamp"],
                     "held_candles": pos.get("candle_count", 0),
+                    "sl": pos.get("sl", 0.0),
+                    "peak_high": pos.get("peak_high", pos["entry"]),
                 })
                 del open_positions[symbol]
                 risk.close_position(symbol, exit_price)
@@ -421,6 +428,8 @@ def run_backtest(
                         "entry_date": pos["entry_date"],
                         "exit_date": candle["timestamp"],
                         "held_candles": pos.get("candle_count", 0),
+                        "sl": pos.get("sl", 0.0),
+                        "peak_high": pos.get("peak_high", pos["entry"]),
                     })
                     risk.close_position(symbol, exit_price)
                     strategy.on_order_update({
@@ -464,6 +473,8 @@ def run_backtest(
             "entry_date": pos["entry_date"],
             "exit_date": to_dt,
             "held_candles": pos.get("candle_count", 0),
+            "sl": pos.get("sl", 0.0),
+            "peak_high": pos.get("peak_high", pos["entry"]),
         })
 
     return trades
@@ -581,6 +592,45 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         for k, v in sorted(monthly.items())
     }
 
+    # Holding period metrics
+    held = [t.get("held_candles", 0) for t in trades]
+    avg_held_bars = sum(held) / len(held) if held else 0.0
+    sorted_held = sorted(held)
+    median_held_bars = sorted_held[len(sorted_held) // 2] if sorted_held else 0.0
+
+    # Dead trades: held > 40 bars AND |pnl_pct| < 2%
+    dead_trades = 0
+    for t in trades:
+        invested = t["entry"] * t["qty"]
+        pnl_pct = abs(t["pnl"] / invested * 100) if invested > 0 else 0.0
+        if t.get("held_candles", 0) > 40 and pnl_pct < 2.0:
+            dead_trades += 1
+
+    # Give-back ratio: peak gain vs actual exit gain (winners only, where peak > entry)
+    peak_gains, exit_gains = [], []
+    for t in trades:
+        ph = t.get("peak_high", 0.0)
+        entry = t["entry"]
+        if ph > entry and entry > 0:
+            peak_gains.append((ph - entry) / entry * 100)
+            exit_gains.append((t["exit"] - entry) / entry * 100)
+    give_back_ratio = 0.0
+    if peak_gains and exit_gains:
+        avg_peak = sum(peak_gains) / len(peak_gains)
+        avg_exit = sum(exit_gains) / len(exit_gains)
+        give_back_ratio = avg_exit / avg_peak if avg_peak > 0 else 0.0
+
+    # Median R-multiple: (exit - entry) / (entry - sl), positive = win
+    r_multiples = []
+    for t in trades:
+        sl = t.get("sl", 0.0)
+        entry = t["entry"]
+        risk = entry - sl
+        if risk > 0:
+            r_multiples.append((t["exit"] - entry) / risk)
+    r_multiples.sort()
+    median_r = r_multiples[len(r_multiples) // 2] if r_multiples else 0.0
+
     return {
         "total_trades": len(trades),
         "wins": len(wins),
@@ -598,4 +648,10 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         "sortino_ratio": sortino_ratio,
         "calmar_ratio": calmar_ratio,
         "monthly_returns": monthly_returns,
+        "avg_held_bars": avg_held_bars,
+        "median_held_bars": median_held_bars,
+        "dead_trade_count": dead_trades,
+        "dead_trade_pct": dead_trades / len(trades) * 100 if trades else 0.0,
+        "give_back_ratio": give_back_ratio,
+        "median_r_multiple": median_r,
     }

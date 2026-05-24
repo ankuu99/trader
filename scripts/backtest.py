@@ -175,23 +175,32 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         print(f"  {a:<{C}}  │  {b:<{C}}  │  {c}")
 
     from collections import defaultdict
-    reason_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0})
+    reason_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0, "held": 0})
     for t in trades:
         r = t.get("reason", "UNKNOWN")
         reason_stats[r]["count"] += 1
         reason_stats[r]["pnl"] += t["pnl"]
+        reason_stats[r]["held"] += t.get("held_candles", 0)
         if t["pnl"] > 0:
             reason_stats[r]["wins"] += 1
     print(f"  {'─'*W}")
-    print(f"  Exit reasons:")
+    print(f"  Exit reasons:                              avg_bars")
     max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
-    for reason in ["SL", "TRAILING", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
+    for reason in ["SL", "TRAILING", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
         if reason not in reason_stats:
             continue
         s = reason_stats[reason]
         bar = "█" * int(s["count"] / max_count * 20)
         wr = s["wins"] / s["count"] * 100
-        print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar}")
+        avg_bars = s["held"] / s["count"]
+        print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
+
+    print(f"  {'─'*W}")
+    print(f"  Health metrics:")
+    print(f"    Avg held bars  : {m['avg_held_bars']:.0f}  (median {m['median_held_bars']:.0f})")
+    print(f"    Dead trades    : {m['dead_trade_count']}t  ({m['dead_trade_pct']:.0f}%)  [>40b, |P&L|<2%]")
+    print(f"    Give-back ratio: {m['give_back_ratio']:.2f}  (exit/peak gain where peak>entry)")
+    print(f"    Median R-mult  : {m['median_r_multiple']:.2f}")
 
     print(f"  {'='*W}\n")
 
@@ -207,7 +216,7 @@ def _dump_csv(trades: list[dict], from_date: str, to_date: str):
     filename = f"portfolio_{from_str}_{to_str}_{timeframe}_{now}.csv"
     out_path = Path(__file__).resolve().parents[1] / "backtest_results" / filename
     fields = ["instrument", "entry_date", "exit_date", "entry", "exit", "qty",
-              "cost", "pnl", "product", "reason", "held_candles"]
+              "cost", "pnl", "product", "reason", "held_candles", "sl", "peak_high"]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()

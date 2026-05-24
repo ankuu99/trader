@@ -54,6 +54,12 @@ try:
 except Exception:
     _XGBOOST_AVAILABLE = False
 
+try:
+    from sklearn.linear_model import SGDClassifier as _SGDClassifier
+    _SGD_AVAILABLE = True
+except Exception:
+    _SGD_AVAILABLE = False
+
 from trader.core.logger import get_logger
 from trader.strategies.base import Direction, Signal, SignalType, Strategy
 
@@ -97,10 +103,71 @@ class LRExtremaStrategy(Strategy):
         self._xgb_learning_rate: float = params.get("learning_rate", 0.1)
         self._atr_stop_mult: float = params.get("atr_stop_mult", 0.0)
 
+        # --- A1: ATR-based trailing (0 = use profit_pct / trail_pct fallback) ---
+        self._trail_atr_period: int = params.get("trail_atr_period", 14)
+        self._trail_activate_atr: float = params.get("trail_activate_atr", 0.0)
+        self._trail_give_back_atr: float = params.get("trail_give_back_atr", 0.0)
+
+        # --- A2: Stagnation exit — exit dead trades that never move N ATR in M bars ---
+        self._stagnation_bars: int = params.get("stagnation_bars", 0)  # 0 = disabled
+        self._stagnation_atr_mult: float = params.get("stagnation_atr_mult", 1.0)
+        self._stagnation_peak_atr_min: float = params.get("stagnation_peak_atr_min", 0.5)
+
+        # --- A3: Peak give-back exit — exit when trade reverses from its peak ---
+        self._peak_give_back_min_gain_pct: float = params.get("peak_give_back_min_gain_pct", 0.0)  # 0 = disabled
+        self._peak_give_back_fraction: float = params.get("peak_give_back_fraction", 0.4)
+
+        # --- B1: Trend filter — skip entries below N-bar EMA (0 = disabled) ---
+        self._entry_ema_filter_period: int = params.get("entry_ema_filter_period", 0)
+
+        # --- A1 guard: minimum bars held before trailing can activate ---
+        self._min_hold_bars_before_trailing: int = params.get("min_hold_bars_before_trailing", 0)
+
+        # --- A4: Model-as-exit — exit when classifier confidence drops below threshold ---
+        self._model_exit_threshold: float = params.get("model_exit_threshold", 0.0)  # 0 = disabled
+
+        # --- C6: Feature pruning — list of indices to use (None = all 11) ---
+        _fi = params.get("feature_indices", None)
+        self._feature_indices: list[int] | None = list(_fi) if _fi is not None else None
+
+        # --- C7: Lagged features — append feature vectors at t-1, t-2, ... ([] = disabled) ---
+        _lags = params.get("feature_lag_periods", [])
+        self._feature_lag_periods: list[int] = list(_lags) if _lags else []
+
+        # --- C1: Triple-barrier label params (active when label_mode="triple_barrier") ---
+        self._barrier_target_pct: float = params.get("barrier_target_pct", 5.0)
+        self._barrier_stop_pct: float = params.get("barrier_stop_pct", 3.0)
+        self._barrier_window: int = params.get("barrier_window", 24)
+
+        # --- D1: Separate ATR period for stop placement (0 = use atr_period fallback) ---
+        self._stop_atr_period: int = params.get("stop_atr_period", 0)  # 0 = use atr_period
+
+        # --- A7: Time-decay exit pressure — required gain declines with bars held ---
+        # required_gain(N) = time_decay_floor_pct + (profit_pct - floor) × decay_rate^N
+        # Exit when current_gain_pct < required_gain. 0 = disabled.
+        self._time_decay_activate_bars: int = params.get("time_decay_activate_bars", 0)  # bars before activating
+        self._time_decay_rate: float = params.get("time_decay_rate", 0.0)  # fraction per bar (0 = disabled)
+        self._time_decay_floor_pct: float = params.get("time_decay_floor_pct", 0.0)  # minimum required gain
+
         # --- Entry filter gates (disabled by default — 0/False means off) ---
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
         self._entry_min_norm_price: float = params.get("entry_min_norm_price", 0.0)
         self._entry_require_prior_decline: bool = bool(params.get("entry_require_prior_decline", False))
+        # B2: bounce confirmation — require close > prev_close at entry
+        self._entry_require_bounce: bool = bool(params.get("entry_require_bounce", False))
+        # B3: RSI gate — require RSI < threshold at entry (0 = disabled)
+        self._entry_rsi_max: float = params.get("entry_rsi_max", 0.0)
+        # B7: regime-conditional entry — block entries when 60-bar return autocorr > threshold (0 = disabled)
+        self._regime_autocorr_max: float = params.get("regime_autocorr_max", 0.0)
+        self._regime_autocorr_bars: int = params.get("regime_autocorr_bars", 60)
+        # C5: SGD partial_fit tracking
+        self._sgd_trained_count: int = 0  # number of labeled samples seen in last SGD fit
+        # E2: Force intraday close before market end (None = disabled)
+        self._force_intraday_close: time | None = None
+        # E3: Hold-period bucketing — high-confidence entries get full hold_bars; lower get fast
+        self._hold_bars_fast: int = params.get("hold_bars_fast", 0)   # 0 = disabled
+        self._threshold_swing: float = params.get("threshold_swing", 0.0)  # P >= this → swing (full hold_bars)
+        self._active_hold_bars: int = self._hold_bars  # per-trade cap, set on entry
 
         def _parse_time(val: str | None, default: time) -> time:
             if val is None:
@@ -110,6 +177,8 @@ class LRExtremaStrategy(Strategy):
 
         self._trading_start: time = _parse_time(params.get("trading_start"), time(9, 30))
         self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 30))
+        _fic = params.get("force_intraday_close_time")
+        self._force_intraday_close = _parse_time(_fic, time(15, 15)) if _fic else None
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -123,6 +192,9 @@ class LRExtremaStrategy(Strategy):
         self._held_bars: int = 0
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
+        self._trail_atr: float = 0.0            # ATR cached each candle for on_tick use (A1)
+        self._bars_no_atr_move: int = 0         # bars since last significant ATR move (A2)
+        self._stagnation_ref_price: float | None = None  # price at last significant move (A2)
 
         # SL cooldown — block re-entry for sl_cooldown_bars × candle_minutes after a hard SL hit
         # Default 0 = disabled; set explicitly in config to activate (e.g. sl_cooldown_bars: 96)
@@ -172,15 +244,88 @@ class LRExtremaStrategy(Strategy):
         if len(self._candles) < self._warmup_bars:
             return None
 
-        # --- Periodic retraining ---
-        if not self._trained or self._candles_since_train >= self._retrain_every:
-            self._train()
-            self._candles_since_train = 0
+        # --- Periodic retraining (skipped in rules mode) ---
+        if self._model_type != "rules":
+            if not self._trained or self._candles_since_train >= self._retrain_every:
+                self._train()
+                self._candles_since_train = 0
+        else:
+            self._trained = True  # rules mode needs no training
+
+        # --- Compute short-period ATR for trailing/stagnation (cached for on_tick) ---
+        if not self.is_flat() and self._trail_atr_period > 0:
+            self._trail_atr = self._compute_atr(list(self._candles), period=self._trail_atr_period)
+
+        # --- A2: Stagnation exit — after M bars, exit if still within N ATR of entry ---
+        # Fires once when held_bars crosses the threshold AND current gain is flat
+        # AND peak never reached a meaningful level.
+        if (not self.is_flat() and self._stagnation_bars > 0
+                and self._trail_atr > 0 and self._entry_price is not None
+                and self._held_bars >= self._stagnation_bars):
+            gain_atr = (close - self._entry_price) / self._trail_atr
+            peak_atr = (
+                ((self._peak_close or self._entry_price) - self._entry_price) / self._trail_atr
+            )
+            if (abs(gain_atr) < self._stagnation_atr_mult
+                    and peak_atr < self._stagnation_peak_atr_min):
+                logger.info(
+                    "LR-Extrema STAGNATION EXIT | %s | held=%db gain_atr=%.2f peak_atr=%.2f | price=%.2f | candle=%s",
+                    self.instrument, self._held_bars, gain_atr, peak_atr, close,
+                    candle.get("timestamp"),
+                )
+                self._reset_position_state()
+                self._candles_since_train += 1
+                return Signal(
+                    instrument=self.instrument,
+                    direction=Direction.BUY,
+                    signal_type=SignalType.EXIT,
+                    price_hint=close,
+                    strategy=self.name,
+                    exit_reason="STAGNATION",
+                )
+
+        # --- A7: Time-decay exit pressure — required gain declines with hold time ---
+        if (not self.is_flat() and self._time_decay_rate > 0
+                and self._held_bars >= self._time_decay_activate_bars
+                and self._entry_price is not None):
+            _current_pct = (close - self._entry_price) / self._entry_price * 100.0
+            _bars_past_activate = self._held_bars - self._time_decay_activate_bars
+            _required = self._time_decay_floor_pct + max(
+                0, (self._profit_pct - self._time_decay_floor_pct) * (1 - self._time_decay_rate) ** _bars_past_activate
+            )
+            if _current_pct < _required:
+                self._reset_position_state()
+                self._candles_since_train += 1
+                return Signal(
+                    instrument=self.instrument,
+                    direction=Direction.BUY,
+                    signal_type=SignalType.EXIT,
+                    price_hint=close,
+                    strategy=self.name,
+                    exit_reason="TIME_DECAY",
+                )
+
+        # --- E2: Force intraday close before market end ---
+        if not self.is_flat() and self._force_intraday_close is not None:
+            _ts = candle.get("timestamp")
+            _candle_time = _ts.time() if hasattr(_ts, "time") else None
+            if _candle_time is not None and _candle_time >= self._force_intraday_close:
+                self._reset_position_state()
+                self._candles_since_train += 1
+                return Signal(
+                    instrument=self.instrument,
+                    direction=Direction.BUY,
+                    signal_type=SignalType.EXIT,
+                    price_hint=close,
+                    strategy=self.name,
+                    exit_reason="INTRADAY_CLOSE",
+                )
 
         # --- Hold-bars timeout (candle-granularity time cap) ---
         # Hard stop and trailing stop fire tick-by-tick via on_tick; hold_bars is
         # intentionally candle-based (a time limit, not a price level).
-        if not self.is_flat() and self._held_bars >= self._hold_bars:
+        _effective_hold = self._active_hold_bars if self._hold_bars_fast > 0 else self._hold_bars
+        if not self.is_flat() and self._held_bars >= _effective_hold:
             logger.info(
                 "LR-Extrema EXIT | %s | max hold (%d bars) | entry=%.2f close=%.2f | candle=%s",
                 self.instrument, self._held_bars, self._entry_price or 0, close,
@@ -204,8 +349,9 @@ class LRExtremaStrategy(Strategy):
             if self._entry_price else 0.0
         )
         if (not self.is_flat() and self._trained
+                and self._model_type != "rules"
                 and _pct_gain >= self._sell_min_pct):
-            x = self._compute_features(self._candles)
+            x = self._compute_features_with_lags(self._candles)
             if x is not None:
                 should_exit = False
                 if self._is_regression:
@@ -241,6 +387,36 @@ class LRExtremaStrategy(Strategy):
                         exit_reason="PATTERN_TOP",
                     )
 
+        # --- A4: Model-as-exit — exit when classifier confidence in "still a local min" drops ---
+        # Decouples exit from entry: model voted us in at P(min)>=threshold; now if model
+        # confidence drops (P(min) < model_exit_threshold), the position rationale is gone.
+        if (not self.is_flat() and self._trained
+                and self._model_type not in ("rules",)
+                and not self._is_regression
+                and self._model_exit_threshold > 0
+                and self._model is not None):
+            x = self._compute_features_with_lags(self._candles)
+            if x is not None:
+                proba = self._predict_proba(x)
+                classes = list(self._model.classes_)
+                p_min = proba[classes.index(0)] if 0 in classes else 1.0
+                if p_min < self._model_exit_threshold:
+                    logger.info(
+                        "LR-Extrema MODEL EXIT | %s | P(min)=%.3f < %.3f | price=%.2f | candle=%s",
+                        self.instrument, p_min, self._model_exit_threshold, close,
+                        candle.get("timestamp"),
+                    )
+                    self._reset_position_state()
+                    self._candles_since_train += 1
+                    return Signal(
+                        instrument=self.instrument,
+                        direction=Direction.BUY,
+                        signal_type=SignalType.EXIT,
+                        price_hint=close,
+                        strategy=self.name,
+                        exit_reason="MODEL_EXIT",
+                    )
+
         # --- Trading window gate (entry only) ---
         ts = candle.get("timestamp")
         if ts is not None:
@@ -259,9 +435,23 @@ class LRExtremaStrategy(Strategy):
                 self._sl_cooldown_until = None  # expired — clear it
 
         if self._trained and self.is_flat() and self._entry_price is None:
-            x = self._compute_features(self._candles)
-            if x is not None:
-                signal_entry = False
+            x = self._compute_features_with_lags(self._candles)
+            signal_entry = False
+            if self._model_type == "rules":
+                # G1: Pure rule-based entry — RSI<35, bounce (close > prev_close), above EMA50
+                if x is not None and len(self._candles) >= 51:
+                    closes_list = [c["close"] for c in self._candles]
+                    rsi14 = self._compute_rsi(closes_list, period=14)
+                    ema50 = self._compute_ema(closes_list, period=50)
+                    prev_close = list(self._candles)[-2]["close"] if len(self._candles) >= 2 else close
+                    bounce = close > prev_close
+                    signal_entry = rsi14 < 35 and bounce and close > ema50
+                    if signal_entry:
+                        logger.info(
+                            "LR-Extrema RULES ENTRY | %s | RSI14=%.1f<35, bounce=%s, close=%.2f>EMA50=%.2f | candle=%s",
+                            self.instrument, rsi14, bounce, close, ema50, candle.get("timestamp"),
+                        )
+            elif x is not None:
                 if self._is_regression:
                     expected_return = self._predict_return(x)
                     signal_entry = expected_return >= self._min_entry_return
@@ -270,10 +460,9 @@ class LRExtremaStrategy(Strategy):
                     proba = self._predict_proba(x)
                     classes = list(self._model.classes_)
                     p_min = proba[classes.index(0)] if 0 in classes else 0.0
-                    p_max = proba[classes.index(1)] if 1 in classes else 1.0
                     signal_entry = p_min >= self._threshold
 
-                if signal_entry:
+            if signal_entry and x is not None:
                     # Hard filter gates — shared across both paths
                     blocks: list[str] = []
                     if self._entry_min_volume_ratio > 0 and x[0] < self._entry_min_volume_ratio:
@@ -282,6 +471,35 @@ class LRExtremaStrategy(Strategy):
                         blocks.append(f"norm_price={x[1]:.2f}<{self._entry_min_norm_price}")
                     if self._entry_require_prior_decline and x[5] >= 0:
                         blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
+                    # B1: Trend filter — skip entries below N-bar EMA
+                    if self._entry_ema_filter_period > 0:
+                        closes_list = [c["close"] for c in self._candles]
+                        ema_val = self._compute_ema(closes_list, period=self._entry_ema_filter_period)
+                        if close < ema_val:
+                            blocks.append(f"below_ema{self._entry_ema_filter_period}={ema_val:.2f}")
+                    # B2: Bounce confirmation — require close > prev_close
+                    if self._entry_require_bounce and len(self._candles) >= 2:
+                        prev_close = list(self._candles)[-2]["close"]
+                        if close <= prev_close:
+                            blocks.append(f"no_bounce close={close:.2f} prev={prev_close:.2f}")
+                    # B3: RSI gate — require RSI < max threshold
+                    if self._entry_rsi_max > 0:
+                        closes_list = [c["close"] for c in self._candles]
+                        rsi_val = self._compute_rsi(closes_list, period=14)
+                        if rsi_val >= self._entry_rsi_max:
+                            blocks.append(f"rsi={rsi_val:.1f}>={self._entry_rsi_max}")
+                    # B7: Regime-conditional — block entries in trending (positive autocorr) markets
+                    if self._regime_autocorr_max > 0 and len(self._candles) >= self._regime_autocorr_bars + 1:
+                        _closes = [c["close"] for c in list(self._candles)[-(self._regime_autocorr_bars + 1):]]
+                        _rets = [(_closes[i] - _closes[i-1]) / _closes[i-1] for i in range(1, len(_closes))]
+                        _n = len(_rets)
+                        _mean = sum(_rets) / _n
+                        _var = sum((r - _mean)**2 for r in _rets) / _n
+                        if _var > 0:
+                            _cov = sum((_rets[i] - _mean) * (_rets[i-1] - _mean) for i in range(1, _n)) / (_n - 1)
+                            _autocorr = _cov / _var
+                            if _autocorr > self._regime_autocorr_max:
+                                blocks.append(f"trending_regime autocorr={_autocorr:.3f}>{self._regime_autocorr_max}")
                     if blocks:
                         self.last_filter_block = ", ".join(blocks)
                         logger.debug(
@@ -291,24 +509,37 @@ class LRExtremaStrategy(Strategy):
                         self._candles_since_train += 1
                         return None
 
-                    if self._is_regression:
-                        logger.info(
-                            "LR-Extrema ENTRY | %s | expected_return=%.4f >= %.4f | price=%.2f | candle=%s",
-                            self.instrument, expected_return, self._min_entry_return, close,
-                            candle.get("timestamp"),
-                        )
-                    else:
-                        logger.info(
-                            "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f | candle=%s",
-                            self.instrument, p_min, self._threshold, close,
-                            candle.get("timestamp"),
-                        )
+                    if self._model_type != "rules":
+                        if self._is_regression:
+                            logger.info(
+                                "LR-Extrema ENTRY | %s | expected_return=%.4f >= %.4f | price=%.2f | candle=%s",
+                                self.instrument, expected_return, self._min_entry_return, close,
+                                candle.get("timestamp"),
+                            )
+                        else:
+                            logger.info(
+                                "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | price=%.2f | candle=%s",
+                                self.instrument, p_min, self._threshold, close,
+                                candle.get("timestamp"),
+                            )
                     self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                     self._held_bars = 0
                     self._candles_since_train += 1
-                    atr_stop = self._compute_atr(list(self._candles), period=self._atr_period)
+                    # E3: bucketed hold_bars — high-confidence entries use full hold_bars, lower use hold_bars_fast
+                    if (self._hold_bars_fast > 0 and self._threshold_swing > 0
+                            and not self._is_regression and p_min < self._threshold_swing):
+                        self._active_hold_bars = self._hold_bars_fast
+                    else:
+                        self._active_hold_bars = self._hold_bars
+                    # D1: use stop_atr_period (or trail_atr_period) for volatility-aware SL
+                    _sap = (self._stop_atr_period or self._trail_atr_period
+                            or self._atr_period) if self._atr_stop_mult > 0 else self._atr_period
+                    atr_stop = self._compute_atr(list(self._candles), period=_sap)
                     if self._atr_stop_mult > 0 and atr_stop > 0:
-                        sl_hint = round(close - self._atr_stop_mult * atr_stop, 2)
+                        sl_raw = close - self._atr_stop_mult * atr_stop
+                        # Safety: don't let SL be worse than stop_pct fallback
+                        sl_floor = close * (1 - self._stop_pct / 100)
+                        sl_hint = round(max(sl_raw, sl_floor), 2)
                     else:
                         sl_hint = round(close * (1 - self._stop_pct / 100), 2)
                     self._entry_stop = sl_hint
@@ -344,13 +575,25 @@ class LRExtremaStrategy(Strategy):
             self._peak_close = last_price
 
         # Activate trailing once minimum profit floor is reached
+        # A1: ATR-based activation overrides profit_pct when trail_activate_atr > 0.
+        #     min_hold_bars_before_trailing prevents activating before the position matures.
         pct = (last_price - self._entry_price) / self._entry_price * 100.0
-        if not self._trailing_active and pct >= self._profit_pct:
-            self._trailing_active = True
-            logger.info(
-                "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
-                self.instrument, pct, self._profit_pct, self._peak_close,
-            )
+        _can_trail = self._held_bars >= self._min_hold_bars_before_trailing
+        if not self._trailing_active and _can_trail:
+            if self._trail_activate_atr > 0 and self._trail_atr > 0:
+                atr_gain = (last_price - self._entry_price) / self._trail_atr
+                if atr_gain >= self._trail_activate_atr:
+                    self._trailing_active = True
+                    logger.info(
+                        "LR-Extrema TRAILING activated (ATR) | %s | gain=%.2f ATR >= %.2f | peak=%.2f",
+                        self.instrument, atr_gain, self._trail_activate_atr, self._peak_close,
+                    )
+            elif pct >= self._profit_pct:
+                self._trailing_active = True
+                logger.info(
+                    "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
+                    self.instrument, pct, self._profit_pct, self._peak_close,
+                )
 
         reason: str | None = None
         if self._entry_stop is not None:
@@ -358,10 +601,24 @@ class LRExtremaStrategy(Strategy):
                 reason = f"stop-loss @ {self._entry_stop:.2f}"
         elif pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
+
+        # A1: ATR-based give-back overrides trail_pct when trail_give_back_atr > 0
         if reason is None and self._trailing_active:
-            drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
-            if drawdown <= -self._trail_pct:
-                reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
+            if self._trail_give_back_atr > 0 and self._trail_atr > 0:
+                drawdown_atr = (last_price - self._peak_close) / self._trail_atr
+                if drawdown_atr <= -self._trail_give_back_atr:
+                    reason = f"trailing stop {drawdown_atr:.2f} ATR from peak {self._peak_close:.2f}"
+            else:
+                drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
+                if drawdown <= -self._trail_pct:
+                    reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
+
+        # A3: Peak give-back exit — exit when we've given back too much of peak gain
+        if reason is None and self._peak_give_back_min_gain_pct > 0 and self._peak_close is not None:
+            peak_gain_pct = (self._peak_close - self._entry_price) / self._entry_price * 100.0
+            if (peak_gain_pct >= self._peak_give_back_min_gain_pct
+                    and pct < peak_gain_pct * self._peak_give_back_fraction):
+                reason = f"peak-give-back peak={peak_gain_pct:.1f}% cur={pct:.1f}%"
 
         if reason:
             logger.info(
@@ -430,6 +687,10 @@ class LRExtremaStrategy(Strategy):
         self._held_bars = 0
         self._peak_close = None
         self._trailing_active = False
+        self._trail_atr = 0.0
+        self._bars_no_atr_move = 0
+        self._stagnation_ref_price = None
+        self._active_hold_bars = self._hold_bars
 
     def on_order_update(self, order: dict) -> None:
         super().on_order_update(order)
@@ -497,8 +758,11 @@ class LRExtremaStrategy(Strategy):
                 self.instrument, len(rows), [(i, f"{v:.3f}") for i, v in top3],
             )
         else:
-            # Classification path: extrema binary labels → XGBClassifier or LR
-            rows, labels = self._build_extrema_labels(candles)
+            # Classification path: extrema or triple-barrier labels → XGBClassifier or LR
+            if self._label_mode == "triple_barrier":
+                rows, labels = self._build_triple_barrier_labels(candles)
+            else:
+                rows, labels = self._build_extrema_labels(candles)
             if len(rows) < _MIN_SAMPLES_PER_CLASS * 2:
                 return
             n_pos = sum(1 for l in labels if l == 1)
@@ -528,6 +792,26 @@ class LRExtremaStrategy(Strategy):
                     "XGB Classifier trained | %s | mode=%s samples=%d (buy=%d nobuy=%d) | top features: %s",
                     self.instrument, self._label_mode, len(rows), n_pos, n_neg,
                     [(i, f"{v:.3f}") for i, v in top3],
+                )
+            elif self._model_type == "sgd" and _SGD_AVAILABLE:
+                # C5: SGD classifier — same logistic regression but stochastic solver, supports partial_fit
+                scaler = MinMaxScaler()
+                X_scaled = scaler.fit_transform(X)
+                self._scaler = scaler
+                if self._model is not None and hasattr(self._model, 'partial_fit'):
+                    # incremental update: fit scaler on all data, partial_fit model on new samples only
+                    n_new = len(rows) - self._sgd_trained_count
+                    if n_new > 0:
+                        self._model.partial_fit(X_scaled[-n_new:], y[-n_new:], classes=[0, 1])
+                        self._sgd_trained_count = len(rows)
+                    model = self._model
+                else:
+                    model = _SGDClassifier(loss='log_loss', max_iter=1000, random_state=42)
+                    model.fit(X_scaled, y)
+                    self._sgd_trained_count = len(rows)
+                logger.info(
+                    "SGD trained | %s | mode=%s samples=%d (buy=%d nobuy=%d)",
+                    self.instrument, self._label_mode, len(rows), n_pos, n_neg,
                 )
             else:
                 if self._model_type == "xgboost":
@@ -565,10 +849,43 @@ class LRExtremaStrategy(Strategy):
         rows, labels = [], []
         for label, indices in ((0, minima), (1, maxima)):
             for idx in indices:
-                feat = self._compute_features(candles[: idx + 1])
+                feat = self._compute_features_with_lags(candles[: idx + 1])
                 if feat is not None:
                     rows.append(feat)
                     labels.append(label)
+        return rows, labels
+
+    def _build_triple_barrier_labels(
+        self, candles: list[dict]
+    ) -> tuple[list[np.ndarray], list[int]]:
+        """C1: Triple-barrier labeling (de Prado style).
+        For each candle at time t: scan the next barrier_window bars.
+        Label 1 if high reaches +barrier_target_pct first, label 0 if low drops -barrier_stop_pct
+        first or time expires. Directly aligned with trade profitability.
+        """
+        rows, labels = [], []
+        n = len(candles) - self._barrier_window
+        target_mult = 1.0 + self._barrier_target_pct / 100.0
+        stop_mult   = 1.0 - self._barrier_stop_pct  / 100.0
+        for idx in range(n):
+            feat = self._compute_features_with_lags(candles[: idx + 1])
+            if feat is None:
+                continue
+            entry_price = candles[idx]["close"]
+            target = entry_price * target_mult
+            stop   = entry_price * stop_mult
+            label = 0  # default: time expired (no trade)
+            for j in range(idx + 1, idx + 1 + self._barrier_window):
+                c = candles[j]
+                # Check stop first (conservative: if both hit in same bar, stop wins)
+                if c["low"] <= stop:
+                    label = 0
+                    break
+                if c["high"] >= target:
+                    label = 1
+                    break
+            rows.append(feat)
+            labels.append(label)
         return rows, labels
 
     def _build_forward_return_labels(
@@ -583,7 +900,7 @@ class LRExtremaStrategy(Strategy):
         rows, labels = [], []
         n = len(candles) - horizon
         for idx in range(n):
-            feat = self._compute_features(candles[: idx + 1])
+            feat = self._compute_features_with_lags(candles[: idx + 1])
             if feat is None:
                 continue
             fwd_return = (
@@ -664,11 +981,30 @@ class LRExtremaStrategy(Strategy):
         vix_last = next((c["_vix_close"] for c in reversed(candles) if c.get("_vix_close") is not None), None)
         vix_norm = min(vix_last / 30.0, 2.0) if vix_last is not None else 0.5
 
-        return np.array(
+        feat = np.array(
             [volume_ratio, norm_price, slope3, slope5, slope10, slope20,
              atr_ratio, rsi, ema20_dist, nifty_slope20, vix_norm],
             dtype=float,
         )
+        if self._feature_indices is not None:
+            feat = feat[self._feature_indices]
+        return feat
+
+    def _compute_features_with_lags(self, candles) -> np.ndarray | None:
+        """C7: Compute features and concatenate lagged versions. Returns None if any lag is unavailable."""
+        candles = list(candles)
+        base = self._compute_features(candles)
+        if base is None or not self._feature_lag_periods:
+            return base
+        parts = [base]
+        for lag in self._feature_lag_periods:
+            if len(candles) <= lag:
+                return None
+            lagged = self._compute_features(candles[:-lag])
+            if lagged is None:
+                return None
+            parts.append(lagged)
+        return np.concatenate(parts)
 
     @staticmethod
     def _linreg_slope(prices: list[float]) -> float:
