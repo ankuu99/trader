@@ -1,17 +1,17 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 30000 
+  total: 300000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 10
+  max_open_positions: 12
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 15.0
+  max_capital_per_stock_pct: 5.0
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
@@ -22,6 +22,7 @@ interested:
 
 
 watchlist:
+  # --- Original ---
   - NSE:ATHERENERG
   - NSE:CUPID
   - NSE:DCXINDIA
@@ -29,6 +30,22 @@ watchlist:
   - NSE:ABFRL
   - NSE:COROMANDEL
   - NSE:GUJALKALI
+  # --- Expanded (screener.in validated, May 2026) ---
+  - NSE:ICICIBANK
+  - NSE:BAJFINANCE
+  - NSE:HDFCAMC
+  - NSE:PERSISTENT
+  - NSE:BHARTIARTL
+  - NSE:LUPIN
+  - NSE:POLYCAB
+  - NSE:CUMMINSIND
+  - NSE:ABB
+  - NSE:DMART
+  - NSE:PIDILITIND
+  - NSE:WAAREEENER
+  - NSE:COFORGE
+  - NSE:KOTAKBANK
+  - NSE:TATAPOWER
 
 
 
@@ -39,7 +56,7 @@ strategies:
     warmup_bars: 300
     lookback_bars: 1200
     threshold: 0.90
-    profit_pct: 20
+    profit_pct: 7
     trail_pct: 1.5
     sell_min_pct: 7.0
     sell_threshold: 0.60
