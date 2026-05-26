@@ -399,7 +399,7 @@ def run_backtest(
         # Feed candle high first (updates _peak_close), then close (checks trail).
         # Hard SL is already handled intrabar above; if it fired, strategy state
         # is already reset and on_tick returns None safely.
-        if symbol in open_positions and _in_window:
+        if symbol in open_positions and _in_window and current_ts[0] != open_positions[symbol]["entry_date"]:
             for tick_price in (candle["high"], candle["close"]):
                 tick_signal = strategy.on_tick({
                     "last_price": tick_price,
