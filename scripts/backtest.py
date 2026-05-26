@@ -133,21 +133,6 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             f"{t.get('product','CNC'):<4}  {t['reason']}"
         )
 
-    print(f"\n  {'─'*W}")
-    print(f"  Trades       : {m['total_trades']}  (W:{m['wins']}  L:{m['losses']})")
-    print(f"  Win Rate     : {m['win_rate']:.1f}%  (count)   Wt. Win%: {m['money_weighted_win_rate']:.1f}%  (by ₹)")
-    print(f"  Avg Win      : ₹{m['avg_win']:>10,.2f}    Avg Loss : ₹{m['avg_loss']:>10,.2f}")
-    print(f"  Profit Factor: {m['profit_factor']:.2f}")
-    print(f"  {'─'*W}")
-    print(f"  Total costs  : ₹{total_costs:,.2f}")
-    print(f"  Total P&L    : ₹{m['total_pnl']:,.2f}  (net of costs)")
-    print(f"  Return       : {m['return_pct']:.2f}%")
-    print(f"  Max DD       : ₹{m['max_drawdown']:,.2f}  ({m['max_drawdown_pct']:.2f}% of capital)")
-    print(f"  {'─'*W}")
-    print(f"  Sharpe*      : {m['sharpe_proxy']:.3f}")
-    print(f"  Sortino      : {m['sortino_ratio']:.3f}")
-    print(f"  Calmar       : {m['calmar_ratio']:.3f}")
-
     mr = m.get("monthly_returns", {})
     if mr:
         print(f"  {'─'*W}")
@@ -158,7 +143,132 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             bar = ("█" * bar_width) if data['pnl'] >= 0 else ("░" * bar_width)
             print(f"    {month}  {sign}₹{abs(data['pnl']):>8,.0f}  ({data['return_pct']:+.2f}%)  {bar}  [{data['trades']}t]")
 
+
+    C = 28  # width of each column (excluding separator)
+    col1 = [
+        f"{'Trades':<12}: {m['total_trades']}",
+        f"{'W / L':<12}: {m['wins']} / {m['losses']}",
+        f"{'Win Rate':<12}: {m['win_rate']:.1f}%",
+        f"{'Wt. Win%':<12}: {m['money_weighted_win_rate']:.1f}%",
+        f"{'Avg Win':<12}: ₹{m['avg_win']:,.2f}",
+        f"{'Avg Loss':<12}: ₹{m['avg_loss']:,.2f}",
+        f"{'Prof.Factor':<12}: {m['profit_factor']:.2f}",
+    ]
+    col2 = [
+        f"{'Total costs':<12}: ₹{total_costs:,.2f}",
+        f"{'Total P&L':<12}: ₹{m['total_pnl']:,.2f}",
+        f"{'Return':<12}: {m['return_pct']:.2f}%",
+        f"{'Max DD':<12}: ₹{m['max_drawdown']:,.0f}  ({m['max_drawdown_pct']:.1f}%)",
+    ]
+    col3 = [
+        f"{'Sharpe*':<8}: {m['sharpe_proxy']:.3f}",
+        f"{'Sortino':<8}: {m['sortino_ratio']:.3f}",
+        f"{'Calmar':<8}: {m['calmar_ratio']:.3f}",
+    ]
+    n = max(len(col1), len(col2), len(col3))
+    col1 += [""] * (n - len(col1))
+    col2 += [""] * (n - len(col2))
+    col3 += [""] * (n - len(col3))
+
+    print(f"\n  {'─'*(C*3+6)}")
+    for a, b, c in zip(col1, col2, col3):
+        print(f"  {a:<{C}}  │  {b:<{C}}  │  {c}")
+
+    from collections import defaultdict
+    reason_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "pnl": 0.0, "wins": 0, "held": 0})
+    for t in trades:
+        r = t.get("reason", "UNKNOWN")
+        reason_stats[r]["count"] += 1
+        reason_stats[r]["pnl"] += t["pnl"]
+        reason_stats[r]["held"] += t.get("held_candles", 0)
+        if t["pnl"] > 0:
+            reason_stats[r]["wins"] += 1
+    print(f"  {'─'*W}")
+    print(f"  Exit reasons:                              avg_bars")
+    max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
+    for reason in ["SL", "TRAILING", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
+        if reason not in reason_stats:
+            continue
+        s = reason_stats[reason]
+        bar = "█" * int(s["count"] / max_count * 20)
+        wr = s["wins"] / s["count"] * 100
+        avg_bars = s["held"] / s["count"]
+        print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
+
+    # Per-stock exit breakdown — one line per instrument
+    _REASON_ABBREV = {
+        "SL": "SL", "TRAILING": "TRL", "TRAILING_EOD_CLOSE": "EOD",
+        "PATTERN_TOP": "PAT", "STRATEGY": "STR", "TARGET": "TGT",
+        "OPEN@END": "END", "STAGNATION": "STG", "MODEL_EXIT": "MOD",
+        "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC",
+    }
+    # ANSI colours
+    _R = "\033[0m"         # reset
+    _REASON_COLOUR = {
+        "SL":                "\033[91m",   # bright red
+        "TRAILING":          "\033[93m",   # yellow
+        "TRAILING_EOD_CLOSE":"\033[92m",   # green
+        "PATTERN_TOP":       "\033[96m",   # cyan
+        "MODEL_EXIT":        "\033[94m",   # blue
+        "TARGET":            "\033[92m",   # green
+        "STAGNATION":        "\033[33m",   # dark yellow
+        "TIME_DECAY":        "\033[35m",   # magenta
+        "INTRADAY_CLOSE":    "\033[95m",   # bright magenta
+        "STRATEGY":          "\033[37m",   # white
+        "OPEN@END":          "\033[90m",   # grey
+    }
+
+    def _fmt_pnl(v: float) -> str:
+        colour = "\033[92m" if v >= 0 else "\033[91m"
+        sign = "+" if v >= 0 else "-"
+        amt = f"₹{abs(v)/1000:.1f}k" if abs(v) >= 1000 else f"₹{abs(v):.0f}"
+        return f"{colour}{sign}{amt}{_R}"
+
+    def _fmt_tag(reason: str, cnt: int, pnl: float) -> str:
+        abbr = _REASON_ABBREV.get(reason, reason[:3])
+        colour = _REASON_COLOUR.get(reason, "")
+        return f"{colour}{abbr}×{cnt}{_R}({_fmt_pnl(pnl)})"
+
+    per_stock: dict[str, dict] = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0}))
+    for t in trades:
+        per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["count"] += 1
+        per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["pnl"] += t["pnl"]
+
+    _REASON_ORDER = ["SL", "TRAILING", "TRAILING_EOD_CLOSE", "STAGNATION", "TIME_DECAY",
+                     "MODEL_EXIT", "PATTERN_TOP", "TARGET", "INTRADAY_CLOSE", "STRATEGY", "OPEN@END"]
+    BAR_W = 24
+
+    def _stacked_bar(reasons: dict, total: int) -> str:
+        ordered = [r for r in _REASON_ORDER if r in reasons]
+        ordered += sorted(set(reasons) - set(_REASON_ORDER))
+        segments = []
+        filled = 0
+        for i, reason in enumerate(ordered):
+            cnt = reasons[reason]["count"]
+            # last segment gets remainder to avoid rounding gaps
+            width = (BAR_W - filled) if i == len(ordered) - 1 else int(cnt / total * BAR_W)
+            if width > 0:
+                colour = _REASON_COLOUR.get(reason, "")
+                segments.append(f"{colour}{'█' * width}{_R}")
+            filled += width
+        return "".join(segments)
+
+    print(f"  {'─'*W}")
+    print(f"  Per-stock exits:")
+    legend_parts = [f"{_REASON_COLOUR.get(r, '')}{_REASON_ABBREV.get(r, r[:3])}{'█'}{_R}" for r in _REASON_ORDER]
+    print(f"    {'  '.join(legend_parts)}")
+    print()
+    for sym, reasons in sorted(per_stock.items()):
+        total_t = sum(r["count"] for r in reasons.values())
+        sym_short = sym.replace("NSE:", "")
+        stock_pnl = sum(r["pnl"] for r in reasons.values())
+        pnl_colour = "\033[92m" if stock_pnl >= 0 else "\033[91m"
+        bar = _stacked_bar(reasons, total_t)
+        pnl_str = _fmt_pnl(stock_pnl)
+        print(f"    {sym_short:<16} {total_t:>3}t  {bar}  {pnl_str}")
+
     print(f"  {'='*W}\n")
+
 
 
 def _dump_csv(trades: list[dict], from_date: str, to_date: str):
@@ -171,7 +281,7 @@ def _dump_csv(trades: list[dict], from_date: str, to_date: str):
     filename = f"portfolio_{from_str}_{to_str}_{timeframe}_{now}.csv"
     out_path = Path(__file__).resolve().parents[1] / "backtest_results" / filename
     fields = ["instrument", "entry_date", "exit_date", "entry", "exit", "qty",
-              "cost", "pnl", "product", "reason", "held_candles"]
+              "cost", "pnl", "product", "reason", "held_candles", "sl", "peak_high"]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
