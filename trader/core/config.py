@@ -109,6 +109,21 @@ class Config:
         return float(self._data["risk"].get("risk_reward", 2.0))
 
     @property
+    def dd_circuit_breaker_pct(self) -> float:
+        """Halt new entries when portfolio equity drops this % from its rolling peak. 0 = disabled."""
+        return float(self._data["risk"].get("dd_circuit_breaker_pct", 0.0))
+
+    @property
+    def dd_resume_pct(self) -> float:
+        """Resume entries when portfolio equity recovers to within this % of peak. 0 = disabled."""
+        return float(self._data["risk"].get("dd_resume_pct", 0.0))
+
+    @property
+    def dd_cooldown_days(self) -> int:
+        """Calendar days after tripping before peak is reset to current equity and trading resumes. 0 = never auto-reset."""
+        return int(self._data["risk"].get("dd_cooldown_days", 0))
+
+    @property
     def max_capital_per_stock(self) -> float:
         pct = float(self._data["risk"].get("max_capital_per_stock_pct", 100.0))
         return self.total_capital * pct / 100

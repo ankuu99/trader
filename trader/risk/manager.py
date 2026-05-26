@@ -10,6 +10,7 @@ Sizing: fixed % stop-loss, quantity = max_risk_per_trade / sl_distance
 """
 
 from dataclasses import dataclass
+from datetime import date
 
 from trader.core.config import config
 from trader.core.logger import get_logger
@@ -42,6 +43,10 @@ class RiskManager:
         self._cumulative_pnl: float = 0.0  # lifetime P&L — never resets; persisted to DB in live mode
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
+        # Portfolio-level drawdown circuit breaker
+        self._equity_peak: float = config.total_capital  # high-water mark of portfolio equity
+        self._dd_halted: bool = False
+        self._dd_tripped_date: date | None = None  # calendar date when circuit breaker fired
 
     @property
     def capital_available(self) -> float:
@@ -55,8 +60,60 @@ class RiskManager:
     def seed_cumulative_pnl(self, pnl: float) -> None:
         """Restore persisted cumulative P&L on startup (live mode only)."""
         self._cumulative_pnl = pnl
+        self._equity_peak = max(self._equity_peak, config.total_capital + pnl)
         logger.info("Seeded cumulative P&L | pnl=%.2f | effective_capital=%.0f",
                     pnl, config.total_capital + pnl)
+
+    @property
+    def portfolio_equity(self) -> float:
+        return config.total_capital + self._cumulative_pnl
+
+    def advance_date(self, current_date: date) -> None:
+        """Called once per trading day. Handles time-based circuit breaker reset."""
+        if not self._dd_halted:
+            return
+        if self._dd_tripped_date is None:
+            self._dd_tripped_date = current_date  # record first day of halt
+        cooldown = config.dd_cooldown_days
+        if cooldown <= 0:
+            return
+        days_since_trip = (current_date - self._dd_tripped_date).days
+        if days_since_trip >= cooldown:
+            equity = self.portfolio_equity
+            self._equity_peak = equity  # reset peak to current level — accept the loss
+            self._dd_halted = False
+            self._dd_tripped_date = None
+            logger.info(
+                "Portfolio circuit breaker RESET (cooldown=%dd elapsed) | new_peak=%.0f",
+                cooldown, self._equity_peak,
+            )
+
+    def _check_dd_circuit_breaker(self) -> None:
+        """Update drawdown circuit breaker state based on current portfolio equity."""
+        halt_pct = config.dd_circuit_breaker_pct
+        if halt_pct <= 0:
+            return  # disabled
+        equity = self.portfolio_equity
+        if equity > self._equity_peak:
+            self._equity_peak = equity
+        resume_pct = config.dd_resume_pct or halt_pct  # fallback to halt_pct if resume not set
+        if self._dd_halted:
+            if equity >= self._equity_peak * (1 - resume_pct / 100):
+                self._dd_halted = False
+                self._dd_tripped_date = None
+                logger.info(
+                    "Portfolio circuit breaker RESUMED | equity=%.0f peak=%.0f dd=%.1f%%",
+                    equity, self._equity_peak,
+                    (1 - equity / self._equity_peak) * 100 if self._equity_peak > 0 else 0,
+                )
+        else:
+            if equity < self._equity_peak * (1 - halt_pct / 100):
+                self._dd_halted = True
+                logger.warning(
+                    "Portfolio circuit breaker TRIPPED | equity=%.0f peak=%.0f dd=%.1f%% — halting new entries",
+                    equity, self._equity_peak,
+                    (1 - equity / self._equity_peak) * 100 if self._equity_peak > 0 else 0,
+                )
 
     def validate(self, signal: Signal) -> Order | None:
         self._last_reject_reason = None
@@ -69,6 +126,13 @@ class RiskManager:
 
         if signal.signal_type == SignalType.EXIT:
             return self._validate_exit(signal)
+
+        self._check_dd_circuit_breaker()
+        if self._dd_halted:
+            logger.warning("Signal rejected — portfolio DD circuit breaker | %s | equity=%.0f peak=%.0f",
+                           signal.instrument, self.portfolio_equity, self._equity_peak)
+            self._last_reject_reason = "dd_circuit_breaker"
+            return None
 
         if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
             logger.warning("Signal rejected — max open positions | %s", signal.instrument)
@@ -255,6 +319,7 @@ class RiskManager:
             pnl = (exit_price - entry_price) * qty
             self._realised_pnl += pnl
             self._cumulative_pnl += pnl
+            self._check_dd_circuit_breaker()
             logger.info(
                 "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f",
                 instrument, qty, entry_price, exit_price, pnl, self._realised_pnl,

@@ -1,17 +1,20 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 30000 
+  total: 300000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 10
+  max_open_positions: 20
   default_sl_pct: 3
+  dd_circuit_breaker_pct: 20  # halt new entries when portfolio DD > 20% from equity peak
+  dd_resume_pct: 15           # resume when equity recovers to < 15% DD from peak
+  dd_cooldown_days: 60        # after tripping, reset peak to current equity after this many calendar days
   risk_reward: 2.5
-  max_capital_per_stock_pct: 15.0
+  max_capital_per_stock_pct: 5.0
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
@@ -20,6 +23,7 @@ interested:
 
 
 watchlist:
+  # Original 7
   - NSE:ATHERENERG
   - NSE:CUPID
   - NSE:DCXINDIA
@@ -27,6 +31,28 @@ watchlist:
   - NSE:ABFRL
   - NSE:COROMANDEL
   - NSE:GUJALKALI
+  # Pharma
+  - NSE:LAURUSLABS
+  - NSE:GRANULES
+  - NSE:JBCHEPHARM
+  # Banking
+  - NSE:FEDERALBNK
+  # FMCG
+  - NSE:MARICO
+  # Telecom infra
+  - NSE:HFCL
+  # Metals / Steel
+  - NSE:JINDALSTEL
+  # Capital goods / Electrical
+  - NSE:CGPOWER
+  # Auto ancillary
+  - NSE:MSUMI
+  # Auto / Tyres
+  - NSE:BALKRISIND
+  # IT services
+  - NSE:COFORGE
+  # Power / Sponge iron
+  - NSE:GPIL
 
 
 
@@ -38,12 +64,12 @@ strategies:
     lookback_bars: 1200
     threshold: 0.85
     sell_threshold: 0.8
-    extrema_order: 20
+    extrema_order: 10
     profit_pct: 8
     trail_pct: 1.5
     sell_min_pct: 7.0
     hold_bars: 250           # max candles before time-based exit (extrema mode only)
-    sl_cooldown_bars: 48     # bars to block re-entry after a hard SL hit (~5 calendar days on 15min)
+    sl_cooldown_bars: 16     # bars to block re-entry after a hard SL hit (~1 calendar day on 15min)
     stop_pct: 10             # fallback if atr_stop_mult = 0
     atr_period: 250          # relevant when extrema mode
     retrain_every: 25

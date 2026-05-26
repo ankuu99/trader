@@ -322,6 +322,7 @@ def run_backtest(
             # Reset daily P&L and halt state so a daily-loss-limit breach on one
             # day doesn't permanently halt the rest of the backtest.
             risk.reset_day()
+            risk.advance_date(candle_date)
         prev_date = candle_date
 
         orders.on_candle(candle)

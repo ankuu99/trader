@@ -195,12 +195,42 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         avg_bars = s["held"] / s["count"]
         print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
 
+    # Per-stock exit breakdown — one line per instrument
+    _REASON_ABBREV = {
+        "SL": "SL", "TRAILING": "TRL", "PATTERN_TOP": "PAT",
+        "STRATEGY": "STR", "TARGET": "TGT", "OPEN@END": "END",
+        "STAGNATION": "STG", "MODEL_EXIT": "MOD",
+    }
+    def _fmt_pnl(v: float) -> str:
+        if abs(v) >= 1000:
+            return f"{'+'if v>=0 else '-'}₹{abs(v)/1000:.1f}k"
+        return f"{'+'if v>=0 else ''}₹{v:.0f}"
+
+    per_stock: dict[str, dict] = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0}))
+    for t in trades:
+        per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["count"] += 1
+        per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["pnl"] += t["pnl"]
+
+    _REASON_ORDER = ["SL", "TRAILING", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]
     print(f"  {'─'*W}")
-    print(f"  Health metrics:")
-    print(f"    Avg held bars  : {m['avg_held_bars']:.0f}  (median {m['median_held_bars']:.0f})")
-    print(f"    Dead trades    : {m['dead_trade_count']}t  ({m['dead_trade_pct']:.0f}%)  [>40b, |P&L|<2%]")
-    print(f"    Give-back ratio: {m['give_back_ratio']:.2f}  (exit/peak gain where peak>entry)")
-    print(f"    Median R-mult  : {m['median_r_multiple']:.2f}")
+    print(f"  Per-stock exits:")
+    for sym, reasons in sorted(per_stock.items()):
+        total_t = sum(r["count"] for r in reasons.values())
+        sym_short = sym.replace("NSE:", "")
+        parts = []
+        for reason in _REASON_ORDER:
+            if reason not in reasons:
+                continue
+            abbr = _REASON_ABBREV.get(reason, reason[:3])
+            cnt = reasons[reason]["count"]
+            pnl = reasons[reason]["pnl"]
+            parts.append(f"{abbr}×{cnt}({_fmt_pnl(pnl)})")
+        for reason in sorted(set(reasons) - set(_REASON_ORDER)):
+            abbr = _REASON_ABBREV.get(reason, reason[:3])
+            cnt = reasons[reason]["count"]
+            pnl = reasons[reason]["pnl"]
+            parts.append(f"{abbr}×{cnt}({_fmt_pnl(pnl)})")
+        print(f"    {sym_short:<16} {total_t:>3}t  {'  '.join(parts)}")
 
     print(f"  {'='*W}\n")
 
