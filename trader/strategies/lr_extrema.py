@@ -164,6 +164,8 @@ class LRExtremaStrategy(Strategy):
         self._sgd_trained_count: int = 0  # number of labeled samples seen in last SGD fit
         # E2: Force intraday close before market end (None = disabled)
         self._force_intraday_close: time | None = None
+        # E4: Force close trailing positions before market end (None = disabled)
+        self._force_trailing_close: time | None = None
         # E3: Hold-period bucketing — high-confidence entries get full hold_bars; lower get fast
         self._hold_bars_fast: int = params.get("hold_bars_fast", 0)   # 0 = disabled
         self._threshold_swing: float = params.get("threshold_swing", 0.0)  # P >= this → swing (full hold_bars)
@@ -179,6 +181,8 @@ class LRExtremaStrategy(Strategy):
         self._trading_end: time   = _parse_time(params.get("trading_end"),   time(15, 30))
         _fic = params.get("force_intraday_close_time")
         self._force_intraday_close = _parse_time(_fic, time(15, 15)) if _fic else None
+        _ftic = params.get("force_trailing_close_time")
+        self._force_trailing_close = _parse_time(_ftic, time(15, 25)) if _ftic else None
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -595,12 +599,35 @@ class LRExtremaStrategy(Strategy):
                     self.instrument, pct, self._profit_pct, self._peak_close,
                 )
 
+        # E4: Force close trailing positions before overnight gap risk (tick-level precision)
+        if self._trailing_active and self._force_trailing_close is not None:
+            _tick_ts = tick.get("timestamp")
+            _tick_time = _tick_ts.time() if hasattr(_tick_ts, "time") else None
+            if _tick_time is not None and _tick_time >= self._force_trailing_close:
+                logger.info(
+                    "LR-Extrema TRAILING EOD CLOSE | %s | price=%.2f",
+                    self.instrument, last_price,
+                )
+                self._reset_position_state()
+                return Signal(
+                    instrument=self.instrument,
+                    direction=Direction.BUY,
+                    signal_type=SignalType.EXIT,
+                    price_hint=last_price,
+                    strategy=self.name,
+                    exit_reason="TRAILING_EOD_CLOSE",
+                )
+
         reason: str | None = None
         if self._entry_stop is not None:
             if last_price <= self._entry_stop:
                 reason = f"stop-loss @ {self._entry_stop:.2f}"
         elif pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
+
+        # Trailing floor — once trailing activates and price falls back to profit_pct, lock in gains
+        if reason is None and self._trailing_active and pct <= self._profit_pct:
+            reason = f"trailing floor pct={pct:.2f}% <= {self._profit_pct:.2f}%"
 
         # A1: ATR-based give-back overrides trail_pct when trail_give_back_atr > 0
         if reason is None and self._trailing_active:
