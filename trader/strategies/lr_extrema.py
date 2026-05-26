@@ -31,7 +31,7 @@ Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
 
 from collections import deque
-import time
+from datetime import  time
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -68,6 +68,25 @@ class LRExtremaStrategy(Strategy):
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
         self._entry_min_norm_price: float = params.get("entry_min_norm_price", 0.0)
         self._entry_require_prior_decline: bool = bool(params.get("entry_require_prior_decline", False))
+
+        # RSI gate — RSI must be <= rsi_gate_max (oversold confirmation)
+        self._rsi_gate_enabled: bool = bool(params.get("rsi_gate_enabled", False))
+        self._rsi_period: int = int(params.get("rsi_period", 14))
+        self._rsi_gate_max: float = float(params.get("rsi_gate_max", 50.0))
+
+        # Stochastic RSI gate — K line must be <= stoch_rsi_gate_max (deeply oversold)
+        self._stoch_rsi_gate_enabled: bool = bool(params.get("stoch_rsi_gate_enabled", False))
+        self._stoch_rsi_period: int = int(params.get("stoch_rsi_period", 14))
+        self._stoch_rsi_smooth_k: int = int(params.get("stoch_rsi_smooth_k", 3))
+        self._stoch_rsi_gate_max: float = float(params.get("stoch_rsi_gate_max", 20.0))
+
+        # MACD gate — histogram must be negative but slope converging toward 0
+        self._macd_gate_enabled: bool = bool(params.get("macd_gate_enabled", False))
+        self._macd_fast: int = int(params.get("macd_fast", 12))
+        self._macd_slow: int = int(params.get("macd_slow", 26))
+        self._macd_signal_period: int = int(params.get("macd_signal_period", 9))
+        self._macd_slope_ma_period: int = int(params.get("macd_slope_ma_period", 3))
+        self._macd_slope_threshold: float = float(params.get("macd_slope_threshold", 0.0))
         
         def _parse_time(val: str | None, default: time) -> time:
             if val is None:
@@ -214,6 +233,46 @@ class LRExtremaStrategy(Strategy):
                         blocks.append(f"norm_price={x[1]:.2f}<{self._entry_min_norm_price}")
                     if self._entry_require_prior_decline and x[5] >= 0:
                         blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
+
+                    if self._rsi_gate_enabled:
+                        rsi_series = self._rsi_series(
+                            [c["close"] for c in self._candles], self._rsi_period
+                        )
+                        if not rsi_series:
+                            blocks.append("rsi=N/A(insufficient data)")
+                        else:
+                            rsi_val = rsi_series[-1]
+                            if rsi_val > self._rsi_gate_max:
+                                blocks.append(f"rsi={rsi_val:.1f}>{self._rsi_gate_max}")
+
+                    if self._stoch_rsi_gate_enabled:
+                        stoch_k = self._compute_stoch_rsi_k(
+                            self._candles, self._stoch_rsi_period, self._stoch_rsi_smooth_k
+                        )
+                        if stoch_k is None:
+                            blocks.append("stoch_rsi=N/A(insufficient data)")
+                        elif stoch_k > self._stoch_rsi_gate_max:
+                            blocks.append(f"stoch_rsi_k={stoch_k:.1f}>{self._stoch_rsi_gate_max}")
+
+                    if self._macd_gate_enabled:
+                        macd_state = self._compute_macd_state(
+                            self._candles,
+                            self._macd_fast,
+                            self._macd_slow,
+                            self._macd_signal_period,
+                            self._macd_slope_ma_period,
+                        )
+                        if macd_state is None:
+                            blocks.append("macd=N/A(insufficient data)")
+                        else:
+                            hist, avg_slope = macd_state
+                            if hist >= 0:
+                                blocks.append(f"macd_hist={hist:.4f}>=0(not in negative zone)")
+                            elif avg_slope <= self._macd_slope_threshold:
+                                blocks.append(
+                                    f"macd_avg_slope={avg_slope:.5f}<={self._macd_slope_threshold}(not converging)"
+                                )
+
                     if blocks:
                         self.last_filter_block = ", ".join(blocks)
                         logger.debug(
@@ -479,3 +538,95 @@ class LRExtremaStrategy(Strategy):
             if closes[i] == max(window):
                 maxima.append(i)
         return minima, maxima
+
+    # ------------------------------------------------------------------
+    # Indicator helpers (used by entry gate checks)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rsi_series(closes: list[float], period: int) -> list[float]:
+        """SMA-based RSI series. Each value uses the preceding `period` deltas."""
+        if len(closes) < period + 1:
+            return []
+        result = []
+        for i in range(period, len(closes)):
+            deltas = [closes[j] - closes[j - 1] for j in range(i - period + 1, i + 1)]
+            avg_gain = sum(max(d, 0.0) for d in deltas) / period
+            avg_loss = sum(abs(min(d, 0.0)) for d in deltas) / period
+            if avg_loss == 0:
+                result.append(100.0)
+            else:
+                result.append(100.0 - 100.0 / (1.0 + avg_gain / avg_loss))
+        return result
+
+    def _compute_stoch_rsi_k(
+        self,
+        candles,
+        period: int,
+        smooth_k: int,
+    ) -> float | None:
+        """Stochastic RSI K line. Uses `period` for both RSI and stochastic lookback.
+        Returns None if there is insufficient data."""
+        closes = [c["close"] for c in candles]
+        rsi_vals = self._rsi_series(closes, period)
+        if len(rsi_vals) < period + smooth_k - 1:
+            return None
+        stoch_vals = []
+        for i in range(period - 1, len(rsi_vals)):
+            window = rsi_vals[i - period + 1: i + 1]
+            lo, hi = min(window), max(window)
+            if hi == lo:
+                stoch_vals.append(0.0)
+            else:
+                stoch_vals.append((window[-1] - lo) / (hi - lo) * 100.0)
+        if len(stoch_vals) < smooth_k:
+            return None
+        return sum(stoch_vals[-smooth_k:]) / smooth_k
+
+    @staticmethod
+    def _ema_series(values: list[float], period: int) -> list[float]:
+        """Standard EMA series seeded with the first-period SMA."""
+        if len(values) < period:
+            return []
+        k = 2.0 / (period + 1)
+        result = [sum(values[:period]) / period]
+        for v in values[period:]:
+            result.append(v * k + result[-1] * (1 - k))
+        return result
+
+    def _compute_macd_state(
+        self,
+        candles,
+        fast: int,
+        slow: int,
+        signal_period: int,
+        slope_ma_period: int,
+    ) -> tuple[float, float] | None:
+        """Returns (current_histogram, avg_slope) or None if insufficient data.
+
+        avg_slope is the mean of the last `slope_ma_period` bar-to-bar histogram
+        differences (y2-y1 with x spacing=1). A positive avg_slope means the
+        histogram is consistently rising (converging toward 0 from negative).
+        """
+        closes = [c["close"] for c in candles]
+        if len(closes) < slow + signal_period + slope_ma_period:
+            return None
+        ema_fast = self._ema_series(closes, fast)
+        ema_slow = self._ema_series(closes, slow)
+        if not ema_fast or not ema_slow:
+            return None
+        # Align fast EMA to match slow EMA length
+        macd_vals = [ef - es for ef, es in zip(ema_fast[slow - fast:], ema_slow)]
+        signal_ema = self._ema_series(macd_vals, signal_period)
+        # signal_ema[i] corresponds to macd_vals[signal_period - 1 + i]
+        sig_offset = signal_period - 1
+        hist_series = [
+            macd_vals[sig_offset + i] - signal_ema[i]
+            for i in range(len(signal_ema))
+        ]
+        if len(hist_series) < slope_ma_period + 1:
+            return None
+        current_hist = hist_series[-1]
+        slopes = [hist_series[i] - hist_series[i - 1] for i in range(-slope_ma_period, 0)]
+        avg_slope = sum(slopes) / slope_ma_period
+        return current_hist, avg_slope
