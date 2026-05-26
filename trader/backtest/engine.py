@@ -334,7 +334,10 @@ def run_backtest(
         # at the correct price rather than slipping to the next candle's open.
         # Skip the fill candle itself — GTT is disabled so same-candle entry+exit
         # cannot happen in live trading (strategy only sees exits on closed candles).
-        if symbol in open_positions and current_ts[0] != open_positions[symbol]["entry_date"]:
+        # Also skip candles outside the trading window — mirrors on_tick gate in live mode.
+        _candle_time = candle["timestamp"].time()
+        _in_window = config.trading_start <= _candle_time <= config.trading_end
+        if symbol in open_positions and current_ts[0] != open_positions[symbol]["entry_date"] and _in_window:
             pos = open_positions[symbol]
             sl_hit = pos["sl"] > 0 and candle["low"] <= pos["sl"]
             tgt_hit = pos["target"] > 0 and candle["high"] >= pos["target"]
@@ -396,15 +399,18 @@ def run_backtest(
         # Feed candle high first (updates _peak_close), then close (checks trail).
         # Hard SL is already handled intrabar above; if it fired, strategy state
         # is already reset and on_tick returns None safely.
-        if symbol in open_positions:
+        if symbol in open_positions and _in_window:
             for tick_price in (candle["high"], candle["close"]):
                 tick_signal = strategy.on_tick({
                     "last_price": tick_price,
                     "instrument_token": candle.get("instrument_token"),
+                    "timestamp": candle["timestamp"],
                 })
                 if tick_signal is not None:
                     pos = open_positions.pop(symbol)
-                    exit_price = candle["close"]
+                    # Use tick_price (high or close), gap-adjusted to candle open.
+                    exit_price = min(tick_price, candle["open"])
+                    tick_reason = getattr(tick_signal, "exit_reason", None) or "TRAILING"
                     net, cost, product = _net_pnl(
                         pos["entry"], exit_price, pos["qty"],
                         pos["entry_date"], candle["timestamp"]
@@ -417,7 +423,7 @@ def run_backtest(
                         "pnl": net,
                         "cost": cost,
                         "product": product,
-                        "reason": "TRAILING",
+                        "reason": tick_reason,
                         "entry_date": pos["entry_date"],
                         "exit_date": candle["timestamp"],
                         "held_candles": pos.get("candle_count", 0),

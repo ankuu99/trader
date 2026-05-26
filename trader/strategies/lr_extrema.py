@@ -31,6 +31,7 @@ Features: volume, normalised price, 3/5/10/20-bar linear-regression slopes.
 """
 
 from collections import deque
+import time
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -67,6 +68,16 @@ class LRExtremaStrategy(Strategy):
         self._entry_min_volume_ratio: float = params.get("entry_min_volume_ratio", 0.0)
         self._entry_min_norm_price: float = params.get("entry_min_norm_price", 0.0)
         self._entry_require_prior_decline: bool = bool(params.get("entry_require_prior_decline", False))
+        
+        def _parse_time(val: str | None, default: time) -> time:
+            if val is None:
+                return default
+            h, m = val.split(":")
+            return time(int(h), int(m))
+        
+        # E4: Force close trailing positions before market end (None = disabled)
+        _ftic = params.get("force_trailing_close_time")
+        self._force_trailing_close = _parse_time(_ftic, time(15, 25)) if _ftic else None
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -266,6 +277,24 @@ class LRExtremaStrategy(Strategy):
                 "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
                 self.instrument, pct, self._profit_pct, self._peak_close,
             )
+        # E4: Force close trailing positions before overnight gap risk (tick-level precision)
+        if self._trailing_active and self._force_trailing_close is not None:
+            _tick_ts = tick.get("timestamp")
+            _tick_time = _tick_ts.time() if hasattr(_tick_ts, "time") else None
+            if _tick_time is not None and _tick_time >= self._force_trailing_close:
+                logger.info(
+                    "LR-Extrema TRAILING EOD CLOSE | %s | price=%.2f",
+                    self.instrument, last_price,
+                )
+                self._reset_position_state()
+                return Signal(
+                    instrument=self.instrument,
+                    direction=Direction.BUY,
+                    signal_type=SignalType.EXIT,
+                    price_hint=last_price,
+                    strategy=self.name,
+                    exit_reason="TRAILING_EOD_CLOSE",
+                )
 
         reason: str | None = None
         if pct <= -self._stop_pct:
@@ -274,6 +303,10 @@ class LRExtremaStrategy(Strategy):
             drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
             if drawdown <= -self._trail_pct:
                 reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
+        # Trailing floor — once trailing activates and price falls back below profit_pct, lock in gains.
+        # Strict < avoids firing on the same tick trailing activates (pct == profit_pct).
+        if reason is None and self._trailing_active and pct < self._profit_pct:
+            reason = f"trailing floor pct={pct:.2f}% < {self._profit_pct:.2f}%"
 
         if reason:
             logger.info(
