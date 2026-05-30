@@ -8,7 +8,7 @@ risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 10
+  max_open_positions: 20
   default_sl_pct: 3
   risk_reward: 2.5
   max_capital_per_stock_pct: 15.0
@@ -16,19 +16,50 @@ risk:
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
   - NSE:DCXINDIA
-  - NSE:GOKEX
   - NSE:ABFRL
-  - NSE:COROMANDEL
 
 
 watchlist:
-  - NSE:ATHERENERG
-  - NSE:CUPID
-  - NSE:DCXINDIA
-  - NSE:GOKEX
-  - NSE:ABFRL
-  - NSE:COROMANDEL
-  - NSE:GUJALKALI
+  # === CONFIRMED GOOD STOCKS (3 iterations of validation) ===
+  # --- Legacy watchlist (long-term validated) ---
+  - NSE:ATHERENERG     # +₹7.2k, 16t
+  - NSE:CUPID          # +₹7.9k, 35t
+  - NSE:GOKEX          # +₹4.6k, 12t
+  - NSE:POLYCAB        # +₹2.9k,  7t
+  - NSE:IRCTC          # +₹182,  12t
+  - NSE:INDUSINDBK     # +₹3.6k, 11t
+  - NSE:ASTRAL         # +₹1.4k, 12t
+  - NSE:NTPC           # +₹1.5k, 17t
+  - NSE:SBIN           # +₹5.7k, 11t
+  - NSE:CHOLAFIN       # +₹3.2k,  6t
+  # --- New confirmed winners (iter 1-3) ---
+  - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
+  - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
+  - NSE:FEDERALBNK     # +₹7.0k, 15t — mid-cap bank
+  - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
+  - NSE:RADICO         # +₹5.2k, 15t — spirits
+  - NSE:RVNL           # +₹4.4k, 22t — rail infra
+  - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
+  - NSE:SOLARINDS      # +₹3.3k, 13t — explosives / defence
+  - NSE:CGPOWER        # +₹3.2k, 10t — transformers
+  - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
+  - NSE:MFSL           # +₹3.1k, 14t — insurance
+  - NSE:MARICO         # +₹2.9k, 14t — FMCG
+  - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
+  - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
+  - NSE:LTF            # +₹1.7k, 10t — NBFC
+  - NSE:GAIL           # +₹1.0k, 12t — gas distribution
+  - NSE:RECLTD         # +₹656,  10t — power finance
+  - NSE:MCX            # +₹390,  26t — commodity exchange
+  # --- Borderline (few trades, positive — keep for live monitoring) ---
+  - NSE:DIXON          # +₹236,   4t — electronics manufacturing
+  # === REMOVED (losers across iterations) ===
+  # IDFCFIRSTB -₹978, JSWENERGY -₹3.2k, SIEMENS -₹2.0k
+  # DABUR -₹154, BRITANNIA -₹162, CDSL -₹980, COROMANDEL -₹779
+  # SRF -₹653, BDL -₹605, EXIDEIND -₹413, NMDC -₹455
+  # TATAPOWER -₹315, JUBLFOOD -₹24, ANGELONE -₹918, ROHLTD -₹482
+  # KALYANKJIL -₹2.5k, IREDA -₹2.2k, SUZLON -₹2.1k
+  
 
 
 
@@ -41,36 +72,49 @@ strategies:
     threshold: 0.90
     profit_pct: 7
     trail_pct: 1.5
-    sell_min_pct: 7.0
-    sell_threshold: 0.60
+    sell_min_pct: 12.0
+    sell_threshold: 0.70
     min_hold_before_exit: 1
     stop_pct: 10
     hold_bars: 400
     retrain_every: 25
-    extrema_order: 10
+    extrema_order: 15
     veto_threshold: 0.5
     volume_ma_bars: 20
-    entry_min_volume_ratio: 0  # e.g. 1.3 — block if volume < 1.3x average
-    entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range
-    entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising
+    breakeven_pct: 0.0
+    model_stop_pct: 0.0         # disabled — cuts profitable pullbacks prematurely
+    model_stop_min_hold: 20
+    model_stop_threshold: 0.72
+    entry_min_volume_ratio: 0
+    entry_min_norm_price: 0.0
+    entry_require_prior_decline: false
     force_trailing_close_time: "15:25"
+    # ATR-based dynamic stops (disabled — 15min bar ATR too small for multi-day swing trades)
+    atr_period: 25
+    atr_stop_mult: 0.0
+    atr_profit_mult: 0.0
+    atr_trail_mult: 0.0
+    # EMA trend gate — only buy when price is above EMA (uptrend filter)
+    ema_gate_enabled: true
+    ema_gate_period: 25
+    ema_gate_rising_bars: 20
+    ema_gate_long_period: 0     # dual-EMA disabled (EMA200 filter hurt more than it helped)
     # RSI gate (disabled by default)
     rsi_gate_enabled: false
     rsi_period: 14
-    rsi_gate_max: 30.0           # RSI must be <= this to allow entry
+    rsi_gate_max: 30.0
     # Stochastic RSI gate (disabled by default)
     stoch_rsi_gate_enabled: false
-    stoch_rsi_period: 14         # used for both RSI calc and stochastic lookback
-    stoch_rsi_smooth_k: 3        # K-line smoothing
-    stoch_rsi_gate_max: 20.0     # StochRSI K must be <= this (deeply oversold)
+    stoch_rsi_period: 14
+    stoch_rsi_smooth_k: 3
+    stoch_rsi_gate_max: 50.0
     # MACD gate (disabled by default)
-    # Passes when: histogram < 0 AND MA(bar-to-bar histogram slope) > macd_slope_threshold
     macd_gate_enabled: false
     macd_fast: 12
     macd_slow: 26
     macd_signal_period: 9
-    macd_slope_ma_period: 3      # number of consecutive slopes to average
-    macd_slope_threshold: 0.0    # avg slope must exceed this (positive = converging toward 0)
+    macd_slope_ma_period: 1
+    macd_slope_threshold: 0.0
 
 
 data:

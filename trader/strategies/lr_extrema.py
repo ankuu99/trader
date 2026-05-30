@@ -69,6 +69,15 @@ class LRExtremaStrategy(Strategy):
         self._entry_min_norm_price: float = params.get("entry_min_norm_price", 0.0)
         self._entry_require_prior_decline: bool = bool(params.get("entry_require_prior_decline", False))
 
+        # EMA trend gate — price must be above EMA(period) to enter (uptrend filter)
+        self._ema_gate_enabled: bool = bool(params.get("ema_gate_enabled", False))
+        self._ema_gate_period: int = int(params.get("ema_gate_period", 50))
+        # 0 = disabled; N > 0 = also require EMA is rising vs N bars ago
+        self._ema_gate_rising_bars: int = int(params.get("ema_gate_rising_bars", 0))
+        # Dual EMA: when > 0, also require short EMA > long EMA (medium-term uptrend filter)
+        # EMA(short) > EMA(long) = "Golden Cross" regime — avoids entries in extended corrections
+        self._ema_gate_long_period: int = int(params.get("ema_gate_long_period", 0))
+
         # RSI gate — RSI must be <= rsi_gate_max (oversold confirmation)
         self._rsi_gate_enabled: bool = bool(params.get("rsi_gate_enabled", False))
         self._rsi_period: int = int(params.get("rsi_period", 14))
@@ -80,6 +89,14 @@ class LRExtremaStrategy(Strategy):
         self._stoch_rsi_smooth_k: int = int(params.get("stoch_rsi_smooth_k", 3))
         self._stoch_rsi_gate_max: float = float(params.get("stoch_rsi_gate_max", 20.0))
 
+        # Model-based early stop — exit at moderate loss when model detects top forming
+        # Fires when: -model_stop_pct <= gain < 0 AND held >= model_stop_min_hold
+        #             AND P(local-max) >= model_stop_threshold
+        # Disabled by default (model_stop_pct = 0)
+        self._model_stop_pct: float = float(params.get("model_stop_pct", 0.0))
+        self._model_stop_min_hold: int = int(params.get("model_stop_min_hold", 10))
+        self._model_stop_threshold: float = float(params.get("model_stop_threshold", 0.75))
+
         # MACD gate — histogram must be negative but slope converging toward 0
         self._macd_gate_enabled: bool = bool(params.get("macd_gate_enabled", False))
         self._macd_fast: int = int(params.get("macd_fast", 12))
@@ -87,7 +104,16 @@ class LRExtremaStrategy(Strategy):
         self._macd_signal_period: int = int(params.get("macd_signal_period", 9))
         self._macd_slope_ma_period: int = int(params.get("macd_slope_ma_period", 3))
         self._macd_slope_threshold: float = float(params.get("macd_slope_threshold", 0.0))
-        
+
+        # ATR-based dynamic stops (overrides fixed stop_pct / profit_pct / trail_pct when > 0)
+        # atr_stop_mult > 0 enables: stop = entry - atr_stop_mult * ATR
+        # atr_profit_mult > 0 enables: trailing activates at entry + atr_profit_mult * ATR
+        # atr_trail_mult > 0 enables: trailing distance = atr_trail_mult * ATR
+        self._atr_period: int = int(params.get("atr_period", 14))
+        self._atr_stop_mult: float = float(params.get("atr_stop_mult", 0.0))
+        self._atr_profit_mult: float = float(params.get("atr_profit_mult", 0.0))
+        self._atr_trail_mult: float = float(params.get("atr_trail_mult", 0.0))
+
         def _parse_time(val: str | None, default: time) -> time:
             if val is None:
                 return default
@@ -97,6 +123,10 @@ class LRExtremaStrategy(Strategy):
         # E4: Force close trailing positions before market end (None = disabled)
         _ftic = params.get("force_trailing_close_time")
         self._force_trailing_close = _parse_time(_ftic, time(15, 25)) if _ftic else None
+
+        # Breakeven stop — once price rises breakeven_pct from entry, stop moves to entry price
+        # 0 = disabled
+        self._breakeven_pct: float = float(params.get("breakeven_pct", 0.0))
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._model: LogisticRegression | None = None
@@ -110,6 +140,12 @@ class LRExtremaStrategy(Strategy):
         self._held_bars: int = 0
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
+        self._breakeven_activated: bool = False  # True once price hit breakeven_pct above entry
+
+        # ATR-derived absolute levels, set at entry when atr_stop_mult > 0
+        self._dynamic_sl_price: float | None = None
+        self._dynamic_trail_activation: float | None = None  # price where trailing activates
+        self._dynamic_trail_distance: float | None = None    # absolute trail gap from peak
 
         # set to the block reason string when an entry is filtered; None otherwise
         self.last_filter_block: str | None = None
@@ -213,6 +249,39 @@ class LRExtremaStrategy(Strategy):
                             timestamp=candle.get("timestamp"),
                         )
 
+        # --- Model-based early stop (on-candle) ---
+        # When position is underwater (between -model_stop_pct and 0%) and the model
+        # detects a local maximum forming, exit early rather than waiting for the hard SL.
+        # This converts slow-bleeding SL trades into faster, smaller losses.
+        if (not self.is_flat() and self._model_stop_pct > 0 and self._trained
+                and self._entry_price is not None
+                and self._held_bars >= self._model_stop_min_hold
+                and -self._model_stop_pct <= _pct_gain < 0.0):
+            x = self._compute_features(self._candles)
+            if x is not None:
+                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                classes = list(self._model.classes_)
+                proba = self._model.predict_proba(x_scaled)[0]
+                if 1 in classes:
+                    p_max = proba[classes.index(1)]
+                    if p_max >= self._model_stop_threshold:
+                        logger.info(
+                            "LR-Extrema MODEL-STOP | %s | P(max)=%.3f >= %.3f | gain=%.2f%% | price=%.2f | candle=%s",
+                            self.instrument, p_max, self._sell_threshold, _pct_gain, close,
+                            candle.get("timestamp"),
+                        )
+                        self._reset_position_state()
+                        self._candles_since_train += 1
+                        return Signal(
+                            instrument=self.instrument,
+                            direction=Direction.BUY,
+                            signal_type=SignalType.EXIT,
+                            price_hint=close,
+                            strategy=self.name,
+                            exit_reason="MODEL_STOP",
+                            timestamp=candle.get("timestamp"),
+                        )
+
         # --- Entry prediction ---
         # Both gates must pass: P(local-min) >= threshold AND P(local-max) < veto_threshold.
         # The veto prevents entering when the model simultaneously thinks a top is forming.
@@ -233,6 +302,31 @@ class LRExtremaStrategy(Strategy):
                         blocks.append(f"norm_price={x[1]:.2f}<{self._entry_min_norm_price}")
                     if self._entry_require_prior_decline and x[5] >= 0:
                         blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
+
+                    if self._ema_gate_enabled:
+                        closes = [c["close"] for c in self._candles]
+                        ema_vals = self._ema_series(closes, self._ema_gate_period)
+                        if not ema_vals:
+                            blocks.append(f"ema{self._ema_gate_period}=N/A(insufficient data)")
+                        else:
+                            ema_val = ema_vals[-1]
+                            if close < ema_val:
+                                blocks.append(f"price={close:.2f}<ema{self._ema_gate_period}={ema_val:.2f}(downtrend)")
+                            elif self._ema_gate_rising_bars > 0 and len(ema_vals) > self._ema_gate_rising_bars:
+                                ema_past = ema_vals[-(self._ema_gate_rising_bars + 1)]
+                                if ema_val <= ema_past:
+                                    blocks.append(f"ema{self._ema_gate_period}=declining({ema_val:.2f}<={ema_past:.2f})")
+                            # Dual EMA: short EMA must be above long EMA (medium-term trend guard)
+                            if self._ema_gate_long_period > 0:
+                                ema_long_vals = self._ema_series(closes, self._ema_gate_long_period)
+                                if not ema_long_vals:
+                                    blocks.append(f"ema{self._ema_gate_long_period}=N/A(insufficient data)")
+                                else:
+                                    ema_long_val = ema_long_vals[-1]
+                                    if ema_val < ema_long_val:
+                                        blocks.append(
+                                            f"ema{self._ema_gate_period}={ema_val:.2f}<ema{self._ema_gate_long_period}={ema_long_val:.2f}(medium_downtrend)"
+                                        )
 
                     if self._rsi_gate_enabled:
                         rsi_series = self._rsi_series(
@@ -266,11 +360,10 @@ class LRExtremaStrategy(Strategy):
                             blocks.append("macd=N/A(insufficient data)")
                         else:
                             hist, avg_slope = macd_state
-                            if hist >= 0:
-                                blocks.append(f"macd_hist={hist:.4f}>=0(not in negative zone)")
-                            elif avg_slope <= self._macd_slope_threshold:
+                            if avg_slope <= self._macd_slope_threshold:
                                 blocks.append(
-                                    f"macd_avg_slope={avg_slope:.5f}<={self._macd_slope_threshold}(not converging)"
+                                    f"macd_avg_slope={avg_slope:.5f}<={self._macd_slope_threshold}"
+                                    f"(hist={hist:.4f},not converging)"
                                 )
 
                     if blocks:
@@ -282,15 +375,29 @@ class LRExtremaStrategy(Strategy):
                         self._candles_since_train += 1
                         return None
 
+                    # Compute ATR-based dynamic stop levels if configured
+                    atr_val = self._compute_atr(list(self._candles), self._atr_period)
+                    if atr_val is not None and self._atr_stop_mult > 0:
+                        self._dynamic_sl_price = round(close - self._atr_stop_mult * atr_val, 2)
+                        if self._atr_profit_mult > 0:
+                            self._dynamic_trail_activation = close + self._atr_profit_mult * atr_val
+                        if self._atr_trail_mult > 0:
+                            self._dynamic_trail_distance = self._atr_trail_mult * atr_val
+                        sl_hint = self._dynamic_sl_price
+                    else:
+                        self._dynamic_sl_price = None
+                        self._dynamic_trail_activation = None
+                        self._dynamic_trail_distance = None
+                        sl_hint = round(close * (1 - self._stop_pct / 100), 2)
+
                     logger.info(
-                        "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",
+                        "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | sl=%.2f | atr=%.2f | candle=%s",
                         self.instrument, p_min, self._threshold, p_max, self._veto_threshold, close,
-                        candle.get("timestamp"),
+                        sl_hint, atr_val or 0.0, candle.get("timestamp"),
                     )
                     self._entry_price = close  # guards against re-entry; overridden by fill price in on_order_update
                     self._held_bars = 0
                     self._candles_since_train += 1
-                    sl_hint = round(close * (1 - self._stop_pct / 100), 2)
                     return Signal(
                         instrument=self.instrument,
                         direction=Direction.BUY,
@@ -328,14 +435,24 @@ class LRExtremaStrategy(Strategy):
         if self._peak_close is None or last_price > self._peak_close:
             self._peak_close = last_price
 
-        # Activate trailing once minimum profit floor is reached
         pct = (last_price - self._entry_price) / self._entry_price * 100.0
-        if not self._trailing_active and pct >= self._profit_pct:
-            self._trailing_active = True
-            logger.info(
-                "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
-                self.instrument, pct, self._profit_pct, self._peak_close,
-            )
+
+        # Trailing activation — ATR-based or fixed %
+        if not self._trailing_active:
+            if self._dynamic_trail_activation is not None:
+                if last_price >= self._dynamic_trail_activation:
+                    self._trailing_active = True
+                    logger.info(
+                        "LR-Extrema TRAILING activated (ATR) | %s | price=%.2f >= activation=%.2f | peak=%.2f",
+                        self.instrument, last_price, self._dynamic_trail_activation, self._peak_close,
+                    )
+            elif pct >= self._profit_pct:
+                self._trailing_active = True
+                logger.info(
+                    "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
+                    self.instrument, pct, self._profit_pct, self._peak_close,
+                )
+
         # E4: Force close trailing positions before overnight gap risk (tick-level precision)
         if self._trailing_active and self._force_trailing_close is not None:
             _tick_ts = tick.get("timestamp")
@@ -355,17 +472,48 @@ class LRExtremaStrategy(Strategy):
                     exit_reason="TRAILING_EOD_CLOSE",
                 )
 
+        # Activate breakeven stop once price rises enough
+        if self._breakeven_pct > 0 and not self._breakeven_activated and pct >= self._breakeven_pct:
+            self._breakeven_activated = True
+            logger.info(
+                "LR-Extrema BREAKEVEN activated | %s | pct=+%.2f%% >= %.2f%% | stop moves to entry",
+                self.instrument, pct, self._breakeven_pct,
+            )
+
         reason: str | None = None
-        if pct <= -self._stop_pct:
+        exit_reason: str | None = None
+        if self._breakeven_activated and pct <= 0.0:
+            reason = f"breakeven stop pct={pct:.2f}% (activated after +{self._breakeven_pct:.1f}%)"
+            exit_reason = "BREAKEVEN"
+        elif self._dynamic_sl_price is not None:
+            # ATR-based stop loss (absolute price level)
+            if last_price <= self._dynamic_sl_price:
+                reason = f"stop-loss (ATR) price={last_price:.2f} <= sl={self._dynamic_sl_price:.2f}"
+                exit_reason = "SL"
+        elif pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
-        elif self._trailing_active:
-            drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
-            if drawdown <= -self._trail_pct:
-                reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
-        # Trailing floor — once trailing activates and price falls back below profit_pct, lock in gains.
-        # Strict < avoids firing on the same tick trailing activates (pct == profit_pct).
-        if reason is None and self._trailing_active and pct < self._profit_pct:
-            reason = f"trailing floor pct={pct:.2f}% < {self._profit_pct:.2f}%"
+            exit_reason = "SL"
+
+        if reason is None and self._trailing_active:
+            if self._dynamic_trail_distance is not None:
+                # ATR-based trailing: distance from peak in absolute price
+                drawdown_abs = self._peak_close - last_price
+                if drawdown_abs >= self._dynamic_trail_distance:
+                    reason = f"trailing stop (ATR) drawdown={drawdown_abs:.2f} >= dist={self._dynamic_trail_distance:.2f}"
+                    exit_reason = "TRAILING"
+                # ATR trailing floor: price fell back below activation threshold
+                elif self._dynamic_trail_activation is not None and last_price < self._dynamic_trail_activation:
+                    reason = f"trailing floor (ATR) price={last_price:.2f} < activation={self._dynamic_trail_activation:.2f}"
+                    exit_reason = "TRAILING"
+            else:
+                drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
+                if drawdown <= -self._trail_pct:
+                    reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
+                    exit_reason = "TRAILING"
+                # Trailing floor — once trailing activates and price falls back below profit_pct
+                elif pct < self._profit_pct:
+                    reason = f"trailing floor pct={pct:.2f}% < {self._profit_pct:.2f}%"
+                    exit_reason = "TRAILING"
 
         if reason:
             logger.info(
@@ -379,6 +527,7 @@ class LRExtremaStrategy(Strategy):
                 signal_type=SignalType.EXIT,
                 price_hint=last_price,
                 strategy=self.name,
+                exit_reason=exit_reason,
                 timestamp=tick.get("timestamp"),
             )
 
@@ -390,6 +539,10 @@ class LRExtremaStrategy(Strategy):
         self._held_bars = 0
         self._peak_close = None
         self._trailing_active = False
+        self._breakeven_activated = False
+        self._dynamic_sl_price = None
+        self._dynamic_trail_activation = None
+        self._dynamic_trail_distance = None
 
     def on_order_update(self, order: dict) -> None:
         super().on_order_update(order)
@@ -538,6 +691,20 @@ class LRExtremaStrategy(Strategy):
             if closes[i] == max(window):
                 maxima.append(i)
         return minima, maxima
+
+    @staticmethod
+    def _compute_atr(candles: list[dict], period: int = 14) -> float | None:
+        """Average True Range over the last `period` candles. Returns None if insufficient data."""
+        if len(candles) < period + 1:
+            return None
+        trs = []
+        for i in range(len(candles) - period, len(candles)):
+            high = candles[i]["high"]
+            low = candles[i]["low"]
+            prev_close = candles[i - 1]["close"]
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            trs.append(tr)
+        return sum(trs) / period
 
     # ------------------------------------------------------------------
     # Indicator helpers (used by entry gate checks)
