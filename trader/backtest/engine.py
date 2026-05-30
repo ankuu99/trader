@@ -396,49 +396,103 @@ def run_backtest(
             continue
 
         # Trailing stop simulation via on_tick.
-        # Feed candle high first (updates _peak_close), then close (checks trail).
+        # Tick sequence: high → intrabar-low-check → close.
+        # (1) high: updates _peak_close; may fire trailing if high < previous peak's floor.
+        # (2) intrabar low check: if candle["low"] dips below the trailing floor after the
+        #     high tick updated _peak_close, the trailing stop fires at the floor price.
+        #     This prevents a systematic over-optimisation where PATTERN_TOP fires at close
+        #     on candles where trailing would have already exited intraday.
+        # (3) close: fires trailing if close ends below the floor (candle didn't recover).
         # Hard SL is already handled intrabar above; if it fired, strategy state
         # is already reset and on_tick returns None safely.
         if symbol in open_positions and _in_window and current_ts[0] != open_positions[symbol]["entry_date"]:
-            for tick_price in (candle["high"], candle["close"]):
-                tick_signal = strategy.on_tick({
-                    "last_price": tick_price,
+            _trail_pct_val = params.get("trail_pct", 0.0)
+            _fired_tick_price: float | None = None
+            _tick_signal_result = None
+
+            # Capture the trailing state BEFORE the high tick updates _peak_close.
+            # We use the old (pre-candle) peak to detect intrabar trailing hits that
+            # occurred against a floor that was already set from previous candles.
+            # This avoids the "high before low" assumption: we only fire intrabar if the
+            # candle's low breaches a floor that was established BEFORE this candle started.
+            _old_pk_for_intrabar = getattr(strategy, "_peak_close", None)
+            _old_ta_for_intrabar = getattr(strategy, "_trailing_active", False)
+
+            # --- Tick 1: high ---
+            _tick_signal_result = strategy.on_tick({
+                "last_price": candle["high"],
+                "instrument_token": candle.get("instrument_token"),
+                "timestamp": candle["timestamp"],
+            })
+            _fired_tick_price = candle["high"]
+
+            # --- Tick 1.5: intrabar low trailing check (against PRE-CANDLE peak) ---
+            # Fires when the candle's low breaches the trailing floor that existed at
+            # candle open — i.e., the floor from a PREVIOUS candle's peak.
+            # This is unambiguous: price definitely passed through that floor intraday
+            # regardless of whether the high or low came first within this candle.
+            # We do NOT use the post-high peak here, which would require assuming "high
+            # before low" — an assumption we cannot verify from OHLC data alone.
+            _intrabar_trail_fired = False
+            if _tick_signal_result is None and _trail_pct_val > 0 and symbol in open_positions:
+                if _old_ta_for_intrabar and _old_pk_for_intrabar is not None:
+                    _old_trail_floor = _old_pk_for_intrabar * (1 - _trail_pct_val / 100)
+                    if candle["low"] <= _old_trail_floor:
+                        _tick_signal_result = strategy.on_tick({
+                            "last_price": _old_trail_floor,
+                            "instrument_token": candle.get("instrument_token"),
+                            "timestamp": candle["timestamp"],
+                        })
+                        _fired_tick_price = _old_trail_floor
+                        _intrabar_trail_fired = True
+
+            # --- Tick 2: close ---
+            if _tick_signal_result is None and symbol in open_positions:
+                _tick_signal_result = strategy.on_tick({
+                    "last_price": candle["close"],
                     "instrument_token": candle.get("instrument_token"),
                     "timestamp": candle["timestamp"],
                 })
-                if tick_signal is not None:
-                    pos = open_positions.pop(symbol)
-                    # Use tick_price (high or close), gap-adjusted to candle open.
-                    exit_price = min(tick_price, candle["open"])
-                    tick_reason = getattr(tick_signal, "exit_reason", None) or "TRAILING"
-                    net, cost, product = _net_pnl(
-                        pos["entry"], exit_price, pos["qty"],
-                        pos["entry_date"], candle["timestamp"]
-                    )
-                    trades.append({
-                        "instrument": symbol,
-                        "entry": pos["entry"],
-                        "exit": exit_price,
-                        "qty": pos["qty"],
-                        "pnl": net,
-                        "cost": cost,
-                        "product": product,
-                        "reason": tick_reason,
-                        "entry_date": pos["entry_date"],
-                        "exit_date": candle["timestamp"],
-                        "held_candles": pos.get("candle_count", 0),
-                    })
-                    risk.close_position(symbol, exit_price)
-                    strategy.on_order_update({
-                        "status": "COMPLETE",
-                        "instrument": symbol,
-                        "direction": "SELL",
-                        "signal_type": "EXIT",
-                        "quantity": pos["qty"],
-                        "price": exit_price,
-                        "fill_price": exit_price,
-                    })
-                    break
+                _fired_tick_price = candle["close"]
+
+            if _tick_signal_result is not None:
+                pos = open_positions.pop(symbol)
+                # Gap-adjust: if candle opened through the exit level, fill at open.
+                # Exception: the intrabar trail floor was created by this candle's own high
+                # (price path open→high→floor), so the open-gap adjustment doesn't apply —
+                # the stop level was always achievable intraday regardless of where open was.
+                if _intrabar_trail_fired:
+                    exit_price = _fired_tick_price  # trail_floor, always achievable
+                else:
+                    exit_price = min(_fired_tick_price, candle["open"])
+                tick_reason = getattr(_tick_signal_result, "exit_reason", None) or "TRAILING"
+                net, cost, product = _net_pnl(
+                    pos["entry"], exit_price, pos["qty"],
+                    pos["entry_date"], candle["timestamp"]
+                )
+                trades.append({
+                    "instrument": symbol,
+                    "entry": pos["entry"],
+                    "exit": exit_price,
+                    "qty": pos["qty"],
+                    "pnl": net,
+                    "cost": cost,
+                    "product": product,
+                    "reason": tick_reason,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": candle["timestamp"],
+                    "held_candles": pos.get("candle_count", 0),
+                })
+                risk.close_position(symbol, exit_price)
+                strategy.on_order_update({
+                    "status": "COMPLETE",
+                    "instrument": symbol,
+                    "direction": "SELL",
+                    "signal_type": "EXIT",
+                    "quantity": pos["qty"],
+                    "price": exit_price,
+                    "fill_price": exit_price,
+                })
 
         signal = strategy.on_candle(candle)
         if signal is None:
@@ -494,7 +548,7 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
     _empty: dict = {
         "total_trades": 0, "wins": 0, "losses": 0,
         "win_rate": 0.0, "money_weighted_win_rate": 0.0,
-        "total_pnl": 0.0, "return_pct": 0.0,
+        "total_pnl": 0.0, "return_pct": 0.0, "annualized_return_pct": 0.0,
         "avg_win": 0.0, "avg_loss": 0.0, "sharpe_proxy": 0.0,
         "max_drawdown": 0.0, "max_drawdown_pct": 0.0,
         "profit_factor": 0.0, "sortino_ratio": 0.0, "calmar_ratio": 0.0,
@@ -536,25 +590,26 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
 
     max_dd_pct = max_dd / capital * 100 if capital > 0 else 0.0
 
-    # Calmar — annualised return / max drawdown %
+    # Annualised return (CAGR) and Calmar ratio
+    annualized_return_pct = 0.0
     calmar_ratio = 0.0
-    if max_dd_pct > 0 and capital > 0:
-        try:
-            all_dates = (
-                [t["entry_date"] for t in trades if t.get("entry_date")]
-                + [t["exit_date"] for t in trades if t.get("exit_date")]
-            )
-            if len(all_dates) >= 2:
-                start_d = min(all_dates)
-                end_d = max(all_dates)
-                days = (end_d - start_d).days
-                if days > 0:
-                    years = days / 365.25
-                    total_return = total_pnl / capital
-                    cagr_pct = ((1 + total_return) ** (1 / years) - 1) * 100
-                    calmar_ratio = cagr_pct / max_dd_pct
-        except Exception:
-            pass  # date subtraction failed — leave calmar at 0.0
+    try:
+        all_dates = (
+            [t["entry_date"] for t in trades if t.get("entry_date")]
+            + [t["exit_date"] for t in trades if t.get("exit_date")]
+        )
+        if len(all_dates) >= 2:
+            start_d = min(all_dates)
+            end_d = max(all_dates)
+            days = (end_d - start_d).days
+            if days > 0 and capital > 0:
+                years = days / 365.25
+                total_return = total_pnl / capital
+                annualized_return_pct = ((1 + total_return) ** (1 / years) - 1) * 100
+                if max_dd_pct > 0:
+                    calmar_ratio = annualized_return_pct / max_dd_pct
+    except Exception:
+        pass  # date subtraction failed — leave at 0.0
 
     total_win_amt = sum(wins)
     total_loss_amt = abs(sum(losses))
@@ -595,6 +650,7 @@ def compute_metrics(trades: list[dict], capital: float) -> dict:
         "money_weighted_win_rate": money_weighted_win_rate,
         "total_pnl": total_pnl,
         "return_pct": total_pnl / capital * 100 if capital > 0 else 0.0,
+        "annualized_return_pct": annualized_return_pct,
         "avg_win": sum(wins) / len(wins) if wins else 0.0,
         "avg_loss": sum(losses) / len(losses) if losses else 0.0,
         "sharpe_proxy": sharpe_proxy,

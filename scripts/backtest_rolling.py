@@ -81,6 +81,8 @@ def main():
     parser.add_argument("--timeframe", default=None,
                         choices=["5minute", "15minute", "30minute", "60minute", "day"],
                         help="Candle timeframe (default: from config)")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="Skip Kite authentication and use only locally cached candle data")
     args = parser.parse_args()
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
@@ -90,17 +92,21 @@ def main():
         hour=23, minute=59, second=59
     )
 
-    kite  = create_kite()
     store = Store(config.db_path)
-    store.clear_backtest_data()
 
-    instruments     = kite.instruments("NSE")
-    symbol_to_token = {
-        f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
-    }
-
-    symbols       = args.symbols if args.symbols else config.watchlist
-    valid_symbols = [s for s in symbols if s in symbol_to_token]
+    if args.cache_only:
+        kite = None
+        valid_symbols = list(args.symbols if args.symbols else config.watchlist)
+        symbol_to_token = {s: 0 for s in valid_symbols}
+    else:
+        kite = create_kite()
+        store.clear_backtest_data()
+        instruments     = kite.instruments("NSE")
+        symbol_to_token = {
+            f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
+        }
+        symbols       = args.symbols if args.symbols else config.watchlist
+        valid_symbols = [s for s in symbols if s in symbol_to_token]
     if not valid_symbols:
         print("No valid instruments found.")
         return
@@ -155,11 +161,11 @@ def _print_consolidated(results: list[dict], window: int, step: int):
 
     print(
         f"  {'Window':<25} {'Trades':>6} {'Win%':>6} "
-        f"{'AvgWin':>9} {'AvgLoss':>9} {'Net P&L':>11} {'Return%':>8} {'Sharpe*':>7}"
+        f"{'AvgWin':>9} {'AvgLoss':>9} {'Net P&L':>11} {'Return%':>8} {'Ann.Ret%':>9} {'Sharpe*':>7}"
     )
     print(
         f"  {'-'*25} {'-'*6} {'-'*6} "
-        f"{'-'*9} {'-'*9} {'-'*11} {'-'*8} {'-'*7}"
+        f"{'-'*9} {'-'*9} {'-'*11} {'-'*8} {'-'*9} {'-'*7}"
     )
 
     for r in results:
@@ -168,6 +174,7 @@ def _print_consolidated(results: list[dict], window: int, step: int):
             f"  {r['window']:<25} {r['total_trades']:>6} {r['money_weighted_win_rate']:>5.1f}% "
             f"{r['avg_win']:>9,.0f} {r['avg_loss']:>9,.0f} "
             f" {sign}₹{abs(r['total_pnl']):>8,.0f} {r['return_pct']:>8.2f}% "
+            f"{r.get('annualized_return_pct', 0.0):>+9.2f}% "
             f"{r['sharpe_proxy']:>7.2f}"
         )
 
@@ -179,10 +186,13 @@ def _print_consolidated(results: list[dict], window: int, step: int):
     best  = max(results, key=lambda r: r["return_pct"])
     worst = min(results, key=lambda r: r["return_pct"])
 
+    avg_ann_return = sum(r.get("annualized_return_pct", 0.0) for r in results) / len(results)
+
     print()
     print(f"  Profitable windows : {len(profitable)}/{len(results)}  ({consistency:.0f}% consistency)")
     print(f"  Total trades       : {total_trades}  (across all windows; may include overlaps)")
     print(f"  Avg return/window  : {avg_return:+.2f}%")
+    print(f"  Avg ann. return    : {avg_ann_return:+.2f}%")
     print(f"  Avg win rate       : {avg_wr:.1f}%")
     print(f"  Best window        : {best['window']}  ({best['return_pct']:+.2f}%)")
     print(f"  Worst window       : {worst['window']}  ({worst['return_pct']:+.2f}%)")
