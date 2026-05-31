@@ -1,0 +1,126 @@
+env: live
+candle_timeframe: 60minute
+capital:
+  total: 30000 
+  max_risk_per_trade_pct: 5.0
+  daily_loss_limit_pct: 10
+risk:
+  gtt_enabled: false
+  order_type: market          # market | limit  (live mode only; paper always fills at next open)
+  market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
+  max_open_positions: 20
+  default_sl_pct: 3
+  risk_reward: 2.5
+  max_capital_per_stock_pct: 15.0
+  trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
+  trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
+interested:
+  - NSE:DCXINDIA
+  - NSE:ABFRL
+
+
+watchlist:
+  - NSE:ATHERENERG
+  - NSE:CUPID
+  - NSE:DCXINDIA
+  - NSE:GOKEX
+  - NSE:ABFRL
+  - NSE:COROMANDEL
+  - NSE:GUJALKALI
+  - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
+  - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
+  - NSE:FEDERALBNK     # +₹7.0k, 15t — mid-cap bank
+  - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
+  - NSE:RADICO         # +₹5.2k, 15t — spirits
+  - NSE:RVNL           # +₹4.4k, 22t — rail infra
+  - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
+  - NSE:SOLARINDS      # +₹3.3k, 13t — explosives / defence
+  - NSE:CGPOWER        # +₹3.2k, 10t — transformers
+  - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
+  - NSE:MFSL           # +₹3.1k, 14t — insurance
+  - NSE:MARICO         # +₹2.9k, 14t — FMCG
+  - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
+  - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
+  - NSE:LTF            # +₹1.7k, 10t — NBFC
+  - NSE:GAIL           # +₹1.0k, 12t — gas distribution
+  - NSE:RECLTD         # +₹656,  10t — power finance
+  - NSE:MCX            # +₹390,  26t — commodity exchange
+  # --- Borderline (few trades, positive — keep for live monitoring) ---
+  - NSE:DIXON          # +₹236,   4t — electronics manufacturing
+
+
+
+strategies:
+  lr_extrema:
+    enabled: true
+    warmup_bars: 300
+    lookback_bars: 1200
+    threshold: 0.80
+    profit_pct: 15.0
+    trail_pct: 1.0
+    sell_min_pct: 12.0
+    sell_threshold: 0.70
+    min_hold_before_exit: 1
+    stop_pct: 20.0
+    hold_bars: 600
+    retrain_every: 25
+    extrema_order: 5
+    veto_threshold: 0.5
+    volume_ma_bars: 20
+    breakeven_pct: 0.0
+    model_stop_pct: 0.0         # disabled — cuts profitable pullbacks prematurely
+    model_stop_min_hold: 20
+    model_stop_threshold: 0.72
+    entry_min_volume_ratio: 0
+    entry_min_norm_price: 0.0
+    entry_require_prior_decline: false
+    force_trailing_close_time: "15:25"
+    # ATR-based dynamic stops (disabled — 15min bar ATR too small for multi-day swing trades)
+    atr_period: 25
+    atr_stop_mult: 0.0
+    atr_profit_mult: 0.0
+    atr_trail_mult: 0.0
+    # EMA trend gate — only buy when price is above EMA (uptrend filter)
+    ema_gate_enabled: true
+    ema_gate_period: 25
+    ema_gate_rising_bars: 20
+    ema_gate_long_period: 0     # dual-EMA disabled (EMA200 filter hurt more than it helped)
+    # RSI gate (disabled by default)
+    rsi_gate_enabled: false
+    rsi_period: 14
+    rsi_gate_max: 30.0
+    # Stochastic RSI gate (disabled by default)
+    stoch_rsi_gate_enabled: false
+    stoch_rsi_period: 14
+    stoch_rsi_smooth_k: 3
+    stoch_rsi_gate_max: 50.0
+    # MACD gate (disabled by default)
+    macd_gate_enabled: false
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal_period: 9
+    macd_slope_ma_period: 1
+    macd_slope_threshold: 0.0
+    # S/R gates — all disabled for calibrated baseline
+    sr_use_daily: false
+    sr_entry_gate_enabled: false
+    sr_lookback_bars: 3000
+    sr_tolerance_pct: 1.5
+    sr_min_touches: 2
+    sr_extrema_order: 3
+    sr_exit_tighten_enabled: true
+    sr_exit_proximity_pct: 2.0
+    sr_exit_tight_trail_pct: 0.5
+    sr_exit_at_resistance: false
+    sr_exit_resistance_pct: 2.0
+
+
+data:
+  db_path: data/market.db
+  historical_cache_days: 100
+logging:
+  level: WARNING
+  dir: logs/
+ui:
+  enabled: true
+  port: 8080
