@@ -44,7 +44,15 @@ def main():
                         help="Candle timeframe (default: from config)")
     parser.add_argument("--cache-only", action="store_true",
                         help="Skip Kite authentication and use only locally cached candle data")
+    parser.add_argument("--config", dest="config_path", default=None,
+                        help="Path to alternate config.yaml (default: config/config.yaml)")
+    parser.add_argument("--symbols", nargs="+", default=None,
+                        help="Override watchlist e.g. NSE:RELIANCE NSE:TCS")
     args = parser.parse_args()
+
+    if args.config_path:
+        config.reload(Path(__file__).resolve().parents[1] / args.config_path)
+
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
 
@@ -57,7 +65,7 @@ def main():
 
     if args.cache_only:
         kite = None
-        valid_watchlist = list(config.watchlist)
+        valid_watchlist = args.symbols or list(config.watchlist)
         symbol_to_token = {s: 0 for s in valid_watchlist}
         logger.info("Cache-only mode — skipping Kite authentication")
     else:
@@ -66,7 +74,8 @@ def main():
         symbol_to_token = {
             f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
         }
-        valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
+        watchlist = args.symbols or list(config.watchlist)
+        valid_watchlist = [s for s in watchlist if s in symbol_to_token]
 
     if not valid_watchlist:
         print("No valid instruments in watchlist.")

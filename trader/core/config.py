@@ -77,6 +77,11 @@ class Config:
     def interested(self) -> list[str]:
         return self._data.get("interested", [])
 
+    def reload(self, path: Path) -> None:
+        """Replace runtime config data from a different YAML file (for testing/backtest variants)."""
+        with open(path) as f:
+            self._data = yaml.safe_load(f)
+
     def strategy_config(self, name: str) -> dict:
         return self._data["strategies"].get(name, {})
 
