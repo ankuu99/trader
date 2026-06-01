@@ -115,7 +115,8 @@ class Store:
                     pct_change      REAL    DEFAULT 0,
                     unrealised_pnl  REAL    DEFAULT 0,
                     peak_close      REAL    DEFAULT 0,
-                    trailing_active INTEGER DEFAULT 0
+                    trailing_active INTEGER DEFAULT 0,
+                    low_since_entry REAL    DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -142,6 +143,7 @@ class Store:
                 ("unrealised_pnl",  "REAL DEFAULT 0"),
                 ("peak_close",      "REAL DEFAULT 0"),
                 ("trailing_active", "INTEGER DEFAULT 0"),
+                ("low_since_entry", "REAL DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
@@ -345,34 +347,39 @@ class Store:
     # ------------------------------------------------------------------ #
 
     def upsert_open_position(self, instrument: str, entry_price: float,
-                             quantity: int, held_bars: int, entry_time: datetime):
+                             quantity: int, held_bars: int, entry_time: datetime,
+                             low_since_entry: float | None = None):
+        _low = low_since_entry if low_since_entry is not None else entry_price
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time, low_since_entry)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(instrument) DO UPDATE SET
-                    entry_price = excluded.entry_price,
-                    quantity    = excluded.quantity,
-                    held_bars   = excluded.held_bars,
-                    entry_time  = excluded.entry_time
+                    entry_price     = excluded.entry_price,
+                    quantity        = excluded.quantity,
+                    held_bars       = excluded.held_bars,
+                    entry_time      = excluded.entry_time,
+                    low_since_entry = excluded.low_since_entry
                 """,
                 (instrument, entry_price, quantity, held_bars,
-                 self._to_naive(entry_time).isoformat()),
+                 self._to_naive(entry_time).isoformat(), _low),
             )
 
     def update_position_metrics(self, instrument: str, held_bars: int,
                                 current_price: float, pct_change: float,
                                 unrealised_pnl: float, peak_close: float,
-                                trailing_active: bool):
+                                trailing_active: bool, candle_low: float = 0.0):
         with self._conn() as conn:
             conn.execute(
                 """UPDATE open_positions
                    SET held_bars = ?, current_price = ?, pct_change = ?,
-                       unrealised_pnl = ?, peak_close = ?, trailing_active = ?
+                       unrealised_pnl = ?, peak_close = ?, trailing_active = ?,
+                       low_since_entry = CASE WHEN low_since_entry = 0 THEN ?
+                                              ELSE MIN(low_since_entry, ?) END
                    WHERE instrument = ?""",
                 (held_bars, current_price, pct_change, unrealised_pnl,
-                 peak_close, int(trailing_active), instrument),
+                 peak_close, int(trailing_active), candle_low, candle_low, instrument),
             )
 
     def delete_open_position(self, instrument: str):
@@ -382,7 +389,7 @@ class Store:
     def read_open_positions(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT instrument, entry_price, quantity, held_bars, entry_time FROM open_positions"
+                "SELECT instrument, entry_price, quantity, held_bars, entry_time, low_since_entry FROM open_positions"
             ).fetchall()
         return [dict(r) for r in rows]
 

@@ -396,7 +396,7 @@ def main():
                 _peak = getattr(strategy, "_peak_close", None) or _close
                 _trail = getattr(strategy, "_trailing_active", False)
                 store.update_position_metrics(
-                    strategy.instrument, held, _close, _pct, _upnl, _peak, _trail,
+                    strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
                 )
             filter_block = getattr(strategy, "last_filter_block", None)
             if filter_block:
