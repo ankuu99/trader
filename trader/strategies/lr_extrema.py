@@ -113,6 +113,9 @@ class LRExtremaStrategy(Strategy):
 
         # set to the block reason string when an entry is filtered; None otherwise
         self.last_filter_block: str | None = None
+        # each entry: {timestamp, close, p_min, p_max, type} — type is
+        # ENTRY | BLOCKED | VETOED | PATTERN_TOP; populated on every threshold crossing
+        self.signal_log: list[dict] = []
 
     @property
     def name(self) -> str:
@@ -196,6 +199,13 @@ class LRExtremaStrategy(Strategy):
                 if 1 in classes:
                     p_max = proba[classes.index(1)]
                     if p_max >= self._sell_threshold:
+                        self.signal_log.append({
+                            "timestamp": candle.get("timestamp"),
+                            "close": close,
+                            "p_min": proba[classes.index(0)] if 0 in classes else 0.0,
+                            "p_max": p_max,
+                            "type": "PATTERN_TOP",
+                        })
                         logger.info(
                             "LR-Extrema PATTERN-TOP EXIT | %s | P(max)=%.3f >= %.3f | price=%.2f | candle=%s",
                             self.instrument, p_max, self._sell_threshold, close,
@@ -224,6 +234,15 @@ class LRExtremaStrategy(Strategy):
                 proba = self._model.predict_proba(x_scaled)[0]
                 p_min = proba[classes.index(0)] if 0 in classes else 0.0
                 p_max = proba[classes.index(1)] if 1 in classes else 1.0
+                if p_min >= self._threshold:
+                    _log_entry: dict = {
+                        "timestamp": candle.get("timestamp"),
+                        "close": close,
+                        "p_min": p_min,
+                        "p_max": p_max,
+                        "type": "VETOED" if p_max >= self._veto_threshold else "ENTRY",
+                    }
+                    self.signal_log.append(_log_entry)
                 if p_min >= self._threshold and p_max < self._veto_threshold:
                     # Hard filter gates — collected so all failures are logged together
                     blocks: list[str] = []
@@ -274,6 +293,7 @@ class LRExtremaStrategy(Strategy):
                                 )
 
                     if blocks:
+                        _log_entry["type"] = "BLOCKED"
                         self.last_filter_block = ", ".join(blocks)
                         logger.debug(
                             "LR-Extrema ENTRY BLOCKED | %s | %s | candle=%s",

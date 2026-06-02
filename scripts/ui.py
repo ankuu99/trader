@@ -71,6 +71,7 @@ def _reconnect_kite():
     """Clear cached Kite connection and reload."""
     _connect_kite.clear()
     _get_store.clear()
+    _run_signal_probe.clear()
     st.rerun()
 
 
@@ -154,6 +155,95 @@ def _fetch_live_trades() -> tuple[list[dict], str | None]:
             })
 
     return pairs, None
+
+
+@st.cache_data(show_spinner=False)
+def _run_signal_probe(_store, instrument: str, timeframe: str, params_json: str,
+                      from_dt_str: str, to_dt_str: str) -> list[dict]:
+    """Evaluate model probabilities on every candle without touching position state.
+
+    Bypasses on_candle entirely to avoid _entry_price getting stuck after the first
+    signal. Directly manages candle accumulation and retraining, then calls the model
+    on every candle and logs threshold crossings within [from_dt, to_dt].
+    """
+    import json
+    from trader.strategies.lr_extrema import LRExtremaStrategy
+
+    params = json.loads(params_json)
+    from_dt = datetime.fromisoformat(from_dt_str)
+    to_dt   = datetime.fromisoformat(to_dt_str)
+    probe_from = from_dt - timedelta(days=400)
+
+    df = _store.read_candles(instrument, timeframe, probe_from, to_dt)
+    if df.empty:
+        return []
+
+    strategy = LRExtremaStrategy(instrument, params)
+    candles_since_train = 0
+    results = []
+
+    for _, row in df.iterrows():
+        candle = row.to_dict()
+        strategy._candles.append(candle)
+        candles_since_train += 1
+
+        if len(strategy._candles) < strategy._warmup_bars:
+            continue
+
+        if not strategy._trained or candles_since_train >= strategy._retrain_every:
+            strategy._train()
+            candles_since_train = 0
+
+        if not strategy._trained:
+            continue
+
+        ts = candle.get("timestamp")
+        if ts is None:
+            continue
+        try:
+            ts_cmp = pd.Timestamp(ts)
+            if ts_cmp.tzinfo:
+                ts_cmp = ts_cmp.tz_localize(None)
+        except Exception:
+            continue
+
+        if ts_cmp < from_dt:
+            continue
+        if ts_cmp > to_dt:
+            break
+
+        x = strategy._compute_features(list(strategy._candles))
+        if x is None:
+            continue
+
+        x_scaled = strategy._scaler.transform(x.reshape(1, -1))
+        classes   = list(strategy._model.classes_)
+        proba     = strategy._model.predict_proba(x_scaled)[0]
+        p_min = proba[classes.index(0)] if 0 in classes else 0.0
+        p_max = proba[classes.index(1)] if 1 in classes else 1.0
+
+        is_min = p_min >= strategy._threshold
+        is_max = p_max >= strategy._sell_threshold
+
+        if not is_min and not is_max:
+            continue
+
+        if is_min and p_max >= strategy._veto_threshold:
+            sig_type = "VETOED"
+        elif is_min:
+            sig_type = "ENTRY"
+        else:
+            sig_type = "PATTERN_TOP"
+
+        results.append({
+            "timestamp": ts,
+            "close": candle.get("close"),
+            "p_min": p_min,
+            "p_max": p_max,
+            "type": sig_type,
+        })
+
+    return results
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -536,12 +626,24 @@ with tab2:
         default_idx = 0
 
     selected_inst = st.selectbox(
-        "Instrument", 
-        chart_options, 
-        index=default_idx, 
+        "Instrument",
+        chart_options,
+        index=default_idx,
         key="chart_inst_selector"
     )
     st.session_state["selected_inst_chart"] = selected_inst
+
+    show_signals = st.checkbox(
+        "Show model signals",
+        value=False,
+        help=(
+            "Overlay every candle where the model crossed a threshold:\n"
+            "🟢 ENTRY — P(min)≥threshold, all filters passed\n"
+            "🟠 BLOCKED — P(min)≥threshold, hard filter blocked\n"
+            "🟡 VETOED — P(min)≥threshold but P(max)≥veto\n"
+            "🟣 PATTERN TOP — P(max)≥sell_threshold (in position)"
+        ),
+    )
 
     df_candles = store.read_candles(selected_inst, config.candle_timeframe, from_dt, to_dt)
 
@@ -549,6 +651,31 @@ with tab2:
         st.warning(f"No candles cached for **{selected_inst}** in this range. "
                    "Run a backtest with Kite connected to fetch and cache candles.")
         st.stop()
+
+    _signal_log: list[dict] = []
+    if show_signals:
+        import json
+        _probe_params = {
+            "warmup_bars": int(warmup), "lookback_bars": int(lookback),
+            "threshold": float(threshold), "profit_pct": float(profit_pct),
+            "trail_pct": float(trail_pct), "stop_pct": float(stop_pct),
+            "retrain_every": int(retrain), "extrema_order": int(extrema_ord),
+            "hold_bars": int(hold_bars), "sell_threshold": float(sell_threshold),
+            "sell_min_pct": float(sell_min_pct), "veto_threshold": float(veto_threshold),
+            "min_hold_before_exit": int(min_hold_before_exit),
+            "volume_ma_bars": int(volume_ma_bars),
+        }
+        with st.spinner("Computing model signals…"):
+            _signal_log = _run_signal_probe(
+                store, selected_inst, config.candle_timeframe,
+                json.dumps(_probe_params, sort_keys=True),
+                from_dt.isoformat(), to_dt.isoformat(),
+            )
+        _sig_counts = {t: sum(1 for e in _signal_log if e["type"] == t)
+                       for t in ("ENTRY", "BLOCKED", "VETOED", "PATTERN_TOP")}
+        st.caption(f"Signals found: {len(_signal_log)} — "
+                   + "  ".join(f"{t}:{n}" for t, n in _sig_counts.items() if n)
+                   or "none")
 
     inst_trades = [t for t in trades if t["instrument"] == selected_inst]
 
@@ -682,6 +809,33 @@ with tab2:
                     showlegend=False,
                     hoverinfo="skip",
                 ), row=1, col=1)
+
+    # ── model signal overlay ──
+    if _signal_log:
+        _sig_style = {
+            "ENTRY":       ("#27ae60", "circle",      "Model: Local Min (entry)"),
+            "VETOED":      ("#f1c40f", "circle-open", "Model: Local Min (vetoed)"),
+            "PATTERN_TOP": ("#9b59b6", "diamond",     "Model: Local Max (top)"),
+        }
+        for sig_type, (color, symbol, label) in _sig_style.items():
+            pts = [e for e in _signal_log if e["type"] == sig_type]
+            if not pts:
+                continue
+            fig.add_trace(go.Scatter(
+                x=[e["timestamp"] for e in pts],
+                y=[e["close"] for e in pts],
+                mode="markers",
+                name=label,
+                marker=dict(symbol=symbol, size=9, color=color, opacity=0.85,
+                            line=dict(width=1, color="rgba(0,0,0,0.4)")),
+                customdata=[[e["p_min"], e["p_max"]] for e in pts],
+                hovertemplate=(
+                    f"<b>{label}</b><br>"
+                    "%{x|%Y-%m-%d %H:%M}<br>₹%{y:.2f}<br>"
+                    "P(min)=%{customdata[0]:.3f}  P(max)=%{customdata[1]:.3f}"
+                    "<extra></extra>"
+                ),
+            ), row=1, col=1)
 
     # ── live trades overlay ──
     if st.session_state.get("load_live", False):
