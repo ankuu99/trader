@@ -1,14 +1,14 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 30000 
+  total: 50000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 10
+  max_open_positions: 20
   default_sl_pct: 3
   risk_reward: 2.5
   max_capital_per_stock_pct: 15.0
@@ -30,6 +30,27 @@ watchlist:
   - NSE:COROMANDEL
   - NSE:GUJALKALI
 
+  - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
+  - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
+  - NSE:FEDERALBNK     # +₹7.0k, 15t — mid-cap bank
+  - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
+  - NSE:RADICO         # +₹5.2k, 15t — spirits
+  - NSE:RVNL           # +₹4.4k, 22t — rail infra
+  - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
+  - NSE:SOLARINDS      # +₹3.3k, 13t — explosives / defence
+  - NSE:CGPOWER        # +₹3.2k, 10t — transformers
+  - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
+  - NSE:MFSL           # +₹3.1k, 14t — insurance
+  - NSE:MARICO         # +₹2.9k, 14t — FMCG
+  - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
+  - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
+  - NSE:LTF            # +₹1.7k, 10t — NBFC
+  - NSE:GAIL           # +₹1.0k, 12t — gas distribution
+  - NSE:RECLTD         # +₹656,  10t — power finance
+  - NSE:MCX            # +₹390,  26t — commodity exchange
+  # --- Borderline (few trades, positive — keep for live monitoring) ---
+  - NSE:DIXON          # +₹236,   4t — electronics manufacturing
+
 
 
 
@@ -39,12 +60,12 @@ strategies:
     warmup_bars: 300
     lookback_bars: 1200
     threshold: 0.90
-    profit_pct: 7
+    profit_pct: 70
     trail_pct: 1.5
-    sell_min_pct: 7.0
-    sell_threshold: 0.60
+    sell_min_pct: 3.0
+    sell_threshold: 0.85
     min_hold_before_exit: 1
-    stop_pct: 10
+    stop_pct: 20
     hold_bars: 400
     retrain_every: 25
     extrema_order: 10
