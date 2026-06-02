@@ -386,6 +386,10 @@ def main():
             if strategy.instrument != symbol:
                 continue
             signal = strategy.on_candle(candle)
+            bot_state.model_scores[strategy.instrument] = {
+                "p_min": getattr(strategy, "_last_p_min", 0.0),
+                "p_max": getattr(strategy, "_last_p_max", 0.0),
+            }
             held = getattr(strategy, "_held_bars", 0)
             if not strategy.is_flat() and strategy.instrument in risk._open_positions:
                 _entry = getattr(strategy, "_entry_price", None) or 0.0

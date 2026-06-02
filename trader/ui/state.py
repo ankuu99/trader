@@ -17,3 +17,5 @@ class BotState:
     warmup_done: bool = False               # set True after strategy warm-up completes
     warmup_status: dict = field(default_factory=dict)
     # warmup_status shape: { "NSE:SYMBOL": {"status": "TRAINED"|"WARMING_UP"|"N/A", "candles": int} }
+    model_scores: dict = field(default_factory=dict)
+    # model_scores shape: { "NSE:SYMBOL": {"p_min": float, "p_max": float} }
