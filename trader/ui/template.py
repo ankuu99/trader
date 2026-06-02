@@ -492,6 +492,9 @@ def render_page(bot_state, risk, store, config) -> str:
         <div class="bar-bg"><div class="bar-fill {bar_danger}" style="width:{bar_w}%"></div></div>
     </div>"""
 
+    total_unrealised = sum((p.get("unrealised_pnl") or 0.0) for p in positions)
+    unreal_sign = "+" if total_unrealised >= 0 else ""
+
     pnl_sign = "+" if realised >= 0 else ""
     pnl_card = f"""
     <div class="card">
@@ -499,6 +502,8 @@ def render_page(bot_state, risk, store, config) -> str:
         <table>
             <tr><td class="dim">Realised</td>
                 <td class="val {_pnl_class(realised)}">&#8377; {pnl_sign}{realised:,.2f}</td></tr>
+            <tr><td class="dim">Unrealised</td>
+                <td class="val {_pnl_class(total_unrealised)}">{unreal_sign}&#8377; {total_unrealised:,.2f}</td></tr>
             <tr><td class="dim">Daily limit</td><td class="val">&#8377; {limit:,.0f}</td></tr>
             <tr><td class="dim">Limit used</td>
                 <td class="val {'red' if pnl_used_pct > 75 else 'dim'}">{pnl_used_pct:.0f}%</td></tr>
@@ -507,6 +512,10 @@ def render_page(bot_state, risk, store, config) -> str:
     </div>"""
 
     # Open positions
+    _lr_cfg = config.strategy_config("lr_extrema") or {}
+    _stop_pct = float(_lr_cfg.get("stop_pct", 3.0))
+    _trail_pct = float(_lr_cfg.get("trail_pct", 1.5))
+
     if positions or pending_orders:
         rows_html = ""
         for p in positions:
@@ -525,6 +534,13 @@ def render_page(bot_state, risk, store, config) -> str:
             upnl_sign = "+" if upnl >= 0 else ""
             trailing_badge = f" {_badge('TRAILING', 'orange')}" if trailing else ""
             low_str = f"&#8377; {low:.2f}" if low > 0 else "<span class='dim'>—</span>"
+            sl_price = p["entry_price"] * (1 - _stop_pct / 100)
+            trail_trigger = peak * (1 - _trail_pct / 100) if trailing and peak > 0 else None
+            stop_cell = (
+                f"<span class='red'>&#8377; {sl_price:.2f}</span>"
+                + (f"<br><span class='orange' style='font-size:11px'>trail &#8377; {trail_trigger:.2f}</span>"
+                   if trail_trigger else "")
+            )
 
             # Sparkline: query candles since entry
             sparkline_html = "<span class='dim'>—</span>"
@@ -549,6 +565,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td class='{pct_class}'>&#8377; {upnl_sign}{upnl:,.2f}</td>"
                 f"<td class='green' style='font-size:12px'>&#8377; {peak:.2f}</td>"
                 f"<td class='red' style='font-size:12px'>{low_str}</td>"
+                f"<td>{stop_cell}</td>"
                 f"<td>{p['held_bars']} bars</td>"
                 f"<td>{_badge('OPEN', 'green')}{trailing_badge}</td>"
                 f"<td>{sparkline_html}</td>"
@@ -559,7 +576,7 @@ def render_page(bot_state, risk, store, config) -> str:
             rows_html += (
                 f"<tr>"
                 f"<td>{sym}</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
-                f"<td>—</td><td>—</td><td>—</td>"
+                f"<td>—</td><td>—</td><td>—</td><td>—</td>"
                 f"<td>{_badge('PENDING', 'orange')}</td><td></td>"
                 f"</tr>"
             )
@@ -570,8 +587,8 @@ def render_page(bot_state, risk, store, config) -> str:
                 <tr>
                     <th>Symbol / Entry time</th><th>Qty</th><th>Entry</th>
                     <th>Current (chg%)</th><th>Unreal. P&amp;L</th>
-                    <th>Peak &#9650;</th><th>Low &#9660;</th><th>Held</th>
-                    <th>Status</th><th>Since entry</th>
+                    <th>Peak &#9650;</th><th>Low &#9660;</th><th>SL / Trail trigger</th>
+                    <th>Held</th><th>Status</th><th>Since entry</th>
                 </tr>
                 {rows_html}
             </table>
@@ -764,6 +781,10 @@ def render_page(bot_state, risk, store, config) -> str:
         )
         last_ticks = {r["instrument"]: r for r in rows}
 
+    _threshold = float(_lr_cfg.get("threshold", 0.70))
+    _veto_threshold = float(_lr_cfg.get("veto_threshold", 0.50))
+    _sell_threshold = float(_lr_cfg.get("sell_threshold", 0.65))
+
     ws_rows = ""
     for sym in config.watchlist:
         ws = bot_state.warmup_status.get(sym, {})
@@ -781,12 +802,39 @@ def render_page(bot_state, risk, store, config) -> str:
             price_html = "<span class='dim'>—</span>"
             vol_html = "<span class='dim'>—</span>"
             tick_time = "<span class='dim'>—</span>"
+
+        scores = bot_state.model_scores.get(sym, {})
+        p_min = scores.get("p_min", 0.0)
+        p_max = scores.get("p_max", 0.0)
+        if scores:
+            p_min_pct = int(p_min * 100)
+            p_max_pct = int(p_max * 100)
+            # P(buy): green when near/above entry threshold
+            p_min_color = "#3fb950" if p_min >= _threshold else ("#d29922" if p_min >= _threshold * 0.8 else "#8b949e")
+            # P(sell): red when near/above sell or veto threshold
+            p_max_color = "#f85149" if p_max >= _sell_threshold else ("#d29922" if p_max >= _veto_threshold else "#8b949e")
+            p_min_html = (
+                f'<span style="color:{p_min_color};font-variant-numeric:tabular-nums">{p_min_pct}%</span>'
+                f'<div style="background:#21262d;border-radius:2px;height:3px;margin-top:2px;width:48px">'
+                f'<div style="background:{p_min_color};border-radius:2px;height:3px;width:{min(48,int(p_min*48))}px"></div></div>'
+            )
+            p_max_html = (
+                f'<span style="color:{p_max_color};font-variant-numeric:tabular-nums">{p_max_pct}%</span>'
+                f'<div style="background:#21262d;border-radius:2px;height:3px;margin-top:2px;width:48px">'
+                f'<div style="background:{p_max_color};border-radius:2px;height:3px;width:{min(48,int(p_max*48))}px"></div></div>'
+            )
+        else:
+            p_min_html = "<span class='dim'>—</span>"
+            p_max_html = "<span class='dim'>—</span>"
+
         ws_rows += (
             f"<tr>"
             f"<td>{sym.split(':')[-1]}</td>"
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"
+            f"<td>{p_min_html}</td>"
+            f"<td>{p_max_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
             f"<td class='dim'>{candles} candles</td>"
             f"</tr>"
@@ -796,7 +844,10 @@ def render_page(bot_state, risk, store, config) -> str:
         <h2>Watchlist ({len(config.watchlist)} symbols)</h2>
         <table>
             <tr><th>Symbol</th><th>Last price</th><th>Candle time (IST)</th>
-                <th>Volume</th><th>Warm-up</th><th>Candles</th></tr>
+                <th>Volume</th>
+                <th>P(buy) <span class="dim" style="font-weight:normal">thr={int(_threshold*100)}%</span></th>
+                <th>P(sell) <span class="dim" style="font-weight:normal">veto={int(_veto_threshold*100)}%</span></th>
+                <th>Warm-up</th><th>Candles</th></tr>
             {ws_rows}
         </table>
     </div>"""
