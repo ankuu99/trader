@@ -117,6 +117,78 @@ def _hold_duration(entry_time_str: str, exit_time_str: str) -> str:
         return "—"
 
 
+def _find_candle_idx(order_ts: str, timestamps: list[str]) -> int:
+    """First candle index at or after order_ts (minute-precision match)."""
+    target = order_ts[:16]
+    for i, ts in enumerate(timestamps):
+        if ts[:16] >= target:
+            return i
+    return len(timestamps) - 1
+
+
+def _render_watchlist_sparkline(
+    closes: list[float],
+    buy_markers: list,
+    sell_markers: list,
+    open_entry: float | None = None,
+    width: int = 180,
+    height: int = 50,
+) -> str:
+    if len(closes) < 2:
+        return "<span class='dim'>—</span>"
+    n = len(closes)
+    pad = 4
+    all_prices = list(closes)
+    if open_entry:
+        all_prices.append(open_entry)
+    for _, p in buy_markers:
+        all_prices.append(p)
+    for _, p in sell_markers:
+        all_prices.append(p)
+    lo = min(all_prices) * 0.997
+    hi = max(all_prices) * 1.003
+    rng = hi - lo or 1.0
+
+    def sx(i: int) -> float:
+        return pad + (i / (n - 1)) * (width - 2 * pad)
+
+    def sy(price: float) -> float:
+        return pad + (1 - (price - lo) / rng) * (height - 2 * pad)
+
+    last = closes[-1]
+    color = "#3fb950" if (open_entry is None or last >= open_entry) else "#f85149"
+    pts = " ".join(f"{sx(i):.1f},{sy(c):.1f}" for i, c in enumerate(closes))
+
+    parts = [
+        f'<svg width="{width}" height="{height}" '
+        f'style="vertical-align:middle;display:inline-block;background:#161b22;border-radius:3px">',
+    ]
+    if open_entry:
+        ey = max(pad, min(height - pad, sy(open_entry)))
+        parts.append(
+            f'<line x1="{pad}" y1="{ey:.1f}" x2="{width - pad}" y2="{ey:.1f}" '
+            f'stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        )
+    parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.2"/>')
+    for idx, price in buy_markers:
+        if 0 <= idx < n:
+            x, y = sx(idx), min(height - 6, sy(price) + 9)
+            parts.append(
+                f'<polygon points="{x:.1f},{y - 5:.1f} {x - 4:.1f},{y:.1f} {x + 4:.1f},{y:.1f}" '
+                f'fill="#3fb950" opacity="0.9"/>'
+            )
+    for idx, price in sell_markers:
+        if 0 <= idx < n:
+            x, y = sx(idx), max(6, sy(price) - 9)
+            parts.append(
+                f'<polygon points="{x:.1f},{y + 5:.1f} {x - 4:.1f},{y:.1f} {x + 4:.1f},{y:.1f}" '
+                f'fill="#f85149" opacity="0.9"/>'
+            )
+    parts.append(f'<circle cx="{sx(n - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>')
+    parts.append('</svg>')
+    return "".join(parts)
+
+
 def _render_sparkline(closes: list[float], entry_price: float,
                       width: int = 160, height: int = 45) -> str:
     if len(closes) < 2:
@@ -149,9 +221,11 @@ def _render_sparkline(closes: list[float], entry_price: float,
 
 
 def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int,
-                      entry_price: float, sl_price: float | None = None,
+                      entry_price: float | None = None, sl_price: float | None = None,
                       target_price: float | None = None,
                       peak_close: float | None = None,
+                      buy_markers: list | None = None,
+                      sell_markers: list | None = None,
                       width: int = 820, height: int = 320) -> str:
     if len(closes) < 2:
         return "<p class='dim'>Not enough candle data to render chart.</p>"
@@ -165,6 +239,10 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
     for ref in [entry_price, sl_price, target_price]:
         if ref:
             prices.append(ref)
+    for _, p in (buy_markers or []):
+        prices.append(p)
+    for _, p in (sell_markers or []):
+        prices.append(p)
     lo = min(prices) * 0.997
     hi = max(prices) * 1.003
     rng = hi - lo or 1.0
@@ -208,21 +286,21 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
         hline(sl_price, "#f85149", "SL")
     if target_price:
         hline(target_price, "#d29922", "Trail")
-    hline(entry_price, "#3fb950", "Entry")
+    if entry_price:
+        hline(entry_price, "#3fb950", "Entry")
+        if peak_close and peak_close > entry_price:
+            y = px(peak_close)
+            parts.append(
+                f'<line x1="{pl}" x2="{width - pr}" y1="{y:.1f}" y2="{y:.1f}" '
+                f'stroke="#8b949e" stroke-dasharray="2,4" opacity="0.5" stroke-width="1"/>'
+            )
+            parts.append(
+                f'<text x="{pl - 5}" y="{y + 4:.1f}" fill="#8b949e" font-size="10" '
+                f'text-anchor="end" font-family="monospace">Peak</text>'
+            )
 
-    if peak_close and peak_close > entry_price:
-        y = px(peak_close)
-        parts.append(
-            f'<line x1="{pl}" x2="{width - pr}" y1="{y:.1f}" y2="{y:.1f}" '
-            f'stroke="#8b949e" stroke-dasharray="2,4" opacity="0.5" stroke-width="1"/>'
-        )
-        parts.append(
-            f'<text x="{pl - 5}" y="{y + 4:.1f}" fill="#8b949e" font-size="10" '
-            f'text-anchor="end" font-family="monospace">Peak</text>'
-        )
-
-    # Entry vertical line
-    if 0 <= entry_idx < n:
+    # Entry vertical line (open position only)
+    if entry_price and 0 <= entry_idx < n:
         ex = tx(entry_idx)
         parts.append(
             f'<line x1="{ex:.1f}" x2="{ex:.1f}" y1="{pt}" y2="{pt + ch}" '
@@ -235,21 +313,46 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
     # Price line
     last = closes[-1]
-    line_color = "#3fb950" if last >= entry_price else "#f85149"
+    ref = entry_price or closes[0]
+    line_color = "#3fb950" if last >= ref else "#f85149"
     pts_str = " ".join(f"{tx(i):.1f},{px(c):.1f}" for i, c in enumerate(closes))
     parts.append(
         f'<polyline points="{pts_str}" fill="none" stroke="{line_color}" stroke-width="1.5"/>'
     )
 
+    # Trade markers — rendered on top of price line
+    for idx, price in (buy_markers or []):
+        if 0 <= idx < n:
+            x, y = tx(idx), px(price)
+            tip_y = min(pt + ch - 2, y + 8)
+            parts.append(
+                f'<polygon points="{x:.1f},{tip_y - 7:.1f} {x - 6:.1f},{tip_y:.1f} {x + 6:.1f},{tip_y:.1f}" '
+                f'fill="#3fb950" opacity="0.9"/>'
+            )
+            parts.append(
+                f'<text x="{x:.1f}" y="{tip_y + 11:.1f}" fill="#3fb950" font-size="9" '
+                f'text-anchor="middle" font-family="monospace">&#8377;{price:.0f}</text>'
+            )
+    for idx, price in (sell_markers or []):
+        if 0 <= idx < n:
+            x, y = tx(idx), px(price)
+            tip_y = max(pt + 2, y - 8)
+            parts.append(
+                f'<polygon points="{x:.1f},{tip_y + 7:.1f} {x - 6:.1f},{tip_y:.1f} {x + 6:.1f},{tip_y:.1f}" '
+                f'fill="#f85149" opacity="0.9"/>'
+            )
+            parts.append(
+                f'<text x="{x:.1f}" y="{tip_y - 4:.1f}" fill="#f85149" font-size="9" '
+                f'text-anchor="middle" font-family="monospace">&#8377;{price:.0f}</text>'
+            )
+
     # Current price dot + label
     last_x = tx(n - 1)
     last_y = px(last)
     parts.append(f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="3" fill="{line_color}"/>')
-    label_x = last_x - 5
-    label_anchor = "end"
     parts.append(
-        f'<text x="{label_x:.1f}" y="{last_y - 6:.1f}" fill="{line_color}" font-size="10" '
-        f'text-anchor="{label_anchor}" font-family="monospace">&#8377;{last:.2f}</text>'
+        f'<text x="{last_x - 5:.1f}" y="{last_y - 6:.1f}" fill="{line_color}" font-size="10" '
+        f'text-anchor="end" font-family="monospace">&#8377;{last:.2f}</text>'
     )
 
     # X-axis date labels (~6 evenly spaced)
@@ -266,30 +369,34 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
 
 def render_chart_page(instrument: str, store, config) -> str:
-    positions = _read_db(
+    sym = instrument.split(":")[-1]
+    tf = config.candle_timeframe
+    tf_minutes = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "day": 1440}.get(tf, 60)
+
+    # Open position (may not exist)
+    pos_rows = _read_db(
         config.db_path,
         "SELECT entry_price, entry_time, peak_close FROM open_positions WHERE instrument = ?",
         (instrument,),
     )
-    sym = instrument.split(":")[-1]
-    if not positions:
-        return (
-            f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{sym}</title>"
-            f"<style>{_CSS}</style></head><body>"
-            f"<p class='dim'>No open position for {instrument}.</p>"
-            f"<a href='/' class='chart-link'>← Dashboard</a></body></html>"
-        )
+    pos = pos_rows[0] if pos_rows else None
 
-    pos = positions[0]
-    entry_price = pos["entry_price"]
-    entry_time_str = pos.get("entry_time") or ""
-    peak_close = pos.get("peak_close") or 0.0
+    # All completed orders for this instrument (full history)
+    order_rows = _read_db(
+        config.db_path,
+        "SELECT direction, price, placed_at FROM orders "
+        "WHERE instrument = ? AND status = 'COMPLETE' ORDER BY placed_at ASC",
+        (instrument,),
+    )
 
-    tf = config.candle_timeframe
-    tf_minutes = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "day": 1440}.get(tf, 60)
-    pre_entry_delta = timedelta(minutes=tf_minutes * 25)
-    entry_dt = datetime.fromisoformat(entry_time_str) if entry_time_str else datetime.now()
-    from_dt = entry_dt - pre_entry_delta
+    # Determine from_dt: 25 candles before the earliest completed order (or entry, or 60 days)
+    if order_rows:
+        earliest_dt = datetime.fromisoformat(order_rows[0]["placed_at"][:19])
+        from_dt = earliest_dt - timedelta(minutes=tf_minutes * 25)
+    elif pos and pos.get("entry_time"):
+        from_dt = datetime.fromisoformat(pos["entry_time"]) - timedelta(minutes=tf_minutes * 25)
+    else:
+        from_dt = datetime.now() - timedelta(days=60)
 
     candle_rows = _read_db(
         config.db_path,
@@ -310,31 +417,61 @@ def render_chart_page(instrument: str, store, config) -> str:
     closes = [r["close"] for r in candle_rows]
     timestamps = [r["timestamp"] for r in candle_rows]
 
-    # Find first candle at or after entry
-    entry_idx = 0
-    for i, ts in enumerate(timestamps):
-        if ts >= entry_time_str:
-            entry_idx = i
-            break
+    # Match order timestamps to candle indices
+    buy_markers, sell_markers = [], []
+    for o in order_rows:
+        idx = _find_candle_idx(o["placed_at"], timestamps)
+        (buy_markers if o["direction"] == "BUY" else sell_markers).append((idx, o["price"]))
 
-    lr = config.strategy_config("lr_extrema") or {}
-    stop_pct = float(lr.get("stop_pct", 3.0))
-    profit_pct = float(lr.get("profit_pct", 3.0))
-    sl_price = round(entry_price * (1 - stop_pct / 100), 2)
-    trail_activation = round(entry_price * (1 + profit_pct / 100), 2)
+    # Open position details
+    entry_price = pos["entry_price"] if pos else None
+    entry_time_str = pos.get("entry_time") if pos else None
+    peak_close = (pos.get("peak_close") or 0.0) if pos else 0.0
+    entry_idx = 0
+    if entry_time_str:
+        for i, ts in enumerate(timestamps):
+            if ts >= entry_time_str:
+                entry_idx = i
+                break
+
+    sl_price = trail_activation = None
+    if entry_price:
+        lr = config.strategy_config("lr_extrema") or {}
+        stop_pct = float(lr.get("stop_pct", 3.0))
+        profit_pct = float(lr.get("profit_pct", 3.0))
+        sl_price = round(entry_price * (1 - stop_pct / 100), 2)
+        trail_activation = round(entry_price * (1 + profit_pct / 100), 2)
 
     chart_svg = _render_chart_svg(
         closes, timestamps, entry_idx,
-        entry_price,
+        entry_price=entry_price,
         sl_price=sl_price,
         target_price=trail_activation,
         peak_close=peak_close if peak_close > 0 else None,
+        buy_markers=buy_markers,
+        sell_markers=sell_markers,
     )
 
     last_close = closes[-1]
-    chg = (last_close - entry_price) / entry_price * 100
-    chg_sign = "+" if chg >= 0 else ""
-    chg_class = "green" if chg >= 0 else "red"
+    meta_parts = ['<a href="/" class="chart-link">← Dashboard</a>']
+    if entry_price:
+        chg = (last_close - entry_price) / entry_price * 100
+        chg_sign = "+" if chg >= 0 else ""
+        chg_class = "green" if chg >= 0 else "red"
+        meta_parts += [
+            f"Entry &#8377;{entry_price:.2f}",
+            f'Current &#8377;{last_close:.2f} <span class="{chg_class}">({chg_sign}{chg:.2f}%)</span>',
+            f"SL &#8377;{sl_price:.2f}",
+            f"Trail &#8377;{trail_activation:.2f}",
+        ]
+        if peak_close > 0:
+            meta_parts.append(f"Peak &#8377;{peak_close:.2f}")
+    else:
+        meta_parts.append(f"&#8377;{last_close:.2f} (last close)")
+    if order_rows:
+        n_trades = len([o for o in order_rows if o["direction"] == "BUY"])
+        meta_parts.append(f"{n_trades} trade(s)")
+    meta_parts.append('<span style="color:#8b949e">auto-refresh 60s</span>')
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -343,21 +480,12 @@ def render_chart_page(instrument: str, store, config) -> str:
 <meta http-equiv="refresh" content="60">
 <title>{sym} — Chart</title>
 <style>{_CSS}
-body {{ max-width: 900px; margin: 0 auto; }}
+body {{ max-width: 920px; margin: 0 auto; }}
 </style>
 </head>
 <body>
-<h1>{sym} — Price since entry</h1>
-<div class="meta">
-  <a href="/" class="chart-link">← Dashboard</a>
-  &nbsp;·&nbsp; Entry &#8377;{entry_price:.2f}
-  &nbsp;·&nbsp; Current &#8377;{last_close:.2f}
-  <span class="{chg_class}">({chg_sign}{chg:.2f}%)</span>
-  &nbsp;·&nbsp; SL &#8377;{sl_price:.2f}
-  &nbsp;·&nbsp; Trail activation &#8377;{trail_activation:.2f}
-  {f"&nbsp;·&nbsp; Peak &#8377;{peak_close:.2f}" if peak_close > 0 else ""}
-  &nbsp;·&nbsp; <span style="color:#8b949e">auto-refresh 60s</span>
-</div>
+<h1>{sym}</h1>
+<div class="meta">{"&nbsp;·&nbsp;".join(meta_parts)}</div>
 <div style="margin-top:16px;overflow-x:auto">
 {chart_svg}
 </div>
@@ -827,9 +955,37 @@ def render_page(bot_state, risk, store, config) -> str:
             p_min_html = "<span class='dim'>—</span>"
             p_max_html = "<span class='dim'>—</span>"
 
+        # Mini sparkline with trade markers (last 80 candles)
+        ws_candles = _read_db(
+            config.db_path,
+            "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = ? "
+            "ORDER BY timestamp DESC LIMIT 80",
+            (sym, config.candle_timeframe),
+        )
+        ws_candles = list(reversed(ws_candles))
+        ws_closes = [r["close"] for r in ws_candles]
+        ws_ts = [r["timestamp"] for r in ws_candles]
+        ws_orders = _read_db(
+            config.db_path,
+            "SELECT direction, price, placed_at FROM orders "
+            "WHERE instrument = ? AND status = 'COMPLETE' ORDER BY placed_at ASC",
+            (sym,),
+        )
+        ws_buys, ws_sells = [], []
+        for o in ws_orders:
+            idx = _find_candle_idx(o["placed_at"], ws_ts)
+            (ws_buys if o["direction"] == "BUY" else ws_sells).append((idx, o["price"]))
+        open_entry_for_sym = next(
+            (p["entry_price"] for p in positions if p["instrument"] == sym), None
+        )
+        sparkline_html = _render_watchlist_sparkline(
+            ws_closes, ws_buys, ws_sells, open_entry=open_entry_for_sym
+        )
+
+        ticker = sym.split(":")[-1]
         ws_rows += (
             f"<tr>"
-            f"<td>{sym.split(':')[-1]}</td>"
+            f"<td><a href='/chart/{ticker}' class='chart-link'>{ticker}</a></td>"
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"
@@ -837,6 +993,7 @@ def render_page(bot_state, risk, store, config) -> str:
             f"<td>{p_max_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
             f"<td class='dim'>{candles} candles</td>"
+            f"<td>{sparkline_html}</td>"
             f"</tr>"
         )
     watchlist_section = f"""
@@ -847,7 +1004,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 <th>Volume</th>
                 <th>P(buy) <span class="dim" style="font-weight:normal">thr={int(_threshold*100)}%</span></th>
                 <th>P(sell) <span class="dim" style="font-weight:normal">veto={int(_veto_threshold*100)}%</span></th>
-                <th>Warm-up</th><th>Candles</th></tr>
+                <th>Warm-up</th><th>Candles</th><th>Trend (last 80)</th></tr>
             {ws_rows}
         </table>
     </div>"""
