@@ -48,7 +48,7 @@ strategies:
     hold_bars: 400
     retrain_every: 25
     extrema_order: 10
-    veto_threshold: 0.5
+    veto_threshold: 1.0
     volume_ma_bars: 20
     entry_min_volume_ratio: 0  # e.g. 1.3 — block if volume < 1.3x average
     entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range
