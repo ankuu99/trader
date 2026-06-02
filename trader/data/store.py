@@ -374,7 +374,7 @@ class Store:
             conn.execute(
                 """UPDATE open_positions
                    SET held_bars = ?, current_price = ?, pct_change = ?,
-                       unrealised_pnl = ?, peak_close = ?, trailing_active = ?,
+                       unrealised_pnl = ?, peak_close = MAX(peak_close, ?), trailing_active = ?,
                        low_since_entry = CASE WHEN low_since_entry = 0 THEN ?
                                               ELSE MIN(low_since_entry, ?) END
                    WHERE instrument = ?""",
