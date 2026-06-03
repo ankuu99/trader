@@ -67,7 +67,7 @@ strategies:
     sell_threshold: 0.85
     min_hold_before_exit: 1
     stop_pct: 20
-    hold_bars: 400
+    hold_bars: 200
     retrain_every: 25
     extrema_order: 10
     veto_threshold: 1.0
