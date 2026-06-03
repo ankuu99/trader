@@ -9,6 +9,7 @@ risk:
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 20
+  compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
   max_capital_per_stock_pct: 15.0

@@ -29,6 +29,9 @@ def _load() -> "Config":
 class Config:
     def __init__(self, data: dict):
         self._data = data
+        # Preserve the config-file capital before any runtime override (e.g. set_effective_capital).
+        # Used as the compounding base so Kite available cash never inflates position sizing.
+        self._base_capital: float = float(data["capital"]["total"])
 
     @property
     def env(self) -> str:
@@ -49,6 +52,12 @@ class Config:
     @property
     def total_capital(self) -> float:
         return float(self._data["capital"]["total"])
+
+    @property
+    def base_capital(self) -> float:
+        """Config-file capital, never overridden by runtime adjustments. Used as the
+        compounding base so Kite available cash doesn't inflate position sizing."""
+        return self._base_capital
 
     def set_effective_capital(self, amount: float) -> None:
         """Override total_capital at runtime (e.g. capped by Kite available cash).
@@ -108,6 +117,11 @@ class Config:
     @property
     def risk_reward(self) -> float:
         return float(self._data["risk"].get("risk_reward", 2.0))
+
+    @property
+    def compounding(self) -> bool:
+        """When True, per-stock capital cap scales with base_capital + cumulative_pnl."""
+        return bool(self._data["risk"].get("compounding", False))
 
     @property
     def max_capital_per_stock(self) -> float:

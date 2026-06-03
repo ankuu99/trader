@@ -134,14 +134,21 @@ class RiskManager:
 
         quantity = int(config.max_risk_per_trade // sl_distance)
 
-        # Cap quantity so total capital deployed doesn't exceed max_capital_per_stock
-        max_qty_by_capital = int(config.max_capital_per_stock // price)
+        # Cap quantity so total capital deployed doesn't exceed max_capital_per_stock.
+        # When compounding is enabled, the cap scales with the strategy's own cumulative P&L
+        # (base_capital + cumulative_pnl), keeping Kite available cash out of the calculation.
+        pct = float(config._data["risk"].get("max_capital_per_stock_pct", 100.0))
+        if config.compounding:
+            effective_max_capital = (config.base_capital + self._cumulative_pnl) * pct / 100
+        else:
+            effective_max_capital = config.max_capital_per_stock
+        max_qty_by_capital = int(effective_max_capital // price)
         if quantity > max_qty_by_capital:
             logger.info(
                 "Quantity capped by capital limit | %s | risk-based=%d capped=%d"
-                " (max_capital=%.0f @ %.2f)",
+                " (max_capital=%.0f compounding=%s @ %.2f)",
                 signal.instrument, quantity, max_qty_by_capital,
-                config.max_capital_per_stock, price,
+                effective_max_capital, config.compounding, price,
             )
             quantity = max_qty_by_capital
 
