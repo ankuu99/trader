@@ -190,16 +190,18 @@ def _render_watchlist_sparkline(
 
 
 def _render_sparkline(closes: list[float], entry_price: float,
-                      width: int = 160, height: int = 45) -> str:
+                      entry_idx: int | None = None,
+                      width: int = 280, height: int = 80) -> str:
     if len(closes) < 2:
         return "<span class='dim'>—</span>"
     lo = min(min(closes), entry_price) * 0.998
     hi = max(max(closes), entry_price) * 1.002
     rng = hi - lo or 1.0
     pad = 4
+    n = len(closes)
 
     def sx(i: int) -> float:
-        return pad + (i / (len(closes) - 1)) * (width - 2 * pad)
+        return pad + (i / (n - 1)) * (width - 2 * pad)
 
     def sy(price: float) -> float:
         return pad + (1 - (price - lo) / rng) * (height - 2 * pad)
@@ -209,15 +211,24 @@ def _render_sparkline(closes: list[float], entry_price: float,
     last = closes[-1]
     color = "#3fb950" if last >= entry_price else "#f85149"
 
-    return (
+    parts = [
         f'<svg width="{width}" height="{height}" '
-        f'style="vertical-align:middle;display:inline-block">'
+        f'style="vertical-align:middle;display:inline-block;background:#0d1117;border-radius:4px">',
         f'<line x1="{pad}" y1="{entry_y:.1f}" x2="{width - pad}" y2="{entry_y:.1f}" '
-        f'stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.6"/>'
-        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5"/>'
-        f'<circle cx="{sx(len(closes) - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
-        f'</svg>'
-    )
+        f'stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.6"/>',
+    ]
+    if entry_idx is not None and 0 <= entry_idx < n:
+        ex = sx(entry_idx)
+        parts.append(
+            f'<line x1="{ex:.1f}" x2="{ex:.1f}" y1="{pad}" y2="{height - pad}" '
+            f'stroke="#58a6ff" stroke-dasharray="3,2" opacity="0.5" stroke-width="1"/>'
+        )
+    parts += [
+        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5"/>',
+        f'<circle cx="{sx(n - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>',
+        '</svg>',
+    ]
+    return "".join(parts)
 
 
 def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int,
@@ -670,18 +681,26 @@ def render_page(bot_state, risk, store, config) -> str:
                    if trail_trigger else "")
             )
 
-            # Sparkline: query candles since entry
+            # Sparkline: 3 days before entry → now, with vertical entry marker
             sparkline_html = "<span class='dim'>—</span>"
             if p.get("entry_time"):
+                entry_dt = datetime.fromisoformat(p["entry_time"])
+                pre_entry_dt = entry_dt - timedelta(days=3)
                 candle_rows = _read_db(
                     config.db_path,
-                    "SELECT close FROM candles WHERE instrument = ? AND timeframe = ? "
+                    "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = ? "
                     "AND timestamp >= ? ORDER BY timestamp ASC",
-                    (p["instrument"], config.candle_timeframe, p["entry_time"]),
+                    (p["instrument"], config.candle_timeframe, pre_entry_dt.isoformat()),
                 )
                 if candle_rows:
                     closes = [r["close"] for r in candle_rows]
-                    sparkline_html = _render_sparkline(closes, p["entry_price"])
+                    ts_list = [r["timestamp"] for r in candle_rows]
+                    entry_ts = p["entry_time"]
+                    entry_idx = next(
+                        (i for i, ts in enumerate(ts_list) if ts >= entry_ts),
+                        len(ts_list) - 1,
+                    )
+                    sparkline_html = _render_sparkline(closes, p["entry_price"], entry_idx=entry_idx)
 
             rows_html += (
                 f"<tr>"
@@ -777,6 +796,8 @@ def render_page(bot_state, risk, store, config) -> str:
             qty = t.get("quantity") or 0
             pnl = t.get("gross_pnl") or 0.0
             pnl_sign = "+" if pnl >= 0 else ""
+            pct_pnl = (exit_p - entry_p) / entry_p * 100 if entry_p else 0.0
+            pct_sign = "+" if pct_pnl >= 0 else ""
             entry_fmt = _fmt_ist(datetime.fromisoformat(t["entry_time"])) if t.get("entry_time") else "—"
             exit_fmt = _fmt_ist(datetime.fromisoformat(t["exit_time"])) if t.get("exit_time") else "—"
             dur = _hold_duration(t.get("entry_time", ""), t.get("exit_time", ""))
@@ -787,7 +808,8 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td>&#8377; {entry_p:.2f}</td>"
                 f"<td>&#8377; {exit_p:.2f}</td>"
                 f"<td class='dim'>{qty}</td>"
-                f"<td class='{_pnl_class(pnl)}'>{pnl_sign}&#8377; {pnl:,.2f}</td>"
+                f"<td class='{_pnl_class(pnl)}'>{pnl_sign}&#8377; {pnl:,.2f}"
+                f"<br><span style='font-size:11px'>{pct_sign}{pct_pnl:.2f}%</span></td>"
                 f"<td class='dim'>{dur}</td>"
                 f"<td class='dim'>{exit_fmt}</td>"
                 f"</tr>"
