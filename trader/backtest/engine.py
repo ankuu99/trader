@@ -9,6 +9,7 @@ Backtest engine — core replay loop shared by backtest.py, calibrate.py, and sc
 
 import bisect
 import math
+import time
 from datetime import datetime, timedelta
 
 from trader.core.config import config
@@ -176,6 +177,12 @@ def run_backtest(
     pre_warmup_days = pre_warmup_days if pre_warmup_days is not None else config.historical_cache_days
     pre_warmup_from = from_dt - timedelta(days=pre_warmup_days)
 
+    _bt_start = time.time()
+    logger.info(
+        "Backtest starting | symbols=%d | %s → %s | warmup=%d days",
+        len(symbols), from_dt.date(), to_dt.date(), pre_warmup_days,
+    )
+
     # --- Fetch regime candles (NIFTY 50 + India VIX) for market context features ---
     # Must come BEFORE stock pre-warmup fetch so _regime_at is defined for injection.
     # Fetched once for the full window [pre_warmup_from, to_dt] then forward-filled
@@ -211,9 +218,19 @@ def run_backtest(
         idx = bisect.bisect_right(ts_list, ts) - 1
         return close_list[idx] if idx >= 0 else None
 
+    # Progress phases: 0-20% pre-warmup fetch, 20-35% main fetch,
+    #                  35-45% warmup replay, 45-100% main replay loop.
+    _n_sym = max(len(symbols), 1)
+
+    def _phase_progress(label: str, pct: float):
+        if progress_callback is not None:
+            progress_callback(label, pct)
+
     # --- Fetch pre-warmup candles (DB empty at this point) ---
+    _fetch_start = time.time()
     pre_warmup_candles: dict[str, list[dict]] = {}
-    for symbol in symbols:
+    for _i, symbol in enumerate(symbols):
+        _phase_progress(f"Fetching warmup data: {symbol}", 0.20 * _i / _n_sym)
         token = symbol_to_token.get(symbol)
         if token is None:
             continue
@@ -244,9 +261,13 @@ def run_backtest(
             symbol, len(pre_df), pre_warmup_days, from_dt.date(),
         )
 
+    logger.info("Pre-warmup fetch done | %.1fs", time.time() - _fetch_start)
+
     # --- Fetch main backtest candles (cache now has pre-warmup data) ---
+    _main_fetch_start = time.time()
     symbol_candles: dict[str, list[dict]] = {}
-    for symbol in symbols:
+    for _i, symbol in enumerate(symbols):
+        _phase_progress(f"Fetching candles: {symbol}", 0.20 + 0.15 * _i / _n_sym)
         token = symbol_to_token.get(symbol)
         if token is None:
             logger.warning("No token for %s — skipping", symbol)
@@ -271,6 +292,12 @@ def run_backtest(
             for _, row in df.iterrows()
         ]
 
+    total_main_candles = sum(len(v) for v in symbol_candles.values())
+    logger.info(
+        "Main candle fetch done | %.1fs | %d symbols | %d total candles",
+        time.time() - _main_fetch_start, len(symbol_candles), total_main_candles,
+    )
+
     merged_candles = sorted(
         (c for candles in symbol_candles.values() for c in candles),
         key=lambda c: c["timestamp"],
@@ -279,12 +306,17 @@ def run_backtest(
     strategy_map.update({symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles})
 
     # Replay pre-warmup candles through each strategy (no trade recording)
-    for symbol, strategy in strategy_map.items():
+    _warmup_start = time.time()
+    _n_strat = max(len(strategy_map), 1)
+    for _i, (symbol, strategy) in enumerate(strategy_map.items()):
+        _phase_progress(f"Warming up model: {symbol}", 0.35 + 0.10 * _i / _n_strat)
         warmup_feed = pre_warmup_candles.get(symbol, [])
         for candle in warmup_feed:
             strategy.on_candle(candle)
         if warmup_feed:
             logger.info("Pre-warmup complete | %s | %d candles", symbol, len(warmup_feed))
+
+    logger.info("Strategy warmup replay done | %.1fs", time.time() - _warmup_start)
 
     # Clear phantom entry state left by signals that fired during pre-warmup
     # but never received a fill (no orders are placed during warmup).
@@ -301,16 +333,28 @@ def run_backtest(
 
     _total_days = max((to_dt - from_dt).days, 1)
     _last_notified_date = None
+    _last_logged_date = None
+    _replay_start = time.time()
+    logger.info("Replay starting | %d candles across %d symbols", len(merged_candles), len(strategy_map))
     prev_date = None
     for candle in merged_candles:
         symbol = candle["_symbol"]
         current_ts[0] = candle["timestamp"]
         candle_date = candle["timestamp"].date()
 
-        if progress_callback is not None and candle_date != _last_notified_date:
+        if candle_date != _last_notified_date:
             _last_notified_date = candle_date
-            _elapsed = max((candle_date - from_dt.date()).days, 0)
-            progress_callback(candle_date, min(_elapsed / _total_days, 1.0))
+            _elapsed_days = max((candle_date - from_dt.date()).days, 0)
+            _replay_pct = min(_elapsed_days / _total_days, 1.0)
+            _phase_progress(str(candle_date), 0.45 + 0.55 * _replay_pct)
+            # Log progress every 30 calendar days
+            if _last_logged_date is None or (candle_date - _last_logged_date).days >= 30:
+                _last_logged_date = candle_date
+                _overall_pct = (0.45 + 0.55 * _replay_pct) * 100
+                logger.info(
+                    "Replay progress | %s | %.0f%% | %.1fs elapsed | trades so far: %d",
+                    candle_date, _overall_pct, time.time() - _replay_start, len(trades),
+                )
 
         # Simulate Zerodha's EOD LIMIT order cancellation: unfilled LIMIT orders
         # are cancelled at day boundary, not carried forward to the next session.
@@ -452,6 +496,11 @@ def run_backtest(
             continue
         orders.place(order)
 
+    logger.info(
+        "Replay done | %.1fs | %d trades",
+        time.time() - _replay_start, len(trades),
+    )
+
     # Close any remaining open positions at last known price
     for symbol, pos in list(open_positions.items()):
         last_close = pos["entry"]  # conservative: assume no price change
@@ -472,6 +521,10 @@ def run_backtest(
             "held_candles": pos.get("candle_count", 0),
         })
 
+    logger.info(
+        "Backtest complete | total=%.1fs | %d trades | symbols=%d",
+        time.time() - _bt_start, len(trades), len(symbols),
+    )
     return trades
 
 

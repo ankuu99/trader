@@ -10,10 +10,11 @@ stop-loss price placed with each order.
 """
 
 import argparse
+import bisect
 import csv
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,7 +44,15 @@ def main():
                         help="Candle timeframe (default: from config)")
     parser.add_argument("--cache-only", action="store_true",
                         help="Skip Kite authentication and use only locally cached candle data")
+    parser.add_argument("--config", dest="config_path", default=None,
+                        help="Path to alternate config.yaml (default: config/config.yaml)")
+    parser.add_argument("--symbols", nargs="+", default=None,
+                        help="Override watchlist e.g. NSE:RELIANCE NSE:TCS")
     args = parser.parse_args()
+
+    if args.config_path:
+        config.reload(Path(__file__).resolve().parents[1] / args.config_path)
+
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
 
@@ -56,7 +65,7 @@ def main():
 
     if args.cache_only:
         kite = None
-        valid_watchlist = list(config.watchlist)
+        valid_watchlist = args.symbols or list(config.watchlist)
         symbol_to_token = {s: 0 for s in valid_watchlist}
         logger.info("Cache-only mode — skipping Kite authentication")
     else:
@@ -65,7 +74,8 @@ def main():
         symbol_to_token = {
             f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
         }
-        valid_watchlist = [s for s in config.watchlist if s in symbol_to_token]
+        watchlist = args.symbols or list(config.watchlist)
+        valid_watchlist = [s for s in watchlist if s in symbol_to_token]
 
     if not valid_watchlist:
         print("No valid instruments in watchlist.")
@@ -158,6 +168,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         f"{'Total costs':<12}: ₹{total_costs:,.2f}",
         f"{'Total P&L':<12}: ₹{m['total_pnl']:,.2f}",
         f"{'Return':<12}: {m['return_pct']:.2f}%",
+        # f"{'Ann. Return':<12}: {m['annualized_return_pct']:.2f}%",
         f"{'Max DD':<12}: ₹{m['max_drawdown']:,.0f}  ({m['max_drawdown_pct']:.1f}%)",
     ]
     col3 = [
@@ -268,7 +279,135 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         print(f"    {sym_short:<16} {total_t:>3}t  {bar}  {pnl_str}")
 
     print(f"  {'='*W}\n")
+    _print_capital_chart(trades, config.total_capital)
 
+
+def _build_step_series(trades: list[dict], value_fn, count_fn=None):
+    """
+    Build (xs, ys) step-function time series from trades.
+
+    value_fn(trade) -> +delta on entry, will be negated on exit.
+    If count_fn is provided, returns a second series for position count.
+    """
+    cap_events: list[tuple] = []
+    cnt_events: list[tuple] = []
+    for t in trades:
+        if not t.get("entry_date") or not t.get("exit_date"):
+            continue
+        v = value_fn(t)
+        cap_events.append((t["entry_date"],  v))
+        cap_events.append((t["exit_date"],  -v))
+        cnt_events.append((t["entry_date"],  1))
+        cnt_events.append((t["exit_date"],  -1))
+
+    def _collapse(events):
+        events.sort(key=lambda e: e[0])
+        xs, ys = [], []
+        cur = 0.0
+        for ts, delta in events:
+            cur = max(0.0, cur + delta)
+            if xs and xs[-1] == ts:
+                ys[-1] = cur
+            else:
+                xs.append(ts)
+                ys.append(cur)
+        return xs, ys
+
+    cap_xs, cap_ys = _collapse(cap_events)
+    cnt_xs, cnt_ys = _collapse(cnt_events)
+    return cap_xs, cap_ys, cnt_xs, cnt_ys
+
+
+def _sample_step(xs: list, ys: list[float], span_sec: float, n: int) -> list[float]:
+    """Sample a step-function series into n evenly-spaced columns."""
+    result = []
+    for col in range(n):
+        frac = col / (n - 1)
+        target = xs[0] + timedelta(seconds=span_sec * frac)
+        idx = bisect.bisect_right(xs, target) - 1
+        result.append(ys[idx] if idx >= 0 else 0.0)
+    return result
+
+
+def _draw_line_chart(col_vals: list[float], max_y: float,
+                     chart_h: int, chart_w: int, char: str = '█', connector: str = '╎') -> list[list[str]]:
+    grid = [[' '] * chart_w for _ in range(chart_h)]
+
+    def _row(v):
+        return chart_h - 1 - round(v / max_y * (chart_h - 1))
+
+    rows = [_row(v) for v in col_vals]
+    for col in range(chart_w):
+        r = rows[col]
+        if col > 0:
+            r1, r2 = min(rows[col - 1], r), max(rows[col - 1], r)
+            for rr in range(r1, r2 + 1):
+                if grid[rr][col] == ' ':
+                    grid[rr][col] = connector
+        grid[r][col] = char
+    return grid
+
+
+def _print_capital_chart(trades: list[dict], total_capital: float):
+    """ASCII line charts: capital deployed + open positions count, shared x-axis."""
+    cap_xs, cap_ys, cnt_xs, cnt_ys = _build_step_series(
+        trades, value_fn=lambda t: t["entry"] * t["qty"]
+    )
+    if not cap_xs:
+        return
+
+    CHART_W = 72
+    CAP_H   = 10
+    CNT_H   =  5
+    Y_W     = 13
+
+    span_sec = (cap_xs[-1] - cap_xs[0]).total_seconds()
+    max_cap  = max(cap_ys)
+    max_cnt  = max(cnt_ys) if cnt_ys else 1
+    if max_cap == 0 or span_sec == 0:
+        return
+
+    cap_cols = _sample_step(cap_xs, cap_ys, span_sec, CHART_W)
+    cnt_cols = _sample_step(cnt_xs, cnt_ys, span_sec, CHART_W) if cnt_xs else [0.0] * CHART_W
+
+    cap_grid = _draw_line_chart(cap_cols, max_cap, CAP_H, CHART_W)
+    cnt_grid = _draw_line_chart(cnt_cols, max_cnt, CNT_H, CHART_W, char='▪', connector='┊')
+
+    # --- Capital chart ---
+    print(f"  Capital Deployed Over Time")
+    print(f"  (peak ₹{max_cap:,.0f}  ·  total capital ₹{total_capital:,.0f})")
+    print()
+    for r in range(CAP_H):
+        row_val = max_cap * (CAP_H - 1 - r) / (CAP_H - 1)
+        y_label = f"  ₹{row_val:>10,.0f} │" if r % 3 == 0 else f"{'':>{Y_W+2}} │"
+        print(y_label + ''.join(cap_grid[r]))
+
+    # --- Position count chart (shared x-axis separator) ---
+    print(f"  {'':>{Y_W}} ├{'─' * CHART_W}")
+    for r in range(CNT_H):
+        row_val = max_cnt * (CNT_H - 1 - r) / (CNT_H - 1)
+        if r == 0:
+            y_label = f"  {'pos':>6} {int(row_val):>3}   │"
+        elif r == CNT_H - 1:
+            y_label = f"  {'pos':>6} {0:>3}   │"
+        else:
+            y_label = f"{'':>{Y_W+2}} │"
+        print(y_label + ''.join(cnt_grid[r]))
+
+    # --- Shared x-axis ---
+    print(f"  {'':>{Y_W}} └{'─' * CHART_W}")
+    n_labels = 6
+    date_line = f"  {'':>{Y_W+1}}"
+    prev_end = 0
+    for i in range(n_labels):
+        frac = i / (n_labels - 1)
+        col  = int(frac * (CHART_W - 1))
+        lbl  = (cap_xs[0] + timedelta(seconds=span_sec * frac)).strftime("%b'%y")
+        spaces = max(1, col - prev_end)
+        date_line += " " * spaces + lbl
+        prev_end = col + len(lbl)
+    print(date_line)
+    print()
 
 
 def _dump_csv(trades: list[dict], from_date: str, to_date: str):

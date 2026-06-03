@@ -129,6 +129,12 @@ def _fetch_and_cache(
 
     chunks = _date_chunks(from_dt, to_dt, chunk_days)
     total_fetched = 0
+    if len(chunks) > 1:
+        logger.info(
+            "Fetching %s [%s] in %d chunks (%d-%d day window)",
+            instrument, timeframe, len(chunks), 1, chunk_days,
+        )
+    _fetch_t0 = time.time()
 
     for chunk_start, chunk_end in chunks:
         logger.debug(
@@ -137,7 +143,6 @@ def _fetch_and_cache(
             chunk_start.date(), chunk_end.date(),
         )
         records = _fetch_with_retry(kite, instrument_token, instrument, timeframe, chunk_start, chunk_end)
-        time.sleep(0.4)  # stay within Kite's ~3 req/sec rate limit
 
         if not records:
             continue
@@ -150,7 +155,8 @@ def _fetch_and_cache(
         total_fetched += len(df)
 
     logger.info(
-        "Fetched %d candles for %s [%s]", total_fetched, instrument, timeframe
+        "Fetched %d candles for %s [%s] in %.1fs",
+        total_fetched, instrument, timeframe, time.time() - _fetch_t0,
     )
 
 
