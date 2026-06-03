@@ -60,7 +60,7 @@ strategies:
     warmup_bars: 300
     lookback_bars: 1200
     threshold: 0.90
-    profit_pct: 70
+    profit_pct: 15
     trail_pct: 1.5
     sell_min_pct: 3.0
     sell_threshold: 0.85

@@ -110,6 +110,7 @@ class LRExtremaStrategy(Strategy):
         self._held_bars: int = 0
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
+        self._pattern_top_trailing: bool = False  # True when trailing activated by pattern-top detection
 
         # set to the block reason string when an entry is filtered; None otherwise
         self.last_filter_block: str | None = None
@@ -206,22 +207,17 @@ class LRExtremaStrategy(Strategy):
                             "p_max": p_max,
                             "type": "PATTERN_TOP",
                         })
-                        logger.info(
-                            "LR-Extrema PATTERN-TOP EXIT | %s | P(max)=%.3f >= %.3f | price=%.2f | candle=%s",
-                            self.instrument, p_max, self._sell_threshold, close,
-                            candle.get("timestamp"),
-                        )
-                        self._reset_position_state()
-                        self._candles_since_train += 1
-                        return Signal(
-                            instrument=self.instrument,
-                            direction=Direction.BUY,
-                            signal_type=SignalType.EXIT,
-                            price_hint=close,
-                            strategy=self.name,
-                            exit_reason="PATTERN_TOP",
-                            timestamp=candle.get("timestamp"),
-                        )
+                        if not self._pattern_top_trailing:
+                            if not self._trailing_active:
+                                self._trailing_active = True
+                                if self._peak_close is None:
+                                    self._peak_close = close
+                            self._pattern_top_trailing = True
+                            logger.info(
+                                "LR-Extrema PATTERN-TOP TRAILING | %s | P(max)=%.3f >= %.3f | price=%.2f | candle=%s",
+                                self.instrument, p_max, self._sell_threshold, close,
+                                candle.get("timestamp"),
+                            )
 
         # --- Entry prediction ---
         # Both gates must pass: P(local-min) >= threshold AND P(local-max) < veto_threshold.
@@ -382,10 +378,12 @@ class LRExtremaStrategy(Strategy):
             drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
             if drawdown <= -self._trail_pct:
                 reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
-        # Trailing floor — once trailing activates and price falls back below profit_pct, lock in gains.
-        # Strict < avoids firing on the same tick trailing activates (pct == profit_pct).
-        if reason is None and self._trailing_active and pct < self._profit_pct:
-            reason = f"trailing floor pct={pct:.2f}% < {self._profit_pct:.2f}%"
+        # Trailing floor — pattern-top trailing uses sell_min_pct as floor (the minimum gain
+        # that triggered detection); regular trailing uses profit_pct.
+        # Strict < avoids firing on the same tick trailing activates.
+        _floor_pct = self._sell_min_pct if self._pattern_top_trailing else self._profit_pct
+        if reason is None and self._trailing_active and pct < _floor_pct:
+            reason = f"trailing floor pct={pct:.2f}% < {_floor_pct:.2f}%"
 
         if reason:
             logger.info(
@@ -410,6 +408,7 @@ class LRExtremaStrategy(Strategy):
         self._held_bars = 0
         self._peak_close = None
         self._trailing_active = False
+        self._pattern_top_trailing = False
 
     def on_order_update(self, order: dict) -> None:
         super().on_order_update(order)
