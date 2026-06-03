@@ -6,10 +6,12 @@ Kite API limits:
   - day data     : max 2000 days per request
 """
 
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
 from kiteconnect import KiteConnect
+from kiteconnect.exceptions import NetworkException
 
 from trader.core.config import config
 from trader.core.logger import get_logger
@@ -75,6 +77,43 @@ def get_candles(
     return store.read_candles(instrument, timeframe, from_dt, to_dt)
 
 
+def _fetch_with_retry(
+    kite: KiteConnect,
+    instrument_token: int,
+    instrument: str,
+    timeframe: str,
+    from_dt: datetime,
+    to_dt: datetime,
+    max_retries: int = 5,
+    base_delay: float = 2.0,
+) -> list:
+    """Call kite.historical_data with exponential backoff on rate-limit errors."""
+    for attempt in range(max_retries):
+        try:
+            return kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=from_dt,
+                to_date=to_dt,
+                interval=timeframe,
+                continuous=False,
+                oi=False,
+            )
+        except NetworkException as e:
+            if "Too many requests" not in str(e) or attempt == max_retries - 1:
+                logger.error("Failed to fetch historical data for %s: %s", instrument, e)
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "Rate limited fetching %s — retrying in %.0fs (attempt %d/%d)",
+                instrument, delay, attempt + 1, max_retries,
+            )
+            time.sleep(delay)
+        except Exception as e:
+            logger.error("Failed to fetch historical data for %s: %s", instrument, e)
+            raise
+    return []  # unreachable, but satisfies type checkers
+
+
 def _fetch_and_cache(
     kite: KiteConnect,
     store: Store,
@@ -97,18 +136,8 @@ def _fetch_and_cache(
             instrument, timeframe,
             chunk_start.date(), chunk_end.date(),
         )
-        try:
-            records = kite.historical_data(
-                instrument_token=instrument_token,
-                from_date=chunk_start,
-                to_date=chunk_end,
-                interval=timeframe,
-                continuous=False,
-                oi=False,
-            )
-        except Exception as e:
-            logger.error("Failed to fetch historical data for %s: %s", instrument, e)
-            raise
+        records = _fetch_with_retry(kite, instrument_token, instrument, timeframe, chunk_start, chunk_end)
+        time.sleep(0.4)  # stay within Kite's ~3 req/sec rate limit
 
         if not records:
             continue
