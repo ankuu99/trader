@@ -118,6 +118,12 @@ class LRExtremaStrategy(Strategy):
             h, m = val.split(":")
             return time(int(h), int(m))
         
+        # Toggle: when True, pattern-top trailing uses sell_min_pct as a floor (exit if
+        # gain drops back below sell_min_pct even when trail_pct hasn't fired yet).
+        # When False, only trail_pct from peak governs the exit — avoids premature exits
+        # when the stock dips briefly after the peak updates above the floor level.
+        self._pattern_top_floor_enabled: bool = bool(params.get("pattern_top_floor_enabled", True))
+
         # E4: Force close trailing positions before market end (None = disabled)
         _ftic = params.get("force_trailing_close_time")
         self._force_trailing_close = _parse_time(_ftic, time(15, 25)) if _ftic else None
@@ -481,8 +487,9 @@ class LRExtremaStrategy(Strategy):
         # Trailing floor — pattern-top trailing uses sell_min_pct as floor (the minimum gain
         # that triggered detection); regular trailing uses profit_pct.
         # Strict < avoids firing on the same tick trailing activates.
+        _use_floor = (not self._pattern_top_trailing) or self._pattern_top_floor_enabled
         _floor_pct = self._sell_min_pct if self._pattern_top_trailing else self._profit_pct
-        if reason is None and self._trailing_active and pct < _floor_pct:
+        if reason is None and self._trailing_active and _use_floor and pct < _floor_pct:
             reason = f"trailing floor pct={pct:.2f}% < {_floor_pct:.2f}%"
 
         if reason:
@@ -501,6 +508,15 @@ class LRExtremaStrategy(Strategy):
             )
 
         return None
+
+    def seed_position_state(self, peak_close: float, max_gain_pct: float) -> None:
+        """Restore in-memory position state after a restart.
+        Called by main.py after on_order_update re-seeds entry price and held_bars.
+        peak_close: 0.0 means not persisted (stock price can never be 0).
+        max_gain_pct: always restored — 0.0 is valid (position never went positive)."""
+        if peak_close > 0:
+            self._peak_close = peak_close
+        self._max_gain_pct = max_gain_pct
 
     def _reset_position_state(self) -> None:
         """Clear all position-tracking fields. Called on any exit path."""

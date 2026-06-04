@@ -101,6 +101,9 @@ strategies:
     breakeven_stop_enabled: false
     breakeven_trigger_pct: 1.0    # % gain that arms the breakeven stop
     breakeven_buffer_pct: 0.0     # stop set to entry + this % (0 = exact breakeven)
+    # Pattern-top trailing floor: when true, exit if gain drops below sell_min_pct even if
+    # trail_pct hasn't fired yet. When false, only trail_pct from peak governs the exit.
+    pattern_top_floor_enabled: false
     # Feature 3: Momentum decay exit — exit if model loses confidence in the bottom thesis
     momentum_exit_enabled: false
     momentum_exit_p_min_floor: 0.35   # P(local-min) below this triggers exit
@@ -111,7 +114,7 @@ data:
   db_path: data/market.db
   historical_cache_days: 100
 logging:
-  level: WARNING
+  level: INFO
   dir: logs/
 ui:
   enabled: true

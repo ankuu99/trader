@@ -196,13 +196,16 @@ def main():
                 "quantity": pos["quantity"],
                 "_held_bars": held,  # includes any catch-up bars counted above
             }
+            _peak_close   = store.get_state(f"{instrument}.peak_close", 0.0)
+            _max_gain_pct = store.get_state(f"{instrument}.max_gain_pct", 0.0)
             for strat in strats_for_instrument:
                 strat.on_order_update(synthetic_fill)
+                strat.seed_position_state(_peak_close, _max_gain_pct)
             risk.on_order_filled(instrument, pos["entry_price"], pos["quantity"])
             restored.append(pos)
             logger.info(
-                "Paper position restored | %s | entry=%.2f qty=%d held_bars=%d",
-                instrument, pos["entry_price"], pos["quantity"], held,
+                "Paper position restored | %s | entry=%.2f qty=%d held_bars=%d peak=%.2f max_gain=%.2f%%",
+                instrument, pos["entry_price"], pos["quantity"], held, _peak_close, _max_gain_pct,
             )
         if restored:
             telegram.notify_positions_restored(restored)
@@ -276,12 +279,15 @@ def main():
                 "instrument": instrument,
                 "_held_bars": held_bars,
             }
+            _peak_close   = store.get_state(f"{instrument}.peak_close", 0.0)
+            _max_gain_pct = store.get_state(f"{instrument}.max_gain_pct", 0.0)
             for strat in strategies:
                 if strat.instrument == instrument:
                     strat.on_order_update(synthetic_fill)
+                    strat.seed_position_state(_peak_close, _max_gain_pct)
             logger.info(
-                "Live position restored | %s x%d @ %.2f | held_bars=%d",
-                instrument, qty, avg, held_bars,
+                "Live position restored | %s x%d @ %.2f | held_bars=%d peak=%.2f max_gain=%.2f%%",
+                instrument, qty, avg, held_bars, _peak_close, _max_gain_pct,
             )
 
         # Clear residual phantom state for instruments not in DB positions
@@ -346,6 +352,8 @@ def main():
             risk.close_position(instrument, fill_price)
             if config.env in ("paper", "live"):
                 store.delete_open_position(instrument)
+                store.set_state(f"{instrument}.peak_close", 0.0)
+                store.set_state(f"{instrument}.max_gain_pct", 0.0)
             if config.env == "live":
                 store.set_state("cumulative_pnl", risk.cumulative_pnl)
         portfolio.on_order_filled(instrument, direction, quantity, fill_price)
@@ -412,6 +420,12 @@ def main():
                 _trail = getattr(strategy, "_trailing_active", False)
                 store.update_position_metrics(
                     strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
+                )
+                # Persist peak_close and max_gain_pct so they survive daily restarts.
+                store.set_state(f"{strategy.instrument}.peak_close", _peak)
+                store.set_state(
+                    f"{strategy.instrument}.max_gain_pct",
+                    getattr(strategy, "_max_gain_pct", 0.0),
                 )
             filter_block = getattr(strategy, "last_filter_block", None)
             if filter_block:

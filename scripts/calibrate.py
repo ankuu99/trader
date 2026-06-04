@@ -48,6 +48,7 @@ PARAM_GRID = {
     "veto_threshold":      [0.40, 0.50, 0.60],
     "min_hold_before_exit": [1, 5, 10, 25, 50],
     "volume_ma_bars":      [20],
+    "pattern_top_floor_enabled": [True, False],
 }
 
 _KEYS = list(PARAM_GRID.keys())

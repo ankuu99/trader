@@ -197,7 +197,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     print(f"  {'─'*W}")
     print(f"  Exit reasons:                              avg_bars")
     max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
-    for reason in ["SL", "TRAILING", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
+    for reason in ["SL", "TRAILING", "STALE", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
         if reason not in reason_stats:
             continue
         s = reason_stats[reason]
@@ -211,7 +211,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         "SL": "SL", "TRAILING": "TRL", "TRAILING_EOD_CLOSE": "EOD",
         "PATTERN_TOP": "PAT", "STRATEGY": "STR", "TARGET": "TGT",
         "OPEN@END": "END", "STAGNATION": "STG", "MODEL_EXIT": "MOD",
-        "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC",
+        "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC", "STALE": "STL",
     }
     # ANSI colours
     _R = "\033[0m"         # reset
@@ -223,6 +223,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         "MODEL_EXIT":        "\033[94m",   # blue
         "TARGET":            "\033[92m",   # green
         "STAGNATION":        "\033[33m",   # dark yellow
+        "STALE":             "\033[33m",   # dark yellow
         "TIME_DECAY":        "\033[35m",   # magenta
         "INTRADAY_CLOSE":    "\033[95m",   # bright magenta
         "STRATEGY":          "\033[37m",   # white
@@ -245,7 +246,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["count"] += 1
         per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["pnl"] += t["pnl"]
 
-    _REASON_ORDER = ["SL", "TRAILING", "TRAILING_EOD_CLOSE", "STAGNATION", "TIME_DECAY",
+    _REASON_ORDER = ["SL", "TRAILING", "TRAILING_EOD_CLOSE", "STALE", "STAGNATION", "TIME_DECAY",
                      "MODEL_EXIT", "PATTERN_TOP", "TARGET", "INTRADAY_CLOSE", "STRATEGY", "OPEN@END"]
     BAR_W = 24
 
