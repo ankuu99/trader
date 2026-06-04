@@ -112,6 +112,21 @@ class LRExtremaStrategy(Strategy):
         self._momentum_exit_p_min_floor: float = float(params.get("momentum_exit_p_min_floor", 0.35))
         self._momentum_exit_min_bars: int = int(params.get("momentum_exit_min_bars", 5))
 
+        # --- Fundamental model enhancements ---
+
+        # Enhancement A: Forward-return labeling — only keep a geometric minimum as a
+        # class-0 training label if price actually rose >= min_return_pct over forward_bars.
+        _fl = params.get("forward_label") or {}
+        self._forward_label_enabled: bool = bool(_fl.get("enabled", False))
+        self._forward_label_bars: int = int(_fl.get("forward_bars", 150))
+        self._forward_label_min_return_pct: float = float(_fl.get("min_return_pct", 2.0))
+
+        # Enhancement B: Depth-of-decline feature — adds drawdown_from_high as a 7th
+        # feature. When disabled, 6-feature vector is unchanged and results are identical.
+        _df = params.get("depth_feature") or {}
+        self._depth_feature_enabled: bool = bool(_df.get("enabled", False))
+        self._depth_feature_lookback: int = int(_df.get("lookback_bars", 50))
+
         def _parse_time(val: str | None, default: time) -> time:
             if val is None:
                 return default
@@ -578,7 +593,34 @@ class LRExtremaStrategy(Strategy):
             return
 
         rows, labels = [], []
+
+        # Build candidate minima list, optionally filtered by forward return.
+        qualified_minima = []
+        filtered_out = 0
         for idx in minima:
+            if self._forward_label_enabled:
+                fwd_end = min(idx + self._forward_label_bars, len(candles) - 1)
+                if fwd_end > idx:
+                    fwd_return = (
+                        (candles[fwd_end]["close"] - candles[idx]["close"])
+                        / candles[idx]["close"] * 100.0
+                    )
+                    if fwd_return < self._forward_label_min_return_pct:
+                        filtered_out += 1
+                        continue  # false bottom — didn't bounce enough
+            qualified_minima.append(idx)
+
+        # Fallback: if the filter removed too many samples, revert to all geometric minima
+        # so training can still proceed. Logs a warning so the caller can tune the threshold.
+        if self._forward_label_enabled and len(qualified_minima) < _MIN_SAMPLES_PER_CLASS:
+            logger.warning(
+                "LR-Extrema | %s | forward-label filter too strict — kept %d/%d minima "
+                "(filtered %d); reverting to geometric labels for this training round",
+                self.instrument, len(qualified_minima), len(minima), filtered_out,
+            )
+            qualified_minima = list(minima)
+
+        for idx in qualified_minima:
             feat = self._compute_features(candles[: idx + 1])
             if feat is not None:
                 rows.append(feat)
@@ -647,7 +689,18 @@ class LRExtremaStrategy(Strategy):
         slope10 = self._linreg_slope(returns[-10:])
         slope20 = self._linreg_slope(returns[-20:])
 
-        return np.array([volume_ratio, norm_price, slope3, slope5, slope10, slope20], dtype=float)
+        base = [volume_ratio, norm_price, slope3, slope5, slope10, slope20]
+
+        # Enhancement B: depth-of-decline — how far has price fallen from its recent high?
+        # Negative value; deeper = more negative. Scale-invariant (ratio).
+        # When disabled: vector stays at 6 features, results are identical.
+        if self._depth_feature_enabled:
+            n = min(self._depth_feature_lookback, len(closes))
+            recent_high = max(closes[-n:])
+            drawdown_from_high = (close - recent_high) / recent_high if recent_high > 0 else 0.0
+            base.append(drawdown_from_high)
+
+        return np.array(base, dtype=float)
 
     @staticmethod
     def _linreg_slope(prices: list[float]) -> float:

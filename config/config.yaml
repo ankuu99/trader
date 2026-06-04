@@ -12,7 +12,7 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 15.0
+  max_capital_per_stock_pct: 10.0
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
@@ -33,7 +33,6 @@ watchlist:
 
   - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
-  - NSE:FEDERALBNK     # +₹7.0k, 15t — mid-cap bank
   - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
   - NSE:RADICO         # +₹5.2k, 15t — spirits
   - NSE:RVNL           # +₹4.4k, 22t — rail infra
@@ -108,6 +107,27 @@ strategies:
     momentum_exit_enabled: false
     momentum_exit_p_min_floor: 0.35   # P(local-min) below this triggers exit
     momentum_exit_min_bars: 5         # min bars held before momentum exit can fire
+
+    # --- Fundamental model enhancements (nested, each has an enabled toggle) ---
+
+    # Enhancement A: Forward-return labeling
+    # Replaces geometric-minima labels with outcome-based labels: a local minimum is only
+    # kept as a buy training sample if price actually rose >= min_return_pct over the next
+    # forward_bars candles. Filters out minima that continued lower (false bottoms).
+    # When disabled: identical to baseline behaviour.
+    forward_label:
+      enabled: false
+      forward_bars: 150             # bars forward to measure outcome (~5 trading days at 15min)
+      min_return_pct: 2.0           # min % rise required to keep as a class-0 label
+
+    # Enhancement B: Depth-of-decline feature
+    # Adds a 7th feature to every candle: how far price has fallen from its recent high
+    # (drawdown_from_high = (close - max_close_over_lookback) / max_close_over_lookback).
+    # Deeper declines from a higher base are stronger reversal candidates.
+    # When disabled: identical 6-feature vector, identical model, identical results.
+    depth_feature:
+      enabled: true
+      lookback_bars: 50             # bars back to find the recent high
 
 
 data:
