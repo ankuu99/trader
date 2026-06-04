@@ -222,7 +222,8 @@ def _render_sparkline(closes: list[float], entry_price: float,
 
 def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int,
                       entry_price: float | None = None, sl_price: float | None = None,
-                      target_price: float | None = None,
+                      sell_min_price: float | None = None,
+                      trail_price: float | None = None,
                       peak_close: float | None = None,
                       buy_markers: list | None = None,
                       sell_markers: list | None = None,
@@ -236,7 +237,7 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
     n = len(closes)
 
     prices = list(closes)
-    for ref in [entry_price, sl_price, target_price]:
+    for ref in [entry_price, sl_price, sell_min_price, trail_price]:
         if ref:
             prices.append(ref)
     for _, p in (buy_markers or []):
@@ -254,7 +255,7 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
         return pl + cw * i / (n - 1)
 
     parts: list[str] = [
-        f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">',
+        f'<svg width="100%" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">',
         f'<rect width="{width}" height="{height}" fill="#0d1117"/>',
     ]
 
@@ -284,8 +285,10 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
     if sl_price:
         hline(sl_price, "#f85149", "SL")
-    if target_price:
-        hline(target_price, "#d29922", "Trail")
+    if sell_min_price:
+        hline(sell_min_price, "#58a6ff", "PTop")
+    if trail_price and (not sell_min_price or abs(trail_price - sell_min_price) > 0.5):
+        hline(trail_price, "#d29922", "Trail")
     if entry_price:
         hline(entry_price, "#3fb950", "Entry")
         if peak_close and peak_close > entry_price:
@@ -384,7 +387,7 @@ def render_chart_page(instrument: str, store, config) -> str:
     # All completed orders for this instrument (full history)
     order_rows = _read_db(
         config.db_path,
-        "SELECT direction, price, placed_at FROM orders "
+        "SELECT direction, price, placed_at, updated_at FROM orders "
         "WHERE instrument = ? AND status = 'COMPLETE' ORDER BY placed_at ASC",
         (instrument,),
     )
@@ -418,10 +421,11 @@ def render_chart_page(instrument: str, store, config) -> str:
     closes = [r["close"] for r in candle_rows]
     timestamps = [r["timestamp"] for r in candle_rows]
 
-    # Match order timestamps to candle indices
+    # Match order fill timestamps to candle indices (use updated_at = fill time, not placed_at)
     buy_markers, sell_markers = [], []
     for o in order_rows:
-        idx = _find_candle_idx(o["placed_at"], timestamps)
+        fill_ts = o.get("updated_at") or o["placed_at"]
+        idx = _find_candle_idx(fill_ts, timestamps)
         (buy_markers if o["direction"] == "BUY" else sell_markers).append((idx, o["price"]))
 
     # Open position details
@@ -435,19 +439,22 @@ def render_chart_page(instrument: str, store, config) -> str:
                 entry_idx = i
                 break
 
-    sl_price = trail_activation = None
+    sl_price = sell_min_price = trail_price = None
     if entry_price:
         lr = config.strategy_config("lr_extrema") or {}
         stop_pct = float(lr.get("stop_pct", 3.0))
         profit_pct = float(lr.get("profit_pct", 3.0))
+        sell_min_pct = float(lr.get("sell_min_pct", 3.0))
         sl_price = round(entry_price * (1 - stop_pct / 100), 2)
-        trail_activation = round(entry_price * (1 + profit_pct / 100), 2)
+        sell_min_price = round(entry_price * (1 + sell_min_pct / 100), 2)
+        trail_price = round(entry_price * (1 + profit_pct / 100), 2)
 
     chart_svg = _render_chart_svg(
         closes, timestamps, entry_idx,
         entry_price=entry_price,
         sl_price=sl_price,
-        target_price=trail_activation,
+        sell_min_price=sell_min_price,
+        trail_price=trail_price,
         peak_close=peak_close if peak_close > 0 else None,
         buy_markers=buy_markers,
         sell_markers=sell_markers,
@@ -464,7 +471,8 @@ def render_chart_page(instrument: str, store, config) -> str:
             f"Entry &#8377;{entry_price:.2f}",
             f'Current &#8377;{last_close:.2f} <span class="{chg_class}">({chg_sign}{chg:.2f}%)</span>',
             f"SL &#8377;{sl_price:.2f}",
-            f"Trail &#8377;{trail_activation:.2f}",
+            f"PTop &#8377;{sell_min_price:.2f}",
+            f"Trail &#8377;{trail_price:.2f}",
         ]
         if peak_close > 0:
             meta_parts.append(f"Peak &#8377;{peak_close:.2f}")
@@ -1015,13 +1023,14 @@ def render_page(bot_state, risk, store, config) -> str:
         ws_ts = [r["timestamp"] for r in ws_candles]
         ws_orders = _read_db(
             config.db_path,
-            "SELECT direction, price, placed_at FROM orders "
+            "SELECT direction, price, placed_at, updated_at FROM orders "
             "WHERE instrument = ? AND status = 'COMPLETE' ORDER BY placed_at ASC",
             (sym,),
         )
         ws_buys, ws_sells = [], []
         for o in ws_orders:
-            idx = _find_candle_idx(o["placed_at"], ws_ts)
+            fill_ts = o.get("updated_at") or o["placed_at"]
+            idx = _find_candle_idx(fill_ts, ws_ts)
             (ws_buys if o["direction"] == "BUY" else ws_sells).append((idx, o["price"]))
         open_entry_for_sym = next(
             (p["entry_price"] for p in positions if p["instrument"] == sym), None
