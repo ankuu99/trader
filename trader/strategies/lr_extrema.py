@@ -87,7 +87,31 @@ class LRExtremaStrategy(Strategy):
         self._macd_signal_period: int = int(params.get("macd_signal_period", 9))
         self._macd_slope_ma_period: int = int(params.get("macd_slope_ma_period", 3))
         self._macd_slope_threshold: float = float(params.get("macd_slope_threshold", 0.0))
-        
+
+        # --- NEW EXIT FEATURES (all disabled by default) ---
+
+        # Feature 1: Progress gate — exit if trade hasn't shown meaningful gain after N bars.
+        # Tracks _max_gain_pct (best gain since entry). If after stale_check_bars bars the
+        # best gain never exceeded stale_min_gain_pct%, the thesis is dead — exit.
+        self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
+        self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
+        self._stale_min_gain_pct: float = float(params.get("stale_min_gain_pct", 0.5))
+
+        # Feature 2: Breakeven stop — once position gains breakeven_trigger_pct, move the
+        # effective hard stop to entry_price * (1 + breakeven_buffer_pct/100).
+        # Prevents a profitable trade from turning into a loss. Checked on every tick.
+        self._breakeven_stop_enabled: bool = bool(params.get("breakeven_stop_enabled", False))
+        self._breakeven_trigger_pct: float = float(params.get("breakeven_trigger_pct", 1.0))
+        self._breakeven_buffer_pct: float = float(params.get("breakeven_buffer_pct", 0.0))
+        self._breakeven_active: bool = False  # True once trigger_pct has been reached
+
+        # Feature 3: Momentum decay exit — if P(local-min) drops below momentum_exit_p_min_floor
+        # while the position is flat/slightly positive (below sell_min_pct), exit early.
+        # Interpretation: model no longer believes this was a bottom; get out before the stop.
+        self._momentum_exit_enabled: bool = bool(params.get("momentum_exit_enabled", False))
+        self._momentum_exit_p_min_floor: float = float(params.get("momentum_exit_p_min_floor", 0.35))
+        self._momentum_exit_min_bars: int = int(params.get("momentum_exit_min_bars", 5))
+
         def _parse_time(val: str | None, default: time) -> time:
             if val is None:
                 return default
@@ -111,6 +135,8 @@ class LRExtremaStrategy(Strategy):
         self._peak_close: float | None = None   # highest close since entry
         self._trailing_active: bool = False     # True once profit_pct floor is hit
         self._pattern_top_trailing: bool = False  # True when trailing activated by pattern-top detection
+        self._max_gain_pct: float = 0.0         # best % gain seen since entry (feature 1: progress gate)
+        self._breakeven_active: bool = False    # True once breakeven stop has been armed (feature 2)
 
         # set to the block reason string when an entry is filtered; None otherwise
         self.last_filter_block: str | None = None
@@ -182,13 +208,74 @@ class LRExtremaStrategy(Strategy):
                 timestamp=candle.get("timestamp"),
             )
 
-        # --- Model-based exit (pattern top detection, on-candle) ---
-        # Fires when P(local-max) >= sell_threshold after min_hold_before_exit bars,
-        # but only when gain >= sell_min_pct — stop_pct handles underwater/small exits.
+        # --- Feature 1: Progress gate (stale trade exit) ---
+        # Tracks the best gain ever seen since entry. If after stale_check_bars the best
+        # gain has never exceeded stale_min_gain_pct, the trade is going nowhere — exit.
         _pct_gain = (
             (close - self._entry_price) / self._entry_price * 100.0
             if self._entry_price else 0.0
         )
+        if not self.is_flat() and self._entry_price is not None:
+            if _pct_gain > self._max_gain_pct:
+                self._max_gain_pct = _pct_gain
+        if (self._stale_exit_enabled
+                and not self.is_flat()
+                and self._entry_price is not None
+                and self._held_bars >= self._stale_check_bars
+                and self._max_gain_pct < self._stale_min_gain_pct):
+            logger.info(
+                "LR-Extrema EXIT (stale) | %s | held=%d bars, best_gain=%.2f%% < %.2f%% | entry=%.2f close=%.2f | candle=%s",
+                self.instrument, self._held_bars, self._max_gain_pct, self._stale_min_gain_pct,
+                self._entry_price, close, candle.get("timestamp"),
+            )
+            self._reset_position_state()
+            self._candles_since_train += 1
+            return Signal(
+                instrument=self.instrument,
+                direction=Direction.BUY,
+                signal_type=SignalType.EXIT,
+                price_hint=close,
+                strategy=self.name,
+                exit_reason="STALE",
+                timestamp=candle.get("timestamp"),
+            )
+
+        # --- Feature 3: Momentum decay exit (on-candle) ---
+        # If model's P(local-min) drops below momentum_exit_p_min_floor while the position
+        # is flat/slightly positive (below sell_min_pct), the bottom thesis has failed — exit.
+        if (self._momentum_exit_enabled
+                and not self.is_flat()
+                and self._trained
+                and self._entry_price is not None
+                and self._held_bars >= self._momentum_exit_min_bars
+                and _pct_gain < self._sell_min_pct):
+            x = self._compute_features(self._candles)
+            if x is not None:
+                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                classes = list(self._model.classes_)
+                proba = self._model.predict_proba(x_scaled)[0]
+                p_min = proba[classes.index(0)] if 0 in classes else 1.0
+                if p_min < self._momentum_exit_p_min_floor:
+                    logger.info(
+                        "LR-Extrema EXIT (momentum-decay) | %s | P(min)=%.3f < %.3f | gain=%.2f%% | held=%d | candle=%s",
+                        self.instrument, p_min, self._momentum_exit_p_min_floor,
+                        _pct_gain, self._held_bars, candle.get("timestamp"),
+                    )
+                    self._reset_position_state()
+                    self._candles_since_train += 1
+                    return Signal(
+                        instrument=self.instrument,
+                        direction=Direction.BUY,
+                        signal_type=SignalType.EXIT,
+                        price_hint=close,
+                        strategy=self.name,
+                        exit_reason="MOMENTUM_DECAY",
+                        timestamp=candle.get("timestamp"),
+                    )
+
+        # --- Model-based exit (pattern top detection, on-candle) ---
+        # Fires when P(local-max) >= sell_threshold after min_hold_before_exit bars,
+        # but only when gain >= sell_min_pct — stop_pct handles underwater/small exits.
         if (not self.is_flat() and self._trained
                 and self._held_bars >= self._min_hold_before_exit
                 and _pct_gain >= self._sell_min_pct):
@@ -371,10 +458,23 @@ class LRExtremaStrategy(Strategy):
                     exit_reason="TRAILING_EOD_CLOSE",
                 )
 
+        # Feature 2: Breakeven stop — arm once trigger_pct gain is reached; then hard stop
+        # moves up to entry + buffer. Checked before the normal stop so it fires first.
+        if self._breakeven_stop_enabled and not self._breakeven_active and pct >= self._breakeven_trigger_pct:
+            self._breakeven_active = True
+            logger.info(
+                "LR-Extrema BREAKEVEN armed | %s | pct=+%.2f%% >= trigger=%.2f%% | floor=entry+%.2f%%",
+                self.instrument, pct, self._breakeven_trigger_pct, self._breakeven_buffer_pct,
+            )
+
         reason: str | None = None
-        if pct <= -self._stop_pct:
+        if self._breakeven_stop_enabled and self._breakeven_active:
+            be_floor = self._entry_price * (1.0 + self._breakeven_buffer_pct / 100.0)
+            if last_price <= be_floor:
+                reason = f"breakeven stop price={last_price:.2f} <= floor={be_floor:.2f}"
+        if reason is None and pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
-        elif self._trailing_active:
+        elif reason is None and self._trailing_active:
             drawdown = (last_price - self._peak_close) / self._peak_close * 100.0
             if drawdown <= -self._trail_pct:
                 reason = f"trailing stop {drawdown:.2f}% from peak {self._peak_close:.2f}"
@@ -409,6 +509,8 @@ class LRExtremaStrategy(Strategy):
         self._peak_close = None
         self._trailing_active = False
         self._pattern_top_trailing = False
+        self._max_gain_pct = 0.0
+        self._breakeven_active = False
 
     def on_order_update(self, order: dict) -> None:
         super().on_order_update(order)

@@ -385,7 +385,18 @@ def main():
         for strategy in strategies:
             if strategy.instrument != symbol:
                 continue
+            _was_trailing = getattr(strategy, "_trailing_active", False)
             signal = strategy.on_candle(candle)
+            if not _was_trailing and getattr(strategy, "_trailing_active", False):
+                _entry = getattr(strategy, "_entry_price", 0) or 0
+                _peak = getattr(strategy, "_peak_close", 0) or 0
+                _gain = (_peak - _entry) / _entry * 100 if _entry else 0
+                telegram.notify_trailing_activated(
+                    symbol, _entry, _peak, _gain,
+                    getattr(strategy, "_trail_pct", 1.5),
+                    "PATTERN_TOP" if getattr(strategy, "_pattern_top_trailing", False) else "PROFIT_PCT",
+                    config.env,
+                )
             bot_state.model_scores[strategy.instrument] = {
                 "p_min": getattr(strategy, "_last_p_min", 0.0),
                 "p_max": getattr(strategy, "_last_p_max", 0.0),
@@ -505,7 +516,18 @@ def main():
         for strat in strategies:
             if strat.instrument != symbol:
                 continue
+            _was_trailing = getattr(strat, "_trailing_active", False)
             signal = strat.on_tick(tick)
+            if not _was_trailing and getattr(strat, "_trailing_active", False):
+                _entry = getattr(strat, "_entry_price", 0) or 0
+                _peak = getattr(strat, "_peak_close", 0) or 0
+                _gain = (_peak - _entry) / _entry * 100 if _entry else 0
+                telegram.notify_trailing_activated(
+                    symbol, _entry, _peak, _gain,
+                    getattr(strat, "_trail_pct", 1.5),
+                    "PATTERN_TOP" if getattr(strat, "_pattern_top_trailing", False) else "PROFIT_PCT",
+                    config.env,
+                )
             if signal is None:
                 continue
             order = risk.validate(signal)

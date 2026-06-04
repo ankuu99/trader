@@ -220,6 +220,23 @@ def notify_gtt_placed(instrument: str, quantity: int, stop_loss: float, target_p
     _send(text)
 
 
+def notify_trailing_activated(instrument: str, entry_price: float, peak: float,
+                               gain_pct: float, trail_pct: float,
+                               trigger_type: str, mode: str):
+    tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    trail_stop = peak * (1 - trail_pct / 100)
+    text = (
+        f"🔔 *Trailing Stop Activated* {tag}\n"
+        f"Instrument : `{instrument}`\n"
+        f"Entry      : ₹{entry_price:,.2f}\n"
+        f"Peak       : ₹{peak:,.2f} (+{gain_pct:.2f}%)\n"
+        f"Trail stop : ₹{trail_stop:,.2f} (-{trail_pct:.1f}% from peak)\n"
+        f"Type       : {trigger_type}\n"
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
+
 def notify_positions_restored(positions: list[dict]):
     if not positions:
         return

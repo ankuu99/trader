@@ -93,6 +93,18 @@ strategies:
     macd_signal_period: 9
     macd_slope_ma_period: 3      # number of consecutive slopes to average
     macd_slope_threshold: 0.0    # avg slope must exceed this (positive = converging toward 0)
+    # Feature 1: Progress gate — exit if trade hasn't shown meaningful gain after N bars
+    stale_exit_enabled: true
+    stale_check_bars: 20          # bars held before stale check fires
+    stale_min_gain_pct: 0.5       # best gain must have exceeded this % or we exit
+    # Feature 2: Breakeven stop — move hard stop to entry once trigger_pct gain reached
+    breakeven_stop_enabled: false
+    breakeven_trigger_pct: 1.0    # % gain that arms the breakeven stop
+    breakeven_buffer_pct: 0.0     # stop set to entry + this % (0 = exact breakeven)
+    # Feature 3: Momentum decay exit — exit if model loses confidence in the bottom thesis
+    momentum_exit_enabled: false
+    momentum_exit_p_min_floor: 0.35   # P(local-min) below this triggers exit
+    momentum_exit_min_bars: 5         # min bars held before momentum exit can fire
 
 
 data:
