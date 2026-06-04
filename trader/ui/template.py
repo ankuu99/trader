@@ -540,7 +540,8 @@ def render_page(bot_state, risk, store, config) -> str:
     positions = _read_db(
         config.db_path,
         "SELECT instrument, entry_price, quantity, held_bars, entry_time, "
-        "current_price, pct_change, unrealised_pnl, peak_close, trailing_active, low_since_entry "
+        "current_price, pct_change, unrealised_pnl, peak_close, trailing_active, low_since_entry, "
+        "pattern_top_trailing "
         "FROM open_positions ORDER BY entry_time ASC",
     )
     pending_orders = list(risk._pending_orders.keys())
@@ -569,12 +570,18 @@ def render_page(bot_state, risk, store, config) -> str:
                  placed_at AS exit_time,
                  ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
           FROM orders WHERE direction='SELL' AND status='COMPLETE'
+        ),
+        exit_sig AS (
+          SELECT instrument, exit_reason,
+                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY logged_at) rn
+          FROM signals WHERE signal_type = 'EXIT' AND exit_reason IS NOT NULL
         )
         SELECT b.instrument, b.entry_price, s.exit_price, b.quantity,
                (s.exit_price - b.entry_price) * b.quantity AS gross_pnl,
-               b.entry_time, s.exit_time
+               b.entry_time, s.exit_time, e.exit_reason
         FROM buy_q b
         JOIN sell_q s ON b.instrument = s.instrument AND b.rn = s.rn
+        LEFT JOIN exit_sig e ON b.instrument = e.instrument AND e.rn = s.rn
         ORDER BY b.entry_time DESC
         LIMIT 30
         """,
@@ -583,7 +590,7 @@ def render_page(bot_state, risk, store, config) -> str:
     # ── recent signals ────────────────────────────────────────────────────────
     signals = _read_db(
         config.db_path,
-        "SELECT logged_at, instrument, direction, signal_type, price_hint, accepted, reject_reason "
+        "SELECT logged_at, instrument, direction, signal_type, price_hint, accepted, reject_reason, exit_reason "
         "FROM signals WHERE reject_reason IS NULL OR reject_reason NOT LIKE 'FILTER:%' "
         "ORDER BY id DESC LIMIT 20",
     )
@@ -645,6 +652,7 @@ def render_page(bot_state, risk, store, config) -> str:
     _lr_cfg = config.strategy_config("lr_extrema") or {}
     _stop_pct = float(_lr_cfg.get("stop_pct", 3.0))
     _trail_pct = float(_lr_cfg.get("trail_pct", 1.5))
+    _hold_bars_max = int(_lr_cfg.get("hold_bars", 200))
 
     if positions or pending_orders:
         rows_html = ""
@@ -659,17 +667,41 @@ def render_page(bot_state, risk, store, config) -> str:
             peak = p.get("peak_close") or 0.0
             low = p.get("low_since_entry") or 0.0
             trailing = bool(p.get("trailing_active", 0))
+            ptt = bool(p.get("pattern_top_trailing", 0))
+            held = p.get("held_bars") or 0
             pct_sign = "+" if pct >= 0 else ""
             pct_class = "green" if pct >= 0 else "red"
             upnl_sign = "+" if upnl >= 0 else ""
-            trailing_badge = f" {_badge('TRAILING', 'orange')}" if trailing else ""
+            # Trailing badge: distinguish TRAIL(TOP) vs TRAIL(PCT)
+            if trailing:
+                trail_label = "TRAIL(TOP)" if ptt else "TRAIL(PCT)"
+                trailing_badge = f" {_badge(trail_label, 'orange')}"
+            else:
+                trailing_badge = ""
             low_str = f"&#8377; {low:.2f}" if low > 0 else "<span class='dim'>—</span>"
             sl_price = p["entry_price"] * (1 - _stop_pct / 100)
             trail_trigger = peak * (1 - _trail_pct / 100) if trailing and peak > 0 else None
+            # Trail distance: how far current price is above trigger (cushion before stop fires)
+            trail_cushion_str = ""
+            if trail_trigger and cur > 0:
+                cushion_pct = (cur - trail_trigger) / cur * 100
+                cushion_color = "orange" if cushion_pct < 1.0 else "dim"
+                trail_cushion_str = (
+                    f"<br><span class='{cushion_color}' style='font-size:11px'>"
+                    f"cushion {cushion_pct:+.2f}%</span>"
+                )
             stop_cell = (
                 f"<span class='red'>&#8377; {sl_price:.2f}</span>"
                 + (f"<br><span class='orange' style='font-size:11px'>trail &#8377; {trail_trigger:.2f}</span>"
                    if trail_trigger else "")
+                + trail_cushion_str
+            )
+            # Hold bars progress bar
+            hold_pct = min(100, int(held / _hold_bars_max * 100)) if _hold_bars_max else 0
+            hold_bar_danger = "danger" if hold_pct >= 80 else ""
+            hold_cell = (
+                f"{held}/{_hold_bars_max}"
+                f'<div class="bar-bg"><div class="bar-fill {hold_bar_danger}" style="width:{hold_pct}%"></div></div>'
             )
 
             # Sparkline: query candles since entry
@@ -696,7 +728,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td class='green' style='font-size:12px'>&#8377; {peak:.2f}</td>"
                 f"<td class='red' style='font-size:12px'>{low_str}</td>"
                 f"<td>{stop_cell}</td>"
-                f"<td>{p['held_bars']} bars</td>"
+                f"<td>{hold_cell}</td>"
                 f"<td>{_badge('OPEN', 'green')}{trailing_badge}</td>"
                 f"<td>{sparkline_html}</td>"
                 f"</tr>"
@@ -771,6 +803,10 @@ def render_page(bot_state, risk, store, config) -> str:
         wins = sum(1 for t in closed_trades if (t.get("gross_pnl") or 0) > 0)
         losses = sum(1 for t in closed_trades if (t.get("gross_pnl") or 0) < 0)
         total_sign = "+" if total_pnl >= 0 else ""
+        _EXIT_REASON_KIND = {
+            "SL": "red", "TRAILING": "orange", "PATTERN_TOP": "orange",
+            "STALE": "dim", "STRATEGY": "dim", "OPEN@END": "dim",
+        }
         rows_html = ""
         for t in closed_trades:
             sym = t["instrument"].split(":")[-1]
@@ -784,6 +820,11 @@ def render_page(bot_state, risk, store, config) -> str:
             entry_fmt = _fmt_ist(datetime.fromisoformat(t["entry_time"])) if t.get("entry_time") else "—"
             exit_fmt = _fmt_ist(datetime.fromisoformat(t["exit_time"])) if t.get("exit_time") else "—"
             dur = _hold_duration(t.get("entry_time", ""), t.get("exit_time", ""))
+            exit_reason = t.get("exit_reason") or ""
+            reason_badge = (
+                _badge(exit_reason, _EXIT_REASON_KIND.get(exit_reason, "dim"))
+                if exit_reason else "<span class='dim'>—</span>"
+            )
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{entry_fmt}</td>"
@@ -793,6 +834,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td class='dim'>{qty}</td>"
                 f"<td class='{_pnl_class(pnl)}'>{pnl_sign}&#8377; {pnl:,.2f} ({pct_sign}{pct_pnl:.2f}%)</td>"
                 f"<td class='dim'>{dur}</td>"
+                f"<td>{reason_badge}</td>"
                 f"<td class='dim'>{exit_fmt}</td>"
                 f"</tr>"
             )
@@ -807,7 +849,7 @@ def render_page(bot_state, risk, store, config) -> str:
             </h2>
             <table>
                 <tr><th>Entry time</th><th>Symbol</th><th>Entry &#8377;</th><th>Exit &#8377;</th>
-                    <th>Qty</th><th>Gross P&amp;L</th><th>Hold</th><th>Exit time</th></tr>
+                    <th>Qty</th><th>Gross P&amp;L</th><th>Hold</th><th>Exit reason</th><th>Exit time</th></tr>
                 {rows_html}
             </table>
         </div>"""
@@ -821,7 +863,9 @@ def render_page(bot_state, risk, store, config) -> str:
             sym = s["instrument"].split(":")[-1]
             accepted = bool(s.get("accepted"))
             acc_badge = _badge("✓", "green") if accepted else _badge("✗", "red")
-            reason = s.get("reject_reason") or ""
+            reject_reason = s.get("reject_reason") or ""
+            exit_reason = s.get("exit_reason") or ""
+            reason_display = exit_reason if s.get("signal_type") == "EXIT" else reject_reason
             display_dir = "SELL" if s.get("signal_type") == "EXIT" else s["direction"]
             dir_class = "green" if display_dir == "BUY" else "red"
             logged = s.get("logged_at", "")[:16]
@@ -833,7 +877,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td class='dim'>{s['signal_type']}</td>"
                 f"<td>&#8377; {s['price_hint']:.2f}</td>"
                 f"<td>{acc_badge}</td>"
-                f"<td class='dim'>{reason}</td>"
+                f"<td class='dim'>{reason_display}</td>"
                 f"</tr>"
             )
         signals_section = f"""

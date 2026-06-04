@@ -106,17 +106,18 @@ class Store:
                 );
 
                 CREATE TABLE IF NOT EXISTS open_positions (
-                    instrument      TEXT    PRIMARY KEY,
-                    entry_price     REAL    NOT NULL,
-                    quantity        INTEGER NOT NULL,
-                    held_bars       INTEGER NOT NULL DEFAULT 0,
-                    entry_time      TEXT    NOT NULL,
-                    current_price   REAL    DEFAULT 0,
-                    pct_change      REAL    DEFAULT 0,
-                    unrealised_pnl  REAL    DEFAULT 0,
-                    peak_close      REAL    DEFAULT 0,
-                    trailing_active INTEGER DEFAULT 0,
-                    low_since_entry REAL    DEFAULT 0
+                    instrument           TEXT    PRIMARY KEY,
+                    entry_price          REAL    NOT NULL,
+                    quantity             INTEGER NOT NULL,
+                    held_bars            INTEGER NOT NULL DEFAULT 0,
+                    entry_time           TEXT    NOT NULL,
+                    current_price        REAL    DEFAULT 0,
+                    pct_change           REAL    DEFAULT 0,
+                    unrealised_pnl       REAL    DEFAULT 0,
+                    peak_close           REAL    DEFAULT 0,
+                    trailing_active      INTEGER DEFAULT 0,
+                    low_since_entry      REAL    DEFAULT 0,
+                    pattern_top_trailing INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -128,7 +129,8 @@ class Store:
                     signal_type   TEXT    NOT NULL,
                     price_hint    REAL    NOT NULL,
                     accepted      INTEGER NOT NULL,
-                    reject_reason TEXT
+                    reject_reason TEXT,
+                    exit_reason   TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS state (
@@ -138,17 +140,23 @@ class Store:
             """)
             # Migration: add new columns to open_positions for existing DBs
             for col, defn in [
-                ("current_price",   "REAL DEFAULT 0"),
-                ("pct_change",      "REAL DEFAULT 0"),
-                ("unrealised_pnl",  "REAL DEFAULT 0"),
-                ("peak_close",      "REAL DEFAULT 0"),
-                ("trailing_active", "INTEGER DEFAULT 0"),
-                ("low_since_entry", "REAL DEFAULT 0"),
+                ("current_price",        "REAL DEFAULT 0"),
+                ("pct_change",           "REAL DEFAULT 0"),
+                ("unrealised_pnl",       "REAL DEFAULT 0"),
+                ("peak_close",           "REAL DEFAULT 0"),
+                ("trailing_active",      "INTEGER DEFAULT 0"),
+                ("low_since_entry",      "REAL DEFAULT 0"),
+                ("pattern_top_trailing", "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
                 except sqlite3.OperationalError:
                     pass  # column already exists
+            # Migration: add exit_reason to signals for existing DBs
+            try:
+                conn.execute("ALTER TABLE signals ADD COLUMN exit_reason TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     @staticmethod
     def _to_naive(dt: datetime) -> datetime:
@@ -320,6 +328,7 @@ class Store:
         price_hint: float,
         accepted: bool,
         reject_reason: str | None = None,
+        exit_reason: str | None = None,
     ):
         """Record a signal validation event (accepted or rejected)."""
         with self._conn() as conn:
@@ -327,8 +336,8 @@ class Store:
                 """
                 INSERT INTO signals
                     (logged_at, instrument, strategy, direction, signal_type,
-                     price_hint, accepted, reject_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     price_hint, accepted, reject_reason, exit_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self._to_naive(timestamp).isoformat(),
@@ -339,6 +348,7 @@ class Store:
                     price_hint,
                     1 if accepted else 0,
                     reject_reason,
+                    exit_reason,
                 ),
             )
 
@@ -369,17 +379,20 @@ class Store:
     def update_position_metrics(self, instrument: str, held_bars: int,
                                 current_price: float, pct_change: float,
                                 unrealised_pnl: float, peak_close: float,
-                                trailing_active: bool, candle_low: float = 0.0):
+                                trailing_active: bool, candle_low: float = 0.0,
+                                pattern_top_trailing: bool = False):
         with self._conn() as conn:
             conn.execute(
                 """UPDATE open_positions
                    SET held_bars = ?, current_price = ?, pct_change = ?,
                        unrealised_pnl = ?, peak_close = MAX(peak_close, ?), trailing_active = ?,
                        low_since_entry = CASE WHEN low_since_entry = 0 THEN ?
-                                              ELSE MIN(low_since_entry, ?) END
+                                              ELSE MIN(low_since_entry, ?) END,
+                       pattern_top_trailing = ?
                    WHERE instrument = ?""",
                 (held_bars, current_price, pct_change, unrealised_pnl,
-                 peak_close, int(trailing_active), candle_low, candle_low, instrument),
+                 peak_close, int(trailing_active), candle_low, candle_low,
+                 int(pattern_top_trailing), instrument),
             )
 
     def delete_open_position(self, instrument: str):

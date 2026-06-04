@@ -420,6 +420,7 @@ def main():
                 _trail = getattr(strategy, "_trailing_active", False)
                 store.update_position_metrics(
                     strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
+                    pattern_top_trailing=getattr(strategy, "_pattern_top_trailing", False),
                 )
                 # Persist peak_close and max_gain_pct so they survive daily restarts.
                 store.set_state(f"{strategy.instrument}.peak_close", _peak)
@@ -457,6 +458,7 @@ def main():
                 price_hint=signal.price_hint,
                 accepted=order is not None,
                 reject_reason=None if order else risk._last_reject_reason,
+                exit_reason=signal.exit_reason if order is not None else None,
             )
             if order is None:
                 continue
@@ -554,6 +556,7 @@ def main():
                 price_hint=signal.price_hint,
                 accepted=order is not None,
                 reject_reason=None if order else risk._last_reject_reason,
+                exit_reason=signal.exit_reason if order is not None else None,
             )
             if order is None:
                 continue
