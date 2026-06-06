@@ -85,6 +85,23 @@ Save a markdown report to `reviews/watchlist_review_YYYYMMDD.md` with this struc
 
 ## Step 5 — Print summary and ask before acting
 
-Print a condensed summary table to the terminal.
+Print a condensed summary table to the terminal showing all four buckets.
 
-Then ask the user which actions they want to take (removes, calibrations, new screens). Do NOT modify `config/config.yaml` without explicit confirmation.
+Then ask the user:
+1. "Remove these stocks from the watchlist? [list REMOVE stocks]" — if confirmed, edit config.yaml
+2. "Run calibration for CALIBRATE stocks? [list them]" — if confirmed, proceed to Step 6
+
+Do NOT modify `config/config.yaml` without explicit confirmation.
+
+## Step 6 — Auto-calibrate flagged stocks (if user confirmed)
+
+For each stock in the CALIBRATE bucket, invoke the calibrate skill in sequence:
+
+```
+Use the Skill tool to invoke "calibrate" with the symbol as argument.
+Example: Skill("calibrate", "NSE:MARICO")
+```
+
+After each calibration completes, show the result and ask whether to apply the override before moving to the next stock. This keeps the user in control stock-by-stock rather than applying everything blindly.
+
+Once all calibrations are done, summarise all applied overrides and suggest running a full backtest to confirm the portfolio-level impact.

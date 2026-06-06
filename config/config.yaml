@@ -28,6 +28,8 @@ watchlist:
   - NSE:GOKEX
   - NSE:COROMANDEL
   - NSE:GUJALKALI
+  - NSE:MARKSANS       # +₹18.3k, 107t — pharma
+  - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
 
   - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
@@ -191,6 +193,17 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 1.5
+  NSE:INDHOTEL:
+    lr_extrema:
+      forward_label:
+        enabled: true
+        min_return_pct: 1.5
+  NSE:MARKSANS:
+    lr_extrema:
+      threshold: 0.92
+      forward_label:
+        enabled: true
+        min_return_pct: 1.0
 
 data:
   db_path: data/market.db
