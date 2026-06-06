@@ -84,13 +84,19 @@ def main():
     logger.info("Backtest | %s to %s | instruments=%s", args.from_date, args.to_date, valid_watchlist)
 
     params = config.strategy_config("lr_extrema")
+    _stock_overrides = (config._data.get("per_stock_params") or {})
+    per_symbol_params = {
+        sym: config.get_strategy_params(sym, "lr_extrema")
+        for sym in valid_watchlist
+        if _stock_overrides.get(sym, {}).get("lr_extrema")
+    } or None
 
     def _progress(date, pct):
         print(f"\r  Progress: {date}  [{pct*100:5.1f}%]", end="", flush=True)
 
     t0 = time.perf_counter()
     trades = run_backtest(kite, store, valid_watchlist, symbol_to_token, params, from_dt, to_dt,
-                          progress_callback=_progress)
+                          progress_callback=_progress, per_symbol_params=per_symbol_params)
     print()  # newline after progress line
     elapsed = time.perf_counter() - t0
     _print_summary(trades, args.from_date, args.to_date)

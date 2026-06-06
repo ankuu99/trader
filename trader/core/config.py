@@ -13,6 +13,16 @@ CONFIG_FILE = Path(_config_env) if _config_env else ROOT / "config" / "config.ya
 _REQUIRED_ENV = ["KITE_API_KEY", "KITE_API_SECRET"]
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = base.copy()
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 def _load() -> "Config":
     load_dotenv(ENV_FILE)
     missing = [k for k in _REQUIRED_ENV if not os.getenv(k)]
@@ -88,6 +98,18 @@ class Config:
 
     def strategy_config(self, name: str) -> dict:
         return self._data["strategies"].get(name, {})
+
+    def get_strategy_params(self, instrument: str, strategy_name: str) -> dict:
+        """Return strategy params for instrument, deep-merging any per_stock_params overrides."""
+        base = self.strategy_config(strategy_name)
+        override = (
+            (self._data.get("per_stock_params") or {})
+            .get(instrument, {})
+            .get(strategy_name, {})
+        )
+        if not override:
+            return base
+        return _deep_merge(base, override)
 
     @property
     def max_open_positions(self) -> int:

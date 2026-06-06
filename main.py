@@ -144,7 +144,6 @@ def main():
     # Restore paper positions from SQLite so exits fire correctly after restart.
     if config.env == "paper":
         open_paper = store.read_open_positions()
-        lr_cfg = config.strategy_config("lr_extrema")
         restored = []
         for pos in open_paper:
             instrument = pos["instrument"]
@@ -159,6 +158,7 @@ def main():
             # if an exit condition was met while the system was live it would
             # have already fired and deleted the position from DB, so any
             # position still in DB means those candles were safe.
+            lr_cfg = config.get_strategy_params(instrument, "lr_extrema")
             entry_time_dt = datetime.fromisoformat(pos["entry_time"])
             post_df = store.read_candles(instrument, config.candle_timeframe, entry_time_dt, datetime.now())
             stop_price   = round(pos["entry_price"] * (1 - lr_cfg.get("stop_pct",   3.0) / 100), 2)

@@ -81,6 +81,8 @@ def main():
     parser.add_argument("--timeframe", default=None,
                         choices=["5minute", "15minute", "30minute", "60minute", "day"],
                         help="Candle timeframe (default: from config)")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="Skip Kite authentication and use only locally cached candle data")
     args = parser.parse_args()
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
@@ -90,22 +92,36 @@ def main():
         hour=23, minute=59, second=59
     )
 
-    kite  = create_kite()
     store = Store(config.db_path)
-    store.clear_backtest_data()
+    if not args.cache_only:
+        store.clear_backtest_data()
 
-    instruments     = kite.instruments("NSE")
-    symbol_to_token = {
-        f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
-    }
+    if args.cache_only:
+        kite            = None
+        symbols         = args.symbols if args.symbols else list(config.watchlist)
+        symbol_to_token = {s: 0 for s in symbols}
+        valid_symbols   = symbols
+    else:
+        kite            = create_kite()
+        store.clear_backtest_data()
+        instruments     = kite.instruments("NSE")
+        symbol_to_token = {
+            f"NSE:{i['tradingsymbol']}": i["instrument_token"] for i in instruments
+        }
+        symbols       = args.symbols if args.symbols else config.watchlist
+        valid_symbols = [s for s in symbols if s in symbol_to_token]
 
-    symbols       = args.symbols if args.symbols else config.watchlist
-    valid_symbols = [s for s in symbols if s in symbol_to_token]
     if not valid_symbols:
         print("No valid instruments found.")
         return
 
-    params  = config.strategy_config("lr_extrema")
+    params = config.strategy_config("lr_extrema")
+    _stock_overrides = config._data.get("per_stock_params") or {}
+    per_symbol_params = {
+        sym: config.get_strategy_params(sym, "lr_extrema")
+        for sym in valid_symbols
+        if _stock_overrides.get(sym, {}).get("lr_extrema")
+    } or None
     windows = _generate_windows(from_dt, to_dt, args.window, args.step)
 
     print(
@@ -123,7 +139,8 @@ def main():
         print(f"[{i}/{len(windows)}] {label} ...", end=" ", flush=True)
 
         trades = run_backtest(
-            kite, store, valid_symbols, symbol_to_token, params, win_start, win_end
+            kite, store, valid_symbols, symbol_to_token, params, win_start, win_end,
+            per_symbol_params=per_symbol_params,
         )
         m = compute_metrics(trades, config.total_capital)
 

@@ -1,24 +1,23 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 50000 
+  total: 250000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
-  max_open_positions: 20
+  max_open_positions: 25
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0
+  max_capital_per_stock_pct: 4.0
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
   - NSE:DCXINDIA
   - NSE:GOKEX
-  - NSE:ABFRL
   - NSE:COROMANDEL
 
 
@@ -27,7 +26,6 @@ watchlist:
   - NSE:CUPID
   - NSE:DCXINDIA
   - NSE:GOKEX
-  - NSE:ABFRL
   - NSE:COROMANDEL
   - NSE:GUJALKALI
 
@@ -45,8 +43,7 @@ watchlist:
   - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
   - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
-  - NSE:GAIL           # +₹1.0k, 12t — gas distribution
-  - NSE:RECLTD         # +₹656,  10t — power finance
+  - NSE:RECLTD         # +₹1.3k, 18t — power finance
   - NSE:MCX            # +₹390,  26t — commodity exchange
   # --- Borderline (few trades, positive — keep for live monitoring) ---
   - NSE:DIXON          # +₹236,   4t — electronics manufacturing
@@ -75,6 +72,13 @@ strategies:
     entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range
     entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising
     force_trailing_close_time: "15:25"
+    # Entry trend gate — block entries when stock is in a confirmed medium-term downtrend
+    # trend_gate_min_return: N-bar lookback return must exceed this floor, else entry is blocked
+    # e.g. -10.0 means block if stock is >10% below its price N bars ago
+    trend_gate_enabled: false
+    trend_gate_lookback: 800      # bars back to measure trend return (800 bars ≈ 5 weeks at 15min)
+    trend_gate_min_return: -20.0  # % return floor; entries blocked when return < this value
+
     # RSI gate (disabled by default)
     rsi_gate_enabled: false
     rsi_period: 14
@@ -96,6 +100,11 @@ strategies:
     stale_exit_enabled: true
     stale_check_bars: 20          # bars held before stale check fires
     stale_min_gain_pct: 0.5       # best gain must have exceeded this % or we exit
+    # Stale tier 2: at stale_check_bars_2 bars, exit if current gain < stale_min_gain_pct_2
+    # Catches trades that looked alive at bar 20 but have faded back below breakeven by bar N
+    stale_exit_2_enabled: true
+    stale_check_bars_2: 100       # second stale check at this bar count
+    stale_min_gain_pct_2: -2.0    # current gain floor at tier-2 check (-2.0 = exit only if > 2% underwater)
     # Feature 2: Breakeven stop — move hard stop to entry once trigger_pct gain reached
     breakeven_stop_enabled: false
     breakeven_trigger_pct: 1.0    # % gain that arms the breakeven stop
@@ -118,7 +127,7 @@ strategies:
     forward_label:
       enabled: false
       forward_bars: 150             # bars forward to measure outcome (~5 trading days at 15min)
-      min_return_pct: 2.0           # min % rise required to keep as a class-0 label
+      min_return_pct: 1.5           # min % rise required to keep as a class-0 label
 
     # Enhancement B: Depth-of-decline feature
     # Adds a 7th feature to every candle: how far price has fallen from its recent high
@@ -129,6 +138,59 @@ strategies:
       enabled: true
       lookback_bars: 50             # bars back to find the recent high
 
+
+per_stock_params:
+  # forward_label filters false-bottom training samples for stocks where the
+  # default geometric-minima labels produce noisy signals.
+  # Only "more selective" overrides here — overrides that reduce noise rather
+  # than increase trade frequency (lowering threshold hurts portfolio via capital competition).
+  NSE:GOKEX:
+    lr_extrema:
+      forward_label:
+        enabled: true
+        min_return_pct: 2.0
+  NSE:DCXINDIA:
+    lr_extrema:
+      threshold: 0.95
+      forward_label:
+        enabled: true
+        min_return_pct: 2.0
+  NSE:BLUESTARCO:
+    lr_extrema:
+      threshold: 0.90
+      forward_label:
+        enabled: true
+        min_return_pct: 2.5
+  NSE:GUJALKALI:
+    lr_extrema:
+      threshold: 0.95
+      forward_label:
+        enabled: true
+        min_return_pct: 2.5
+  NSE:HAL:
+    lr_extrema:
+      threshold: 0.92
+      forward_label:
+        enabled: true
+        min_return_pct: 3.0
+  NSE:MFSL:
+    lr_extrema:
+      threshold: 0.90
+      forward_label:
+        enabled: true
+        min_return_pct: 2.5
+  NSE:RECLTD:
+    lr_extrema:
+      threshold: 0.95
+      forward_label:
+        enabled: true
+        min_return_pct: 1.0
+  NSE:RVNL:
+    lr_extrema:
+      threshold: 0.90
+      forward_label:
+        enabled: true
+        min_return_pct: 1.5
 
 data:
   db_path: data/market.db

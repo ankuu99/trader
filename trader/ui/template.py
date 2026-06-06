@@ -118,12 +118,15 @@ def _hold_duration(entry_time_str: str, exit_time_str: str) -> str:
 
 
 def _find_candle_idx(order_ts: str, timestamps: list[str]) -> int:
-    """First candle index at or after order_ts (minute-precision match)."""
+    """Last candle index whose start time is <= order_ts (the candle that owns this moment)."""
     target = order_ts[:16]
+    result = 0
     for i, ts in enumerate(timestamps):
-        if ts[:16] >= target:
-            return i
-    return len(timestamps) - 1
+        if ts[:16] <= target:
+            result = i
+        else:
+            break
+    return result
 
 
 def _render_watchlist_sparkline(
@@ -224,9 +227,10 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
                       entry_price: float | None = None, sl_price: float | None = None,
                       sell_min_price: float | None = None,
                       trail_price: float | None = None,
-                      peak_close: float | None = None,
+                      trail_stop_price: float | None = None,
                       buy_markers: list | None = None,
                       sell_markers: list | None = None,
+                      phantom_markers: list | None = None,
                       width: int = 820, height: int = 320) -> str:
     if len(closes) < 2:
         return "<p class='dim'>Not enough candle data to render chart.</p>"
@@ -237,7 +241,7 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
     n = len(closes)
 
     prices = list(closes)
-    for ref in [entry_price, sl_price, sell_min_price, trail_price]:
+    for ref in [entry_price, sl_price, sell_min_price, trail_price, trail_stop_price]:
         if ref:
             prices.append(ref)
     for _, p in (buy_markers or []):
@@ -285,22 +289,14 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
     if sl_price:
         hline(sl_price, "#f85149", "SL")
+    if trail_stop_price:
+        hline(trail_stop_price, "#d29922", "T.Stop", dash="3,3")
+    elif trail_price and (not sell_min_price or abs(trail_price - sell_min_price) > 0.5):
+        hline(trail_price, "#d29922", "Trail")
     if sell_min_price:
         hline(sell_min_price, "#58a6ff", "PTop")
-    if trail_price and (not sell_min_price or abs(trail_price - sell_min_price) > 0.5):
-        hline(trail_price, "#d29922", "Trail")
     if entry_price:
         hline(entry_price, "#3fb950", "Entry")
-        if peak_close and peak_close > entry_price:
-            y = px(peak_close)
-            parts.append(
-                f'<line x1="{pl}" x2="{width - pr}" y1="{y:.1f}" y2="{y:.1f}" '
-                f'stroke="#8b949e" stroke-dasharray="2,4" opacity="0.5" stroke-width="1"/>'
-            )
-            parts.append(
-                f'<text x="{pl - 5}" y="{y + 4:.1f}" fill="#8b949e" font-size="10" '
-                f'text-anchor="end" font-family="monospace">Peak</text>'
-            )
 
     # Entry vertical line (open position only)
     if entry_price and 0 <= entry_idx < n:
@@ -349,6 +345,15 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
                 f'text-anchor="middle" font-family="monospace">&#8377;{price:.0f}</text>'
             )
 
+    # Phantom markers — in-position threshold crossings (hollow orange circles)
+    for idx, price in (phantom_markers or []):
+        if 0 <= idx < n:
+            x, y = tx(idx), px(price)
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" '
+                f'fill="none" stroke="#d29922" stroke-width="1.2" opacity="0.75"/>'
+            )
+
     # Current price dot + label
     last_x = tx(n - 1)
     last_y = px(last)
@@ -379,7 +384,7 @@ def render_chart_page(instrument: str, store, config) -> str:
     # Open position (may not exist)
     pos_rows = _read_db(
         config.db_path,
-        "SELECT entry_price, entry_time, peak_close FROM open_positions WHERE instrument = ?",
+        "SELECT entry_price, entry_time, peak_close, trailing_active FROM open_positions WHERE instrument = ?",
         (instrument,),
     )
     pos = pos_rows[0] if pos_rows else None
@@ -392,15 +397,12 @@ def render_chart_page(instrument: str, store, config) -> str:
         (instrument,),
     )
 
-    # For open positions: show from 3 days before entry so context is visible.
-    # For closed/history view: 25 candles before the earliest order.
+    # Open position: show 3 days before entry for context.
+    # Watchlist / history view: full cached history so all trades are visible.
     if pos and pos.get("entry_time"):
         from_dt = datetime.fromisoformat(pos["entry_time"]) - timedelta(days=3)
-    elif order_rows:
-        earliest_dt = datetime.fromisoformat(order_rows[0]["placed_at"][:19])
-        from_dt = earliest_dt - timedelta(minutes=tf_minutes * 25)
     else:
-        from_dt = datetime.now() - timedelta(days=60)
+        from_dt = datetime(2000, 1, 1)
 
     candle_rows = _read_db(
         config.db_path,
@@ -428,36 +430,57 @@ def render_chart_page(instrument: str, store, config) -> str:
         idx = _find_candle_idx(fill_ts, timestamps)
         (buy_markers if o["direction"] == "BUY" else sell_markers).append((idx, o["price"]))
 
+    # In-position phantom signals (threshold crossed while already holding)
+    phantom_rows = _read_db(
+        config.db_path,
+        "SELECT price_hint, logged_at FROM signals "
+        "WHERE instrument = ? AND direction = 'BUY' AND signal_type = 'ENTRY' "
+        "  AND accepted = 0 AND reject_reason = 'already_in_position' "
+        "ORDER BY logged_at ASC",
+        (instrument,),
+    )
+    phantom_markers = []
+    for r in phantom_rows:
+        idx = _find_candle_idx(r["logged_at"], timestamps)
+        phantom_markers.append((idx, r["price_hint"]))
+
     # Open position details
     entry_price = pos["entry_price"] if pos else None
     entry_time_str = pos.get("entry_time") if pos else None
     peak_close = (pos.get("peak_close") or 0.0) if pos else 0.0
+    trailing_active = bool(pos.get("trailing_active", 0)) if pos else False
     entry_idx = 0
     if entry_time_str:
+        target_et = entry_time_str[:16]
         for i, ts in enumerate(timestamps):
-            if ts >= entry_time_str:
+            if ts[:16] <= target_et:
                 entry_idx = i
+            else:
                 break
 
-    sl_price = sell_min_price = trail_price = None
+    sl_price = sell_min_price = trail_price = trail_stop_price = None
     if entry_price:
         lr = config.strategy_config("lr_extrema") or {}
         stop_pct = float(lr.get("stop_pct", 3.0))
         profit_pct = float(lr.get("profit_pct", 3.0))
         sell_min_pct = float(lr.get("sell_min_pct", 3.0))
+        trail_pct = float(lr.get("trail_pct", 1.5))
         sl_price = round(entry_price * (1 - stop_pct / 100), 2)
         sell_min_price = round(entry_price * (1 + sell_min_pct / 100), 2)
         trail_price = round(entry_price * (1 + profit_pct / 100), 2)
+        if trailing_active and peak_close > 0:
+            trail_stop_price = round(peak_close * (1 - trail_pct / 100), 2)
 
     chart_svg = _render_chart_svg(
         closes, timestamps, entry_idx,
         entry_price=entry_price,
         sl_price=sl_price,
         sell_min_price=sell_min_price,
-        trail_price=trail_price,
-        peak_close=peak_close if peak_close > 0 else None,
+        trail_price=trail_price if not trail_stop_price else None,
+        trail_stop_price=trail_stop_price,
         buy_markers=buy_markers,
         sell_markers=sell_markers,
+        phantom_markers=phantom_markers,
         width=1100, height=480,
     )
 
@@ -472,12 +495,15 @@ def render_chart_page(instrument: str, store, config) -> str:
             f'Current &#8377;{last_close:.2f} <span class="{chg_class}">({chg_sign}{chg:.2f}%)</span>',
             f"SL &#8377;{sl_price:.2f}",
             f"PTop &#8377;{sell_min_price:.2f}",
-            f"Trail &#8377;{trail_price:.2f}",
         ]
-        if peak_close > 0:
-            meta_parts.append(f"Peak &#8377;{peak_close:.2f}")
+        if trail_stop_price:
+            meta_parts.append(f"Trail stop &#8377;{trail_stop_price:.2f} (peak &#8377;{peak_close:.2f})")
+        else:
+            meta_parts.append(f"Trail &#8377;{trail_price:.2f}")
     else:
         meta_parts.append(f"&#8377;{last_close:.2f} (last close)")
+    if phantom_markers:
+        meta_parts.append(f'<span class="orange">{len(phantom_markers)} in-pos &#9711;</span>')
     if order_rows:
         n_trades = len([o for o in order_rows if o["direction"] == "BUY"])
         meta_parts.append(f"{n_trades} trade(s)")

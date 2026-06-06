@@ -17,9 +17,12 @@ from trader.core.logger import get_logger
 from trader.costs import round_trip_cost
 from trader.data.historical import get_candles
 from trader.data.store import Store
+from trader.notifications import telegram as _telegram
 from trader.orders.manager import OrderManager
 from trader.risk.manager import RiskManager
 from trader.strategies.lr_extrema import LRExtremaStrategy
+
+_telegram.disable()  # backtest engine never sends live notifications
 
 logger = get_logger(__name__)
 
@@ -54,6 +57,7 @@ def run_backtest(
     to_dt: datetime,
     pre_warmup_days: int | None = None,
     progress_callback=None,
+    per_symbol_params: dict[str, dict] | None = None,
 ) -> list[dict]:
     """
     Replay historical candles through LRExtremaStrategy and return the trades list.
@@ -84,6 +88,11 @@ def run_backtest(
     # Populated after candle fetch; closure captures by reference so handle_order_update
     # sees the final map even though it is defined first.
     strategy_map: dict[str, LRExtremaStrategy] = {}
+
+    def _params_for(symbol: str) -> dict:
+        if per_symbol_params and symbol in per_symbol_params:
+            return per_symbol_params[symbol]
+        return params
 
     def handle_order_update(update: dict):
         status = update.get("status")
@@ -134,7 +143,8 @@ def run_backtest(
         # When trailing stop is configured there is no fixed profit target —
         # the exit is dynamic and managed via on_tick. Set target=0 to disable
         # the engine's intrabar target check; hard SL intrabar check is kept.
-        _trailing = "trail_pct" in params
+        _sym_params = _params_for(instrument)
+        _trailing = "trail_pct" in _sym_params
         if _trailing:
             target = 0.0
         else:
@@ -145,10 +155,10 @@ def run_backtest(
         # Guard: if signal was generated at a different price than fill (e.g. gap
         # open), SL may be stale. Rebase from fill_price using strategy's own pct.
         if fill_price > 0 and (sl_price <= 0 or sl_price >= fill_price):
-            stop_pct = params.get("stop_pct", 3.0) / 100
+            stop_pct = _sym_params.get("stop_pct", 3.0) / 100
             sl_price = round(fill_price * (1 - stop_pct), 2)
             if not _trailing:
-                profit_pct = params.get("profit_pct", 3.0) / 100
+                profit_pct = _sym_params.get("profit_pct", 3.0) / 100
                 target = round(fill_price * (1 + profit_pct), 2)
             logger.debug(
                 "SL rebased to fill price | %s | fill=%.2f sl=%.2f",
@@ -303,7 +313,7 @@ def run_backtest(
         key=lambda c: c["timestamp"],
     )
 
-    strategy_map.update({symbol: LRExtremaStrategy(symbol, params) for symbol in symbol_candles})
+    strategy_map.update({symbol: LRExtremaStrategy(symbol, _params_for(symbol)) for symbol in symbol_candles})
 
     # Replay pre-warmup candles through each strategy (no trade recording)
     _warmup_start = time.time()

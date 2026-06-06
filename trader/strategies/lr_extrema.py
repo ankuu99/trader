@@ -93,9 +93,22 @@ class LRExtremaStrategy(Strategy):
         # Feature 1: Progress gate — exit if trade hasn't shown meaningful gain after N bars.
         # Tracks _max_gain_pct (best gain since entry). If after stale_check_bars bars the
         # best gain never exceeded stale_min_gain_pct%, the thesis is dead — exit.
+        # Tier 2: a second check at stale_check_bars_2 on CURRENT gain — catches trades that
+        # showed initial promise (passed tier 1) but have since faded below breakeven.
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
         self._stale_min_gain_pct: float = float(params.get("stale_min_gain_pct", 0.5))
+        self._stale_exit_2_enabled: bool = bool(params.get("stale_exit_2_enabled", False))
+        self._stale_check_bars_2: int = int(params.get("stale_check_bars_2", 80))
+        self._stale_min_gain_pct_2: float = float(params.get("stale_min_gain_pct_2", 0.0))
+
+        # Entry filter: trend gate — block entries when the stock is in a confirmed medium-term
+        # downtrend. Computes the N-bar lookback return; if it's more negative than the floor,
+        # the entry is blocked. Distinguishes healthy short-term dips (what we want to buy)
+        # from sustained downtrends (catching a falling knife).
+        self._trend_gate_enabled: bool = bool(params.get("trend_gate_enabled", False))
+        self._trend_gate_lookback: int = int(params.get("trend_gate_lookback", 100))
+        self._trend_gate_min_return: float = float(params.get("trend_gate_min_return", -10.0))
 
         # Feature 2: Breakeven stop — once position gains breakeven_trigger_pct, move the
         # effective hard stop to entry_price * (1 + breakeven_buffer_pct/100).
@@ -164,6 +177,10 @@ class LRExtremaStrategy(Strategy):
         # each entry: {timestamp, close, p_min, p_max, type} — type is
         # ENTRY | BLOCKED | VETOED | PATTERN_TOP; populated on every threshold crossing
         self.signal_log: list[dict] = []
+
+        # Latest model scores — updated every candle once trained; exposed to UI
+        self._last_p_min: float = 0.0
+        self._last_p_max: float = 0.0
 
     @property
     def name(self) -> str:
@@ -261,6 +278,30 @@ class LRExtremaStrategy(Strategy):
                 timestamp=candle.get("timestamp"),
             )
 
+        # Stale tier 2: at stale_check_bars_2 bars, exit if CURRENT gain is still below
+        # stale_min_gain_pct_2 — catches trades that showed early promise but have since faded.
+        if (self._stale_exit_2_enabled
+                and not self.is_flat()
+                and self._entry_price is not None
+                and self._held_bars == self._stale_check_bars_2
+                and _pct_gain < self._stale_min_gain_pct_2):
+            logger.info(
+                "LR-Extrema EXIT (stale-2) | %s | held=%d bars, gain=%.2f%% < %.2f%% | entry=%.2f close=%.2f | candle=%s",
+                self.instrument, self._held_bars, _pct_gain, self._stale_min_gain_pct_2,
+                self._entry_price, close, candle.get("timestamp"),
+            )
+            self._reset_position_state()
+            self._candles_since_train += 1
+            return Signal(
+                instrument=self.instrument,
+                direction=Direction.BUY,
+                signal_type=SignalType.EXIT,
+                price_hint=close,
+                strategy=self.name,
+                exit_reason="STALE",
+                timestamp=candle.get("timestamp"),
+            )
+
         # --- Feature 3: Momentum decay exit (on-candle) ---
         # If model's P(local-min) drops below momentum_exit_p_min_floor while the position
         # is flat/slightly positive (below sell_min_pct), the bottom thesis has failed — exit.
@@ -305,6 +346,8 @@ class LRExtremaStrategy(Strategy):
                 x_scaled = self._scaler.transform(x.reshape(1, -1))
                 classes = list(self._model.classes_)
                 proba = self._model.predict_proba(x_scaled)[0]
+                self._last_p_min = proba[classes.index(0)] if 0 in classes else 0.0
+                self._last_p_max = proba[classes.index(1)] if 1 in classes else 0.0
                 if 1 in classes:
                     p_max = proba[classes.index(1)]
                     if p_max >= self._sell_threshold:
@@ -338,6 +381,8 @@ class LRExtremaStrategy(Strategy):
                 proba = self._model.predict_proba(x_scaled)[0]
                 p_min = proba[classes.index(0)] if 0 in classes else 0.0
                 p_max = proba[classes.index(1)] if 1 in classes else 1.0
+                self._last_p_min = p_min
+                self._last_p_max = p_max
                 if p_min >= self._threshold:
                     _log_entry: dict = {
                         "timestamp": candle.get("timestamp"),
@@ -356,6 +401,15 @@ class LRExtremaStrategy(Strategy):
                         blocks.append(f"norm_price={x[1]:.2f}<{self._entry_min_norm_price}")
                     if self._entry_require_prior_decline and x[5] >= 0:
                         blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
+
+                    if self._trend_gate_enabled and len(self._candles) >= self._trend_gate_lookback:
+                        candles_list = list(self._candles)
+                        close_ref = candles_list[-self._trend_gate_lookback]["close"]
+                        trend_ret = (close - close_ref) / close_ref * 100.0 if close_ref > 0 else 0.0
+                        if trend_ret < self._trend_gate_min_return:
+                            blocks.append(
+                                f"trend_ret={trend_ret:.1f}%<{self._trend_gate_min_return}% ({self._trend_gate_lookback}b)"
+                            )
 
                     if self._rsi_gate_enabled:
                         rsi_series = self._rsi_series(
@@ -425,6 +479,42 @@ class LRExtremaStrategy(Strategy):
                         target_price=None,  # trailing stop manages upside; no fixed target
                         timestamp=candle.get("timestamp"),
                     )
+
+        # In-position phantom signal — emitted when threshold crossed while already holding.
+        # No state is changed; RiskManager rejects it with "already_in_position" and
+        # main.py logs it so the chart can show where re-entries would have fired.
+        if not self.is_flat() and self._trained:
+            x = self._compute_features(self._candles)
+            if x is not None:
+                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                classes = list(self._model.classes_)
+                proba = self._model.predict_proba(x_scaled)[0]
+                _p_min = proba[classes.index(0)] if 0 in classes else 0.0
+                _p_max = proba[classes.index(1)] if 1 in classes else 0.0
+                self._last_p_min = _p_min
+                self._last_p_max = _p_max
+                if _p_min >= self._threshold and _p_max < self._veto_threshold:
+                    self._candles_since_train += 1
+                    return Signal(
+                        instrument=self.instrument,
+                        direction=Direction.BUY,
+                        signal_type=SignalType.ENTRY,
+                        price_hint=close,
+                        strategy=self.name,
+                        stop_loss_hint=round(close * (1 - self._stop_pct / 100), 2),
+                        target_price=None,
+                        timestamp=candle.get("timestamp"),
+                    )
+
+        # Always refresh model scores for UI display (covers cases above that didn't compute).
+        if self._trained:
+            x = self._compute_features(self._candles)
+            if x is not None:
+                x_scaled = self._scaler.transform(x.reshape(1, -1))
+                classes = list(self._model.classes_)
+                proba = self._model.predict_proba(x_scaled)[0]
+                self._last_p_min = proba[classes.index(0)] if 0 in classes else 0.0
+                self._last_p_max = proba[classes.index(1)] if 1 in classes else 0.0
 
         self._candles_since_train += 1
         return None
@@ -601,13 +691,15 @@ class LRExtremaStrategy(Strategy):
             if self._forward_label_enabled:
                 fwd_end = min(idx + self._forward_label_bars, len(candles) - 1)
                 if fwd_end > idx:
-                    fwd_return = (
-                        (candles[fwd_end]["close"] - candles[idx]["close"])
-                        / candles[idx]["close"] * 100.0
-                    )
+                    # Use peak return over the entire forward window, not point-in-time.
+                    # A minimum that bounced +8% then retraced is a genuine buy signal;
+                    # using close[idx+N] would incorrectly discard it.
+                    entry_close = candles[idx]["close"]
+                    fwd_peak = max(c["close"] for c in candles[idx + 1 : fwd_end + 1])
+                    fwd_return = (fwd_peak - entry_close) / entry_close * 100.0 if entry_close > 0 else 0.0
                     if fwd_return < self._forward_label_min_return_pct:
                         filtered_out += 1
-                        continue  # false bottom — didn't bounce enough
+                        continue  # false bottom — never bounced enough
             qualified_minima.append(idx)
 
         # Fallback: if the filter removed too many samples, revert to all geometric minima
