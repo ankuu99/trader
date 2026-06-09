@@ -222,11 +222,17 @@ def main():
     print(f"Running backtest for {len(valid_symbols)} symbols ({bt_from.date()} → {bt_to.date()})…",
           file=sys.stderr)
 
+    _overrides = config._data.get("per_stock_params") or {}
+    per_symbol_params = {
+        sym: config.get_strategy_params(sym, "lr_extrema")
+        for sym in valid_symbols if _overrides.get(sym, {}).get("lr_extrema")
+    } or None
+
     bt_trades = run_backtest(
         None, store, valid_symbols, sym_to_tok,
         config.strategy_config("lr_extrema"),
         bt_from, bt_to,
-        per_symbol_params=config.per_stock_params,
+        per_symbol_params=per_symbol_params,
     )
     bt_by_sym: dict[str, list] = defaultdict(list)
     for t in bt_trades:
