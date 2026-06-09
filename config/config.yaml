@@ -17,16 +17,16 @@ risk:
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
   - NSE:DCXINDIA
+  - NSE:MARICO
   - NSE:GOKEX
   - NSE:COROMANDEL
+  - NSE:SOLARINDS      # strong uptrend — LRExtrema gets 0 signals; needs a trend-following strategy
 
 
 watchlist:
   - NSE:ATHERENERG
   - NSE:CUPID
-  - NSE:DCXINDIA
   - NSE:GOKEX
-  - NSE:COROMANDEL
   - NSE:GUJALKALI
   - NSE:MARKSANS       # +₹18.3k, 107t — pharma
   - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
@@ -35,13 +35,9 @@ watchlist:
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
   - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
   - NSE:RADICO         # +₹5.2k, 15t — spirits
-  - NSE:RVNL           # +₹4.4k, 22t — rail infra
   - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
-  - NSE:SOLARINDS      # +₹3.3k, 13t — explosives / defence
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
   - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
-  - NSE:MFSL           # +₹3.1k, 14t — insurance
-  - NSE:MARICO         # +₹2.9k, 14t — FMCG
   - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
   - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
@@ -151,9 +147,27 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 2.0
-  NSE:DCXINDIA:
+  NSE:M&MFIN:
     lr_extrema:
-      threshold: 0.95
+      threshold: 0.90
+      forward_label:
+        enabled: true
+        min_return_pct: 2.5
+  NSE:INDUSTOWER:
+    lr_extrema:
+      threshold: 0.88
+      forward_label:
+        enabled: true
+        min_return_pct: 1.0
+  NSE:RADICO:
+    lr_extrema:
+      threshold: 0.88
+  NSE:TVSMOTOR:
+    lr_extrema:
+      threshold: 0.88
+  NSE:ASHOKLEY:
+    lr_extrema:
+      threshold: 0.92
       forward_label:
         enabled: true
         min_return_pct: 2.0
@@ -175,24 +189,12 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 3.0
-  NSE:MFSL:
-    lr_extrema:
-      threshold: 0.90
-      forward_label:
-        enabled: true
-        min_return_pct: 2.5
   NSE:RECLTD:
     lr_extrema:
       threshold: 0.95
       forward_label:
         enabled: true
         min_return_pct: 1.0
-  NSE:RVNL:
-    lr_extrema:
-      threshold: 0.90
-      forward_label:
-        enabled: true
-        min_return_pct: 1.5
   NSE:INDHOTEL:
     lr_extrema:
       forward_label:
