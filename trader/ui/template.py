@@ -712,7 +712,12 @@ def render_page(bot_state, risk, store, config) -> str:
                 trailing_badge = f" {_badge(trail_label, 'orange')}"
             else:
                 trailing_badge = ""
-            low_str = f"&#8377; {low:.2f}" if low > 0 else "<span class='dim'>—</span>"
+            peak_pct = (peak - p["entry_price"]) / p["entry_price"] * 100 if peak > 0 and p["entry_price"] else 0.0
+            low_pct = (low - p["entry_price"]) / p["entry_price"] * 100 if low > 0 and p["entry_price"] else 0.0
+            low_str = (
+                f"&#8377; {low:.2f} <span class='red' style='font-size:11px'>({low_pct:+.2f}%)</span>"
+                if low > 0 else "<span class='dim'>—</span>"
+            )
             sl_price = p["entry_price"] * (1 - _stop_pct / 100)
             trail_trigger = peak * (1 - _trail_pct / 100) if trailing and peak > 0 else None
             # Trail distance: how far current price is above trigger (cushion before stop fires)
@@ -759,7 +764,8 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
                 f"<td>&#8377; {cur:.2f} <span class='{pct_class}'>({pct_sign}{pct:.2f}%)</span></td>"
                 f"<td class='{pct_class}'>&#8377; {upnl_sign}{upnl:,.2f}</td>"
-                f"<td class='green' style='font-size:12px'>&#8377; {peak:.2f}</td>"
+                f"<td class='green' style='font-size:12px'>&#8377; {peak:.2f}"
+                f"<br><span style='font-size:11px'>({peak_pct:+.2f}%)</span></td>"
                 f"<td class='red' style='font-size:12px'>{low_str}</td>"
                 f"<td>{stop_cell}</td>"
                 f"<td>{hold_cell}</td>"
