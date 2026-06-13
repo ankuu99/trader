@@ -286,7 +286,34 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         print(f"    {sym_short:<16} {total_t:>3}t  {bar}  {pnl_str}")
 
     print(f"  {'='*W}\n")
+    _print_utilisation_table(trades, config.total_capital)
     _print_capital_chart(trades, config.total_capital)
+
+
+def _print_utilisation_table(trades: list[dict], total_capital: float):
+    """Monthly capital-utilisation and open-position table — tells you whether
+    capital/position caps are under-used (room to raise max_capital_per_stock_pct)."""
+    from trader.backtest.engine import compute_utilisation
+    u = compute_utilisation(trades, total_capital)
+    rows = u["monthly"]
+    if not rows:
+        return
+    o = u["overall"]
+    max_pos = config.max_open_positions
+    pct_cap = config._data.get("risk", {}).get("max_capital_per_stock_pct", "?")
+    print(f"  Capital Utilisation & Open Positions  (capital ₹{total_capital:,.0f} · "
+          f"max_capital_per_stock {pct_cap}% · max_open_positions {max_pos})")
+    print(f"  {'month':<8} {'entries':>7} {'avgDep':>11} {'peakDep':>11} {'avgUtil':>8} {'peakUtil':>9} {'avgPos':>7} {'peakPos':>8}")
+    print(f"  {'-'*8} {'-'*7} {'-'*11} {'-'*11} {'-'*8} {'-'*9} {'-'*7} {'-'*8}")
+    for r in rows:
+        print(f"  {r['month']:<8} {r['entries']:>7} {r['avg_deployed']:>11,.0f} "
+              f"{r['peak_deployed']:>11,.0f} {r['avg_util_pct']:>7.1f}% {r['peak_util_pct']:>8.1f}% "
+              f"{r['avg_positions']:>7.1f} {r['peak_positions']:>8d}")
+    print(f"  {'─'*72}")
+    print(f"  OVERALL  time-avg util {o['time_avg_util_pct']:.1f}%  ·  peak util {o['peak_util_pct']:.1f}%  ·  "
+          f"peak deployed ₹{o['peak_deployed']:,.0f}  ·  avg pos {o['avg_positions']:.1f}  ·  "
+          f"peak pos {o['peak_positions']}/{max_pos}")
+    print()
 
 
 def _build_step_series(trades: list[dict], value_fn, count_fn=None):

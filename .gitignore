@@ -27,3 +27,5 @@ venv/
 *.txt
 
 backtest*.log
+# Keep committed test fixtures despite the broad *.csv ignore above
+!tests/fixtures/integration/candles.csv

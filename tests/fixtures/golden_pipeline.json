@@ -1,0 +1,2590 @@
+{
+  "aggregate": {
+    "best_trade_pnl": 1231.65,
+    "entry_fills": 85,
+    "exit_fills": 84,
+    "losses": 33,
+    "peak_capital_deployed": 29951.55,
+    "rejected_cancelled": 0,
+    "signals_entry": 411,
+    "signals_exit": 84,
+    "total_candles": 1550,
+    "total_pnl": 9471.45,
+    "trades_closed": 84,
+    "wins": 51,
+    "worst_trade_pnl": -1069.95
+  },
+  "filter_block_reasons": [],
+  "signals": [
+    {
+      "price": 4220.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4219.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4222.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4225.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4224.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4228.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4226.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4229.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4229.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4251.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4245.2,
+      "type": "EXIT"
+    },
+    {
+      "price": 4227.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4228.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4251.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4248.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4242.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4240.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4237.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4238.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4234.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4228.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4219.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4217.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4218.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4208.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 4203.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4164.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4166.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4176.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4155.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4133.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4109.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4109.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 4105.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4140.75,
+      "type": "EXIT"
+    },
+    {
+      "price": 4123.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4107.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4086.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4071.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4124.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4124.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 4170.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4174.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4178.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4162.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4126.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4136.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 4124.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4115.75,
+      "type": "EXIT"
+    },
+    {
+      "price": 4097.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4020.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3994.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3994.5,
+      "type": "EXIT"
+    },
+    {
+      "price": 4035.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4034.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4026.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4008.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3996.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3984.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3944.9,
+      "type": "EXIT"
+    },
+    {
+      "price": 3930.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3849.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 3797.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3798.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3792.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3788.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3807.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3795.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3870.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3853.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3858.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3850.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3837.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3822.5,
+      "type": "EXIT"
+    },
+    {
+      "price": 3800.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3810.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3826.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3822.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3817.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3830.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 3852.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3843.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3829.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3818.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3808.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3865.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3865.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3865.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3893.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3887.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3910.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3907.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3934.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 3918.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3921.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3995.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 4042.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4046.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4004.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4031.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4037.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4064.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4081.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4105.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4105.45,
+      "type": "EXIT"
+    },
+    {
+      "price": 4113.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4109.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4110.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4116.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4119.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4111.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4186.7,
+      "type": "EXIT"
+    },
+    {
+      "price": 4178.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4209.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 4182.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4161.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4137.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4069.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4069.05,
+      "type": "EXIT"
+    },
+    {
+      "price": 4056.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4115.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 4095.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4060.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3942.15,
+      "type": "EXIT"
+    },
+    {
+      "price": 3929.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3926.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3906.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3875.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3857.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3849.3,
+      "type": "EXIT"
+    },
+    {
+      "price": 3833.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3828.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3846.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3903.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3938.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3940.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3927.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3927.35,
+      "type": "EXIT"
+    },
+    {
+      "price": 3916.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3908.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3930.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3927.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3920.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3912.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3864.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3893.5,
+      "type": "EXIT"
+    },
+    {
+      "price": 3736.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3706.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3695.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3719.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3712.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3702.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3689.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3678.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3671.4,
+      "type": "EXIT"
+    },
+    {
+      "price": 3668.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3673.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3665.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3551.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3551.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 3546.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3521.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3519.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3511.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3492.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3563.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3612.6,
+      "type": "EXIT"
+    },
+    {
+      "price": 3616.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3625.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3621.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3613.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3601.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3601.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 3603.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3682.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3677.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3685.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3677.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3695.7,
+      "type": "EXIT"
+    },
+    {
+      "price": 3697.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3774.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3755.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3769.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3779.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3755.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3911.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3931.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 3930.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3931.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3932.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3914.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4007.45,
+      "type": "EXIT"
+    },
+    {
+      "price": 3947.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3816.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3816.7,
+      "type": "EXIT"
+    },
+    {
+      "price": 3703.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3820.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3807.35,
+      "type": "EXIT"
+    },
+    {
+      "price": 3565.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3532.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3520.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3528.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3520.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3520.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3525.95,
+      "type": "EXIT"
+    },
+    {
+      "price": 3517.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3530.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3673.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3662.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3637.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3637.95,
+      "type": "EXIT"
+    },
+    {
+      "price": 3674.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3704.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3708.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3712.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3715.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3706.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3707.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3816.75,
+      "type": "EXIT"
+    },
+    {
+      "price": 3798.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3777.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3775.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3758.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3754.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3778.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3766.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3773.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3818.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3801.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3801.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3782.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3814.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3814.15,
+      "type": "EXIT"
+    },
+    {
+      "price": 3781.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3818.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 3777.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3764.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3796.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3796.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3783.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3765.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3777.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3700.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3700.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3687.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3665.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3657.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3629.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3625.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3634.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3646.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3509.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3487.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3576.3,
+      "type": "EXIT"
+    },
+    {
+      "price": 3601.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3596.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3623.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3575.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3581.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3655.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3674.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3662.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3706.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3706.1,
+      "type": "EXIT"
+    },
+    {
+      "price": 3608.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3574.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3553.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3526.45,
+      "type": "EXIT"
+    },
+    {
+      "price": 3481.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3523.75,
+      "type": "EXIT"
+    },
+    {
+      "price": 3496.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3471.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3454.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3380.5,
+      "type": "EXIT"
+    },
+    {
+      "price": 3376.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3362.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3333.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3308.45,
+      "type": "EXIT"
+    },
+    {
+      "price": 3392.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3356.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3391.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3397.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3386.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3384.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3378.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3373.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3380.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3371.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3359.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3367.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3396.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3438.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 3371.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3398.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 3360.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3304.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3315.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3311.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3333.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3339.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3327.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3333.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3331.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3332.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3314.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3316.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3312.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3299.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3295.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3278.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3265.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3246.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3279.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3251.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3235.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3185.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3164.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3164.35,
+      "type": "EXIT"
+    },
+    {
+      "price": 3174.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3156.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3150.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3132.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3121.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3112.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3100.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3100.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 3103.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3101.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3091.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3091.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3087.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3126.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3101.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3082.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3052.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3057.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3157.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3203.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3193.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3188.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3281.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3281.15,
+      "type": "EXIT"
+    },
+    {
+      "price": 3289.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3319.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3308.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3282.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3312.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3406.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3461.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3411.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3467.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3484.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3478.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3465.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3465.55,
+      "type": "EXIT"
+    },
+    {
+      "price": 3447.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3452.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3452.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3503.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3503.05,
+      "type": "EXIT"
+    },
+    {
+      "price": 3502.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3480.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3462.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3454.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3456.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3460.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3439.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3458.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3456.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3420.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3420.1,
+      "type": "EXIT"
+    },
+    {
+      "price": 3417.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3410.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3429.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3451.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3447.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 3435.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3429.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3429.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3397.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3399.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3407.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3406.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3410.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3466.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3464.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3456.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3454.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3449.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3449.95,
+      "type": "EXIT"
+    },
+    {
+      "price": 3445.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3450.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3445.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3438.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3431.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3419.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3408.7,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3397.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3460.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3447.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3437.85,
+      "type": "EXIT"
+    },
+    {
+      "price": 3440.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3423.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3435.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3551.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 3552.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3551.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3571.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3576.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3596.75,
+      "type": "EXIT"
+    },
+    {
+      "price": 3612.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3631.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3646.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3662.8,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3694.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3698.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3704.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3737.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3756.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3742.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3730.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3730.2,
+      "type": "EXIT"
+    },
+    {
+      "price": 3724.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3740.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3749.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3746.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3742.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3739.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3787.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 3767.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3745.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3714.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3745.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3743.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3770.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3785.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3777.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3839.8,
+      "type": "EXIT"
+    },
+    {
+      "price": 3816.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3910.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3901.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3901.25,
+      "type": "EXIT"
+    },
+    {
+      "price": 3887.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3889.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3884.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4028.3,
+      "type": "EXIT"
+    },
+    {
+      "price": 4045.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4094.2,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4088.95,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4100.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4143.0,
+      "type": "EXIT"
+    },
+    {
+      "price": 4103.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4082.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4052.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4028.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4012.35,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4012.35,
+      "type": "EXIT"
+    },
+    {
+      "price": 4036.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4030.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4022.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4011.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4006.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 3984.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4013.9,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4141.1,
+      "type": "EXIT"
+    },
+    {
+      "price": 4152.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4149.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4142.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4163.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4160.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4164.45,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4160.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4167.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4170.15,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4174.95,
+      "type": "EXIT"
+    },
+    {
+      "price": 4164.5,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4157.85,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4162.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4226.7,
+      "type": "EXIT"
+    },
+    {
+      "price": 4213.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4235.6,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4236.3,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4230.55,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4279.4,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4272.75,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4268.65,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4257.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4244.1,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4230.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4210.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4216.0,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4219.25,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4204.2,
+      "type": "EXIT"
+    },
+    {
+      "price": 4182.05,
+      "type": "ENTRY"
+    },
+    {
+      "price": 4180.0,
+      "type": "ENTRY"
+    }
+  ],
+  "trades": [
+    {
+      "entry_price": 4220.0,
+      "exit_price": 4245.2,
+      "instrument": "NSE:TEST",
+      "pnl": 176.4,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4226.5,
+      "exit_price": 4208.0,
+      "instrument": "NSE:TEST",
+      "pnl": -129.5,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4218.0,
+      "exit_price": 4109.85,
+      "instrument": "NSE:TEST",
+      "pnl": -757.05,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4105.45,
+      "exit_price": 4140.75,
+      "instrument": "NSE:TEST",
+      "pnl": 247.1,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4122.6,
+      "exit_price": 4124.85,
+      "instrument": "NSE:TEST",
+      "pnl": 15.75,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4170.8,
+      "exit_price": 4136.85,
+      "instrument": "NSE:TEST",
+      "pnl": -237.65,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4123.4,
+      "exit_price": 4117.1,
+      "instrument": "NSE:TEST",
+      "pnl": -44.1,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4097.4,
+      "exit_price": 3995.0,
+      "instrument": "NSE:TEST",
+      "pnl": -716.8,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4035.0,
+      "exit_price": 3943.6,
+      "instrument": "NSE:TEST",
+      "pnl": -639.8,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3931.2,
+      "exit_price": 3850.25,
+      "instrument": "NSE:TEST",
+      "pnl": -566.65,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3798.1,
+      "exit_price": 3822.55,
+      "instrument": "NSE:TEST",
+      "pnl": 171.15,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3800.0,
+      "exit_price": 3830.55,
+      "instrument": "NSE:TEST",
+      "pnl": 213.85,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3852.0,
+      "exit_price": 3865.0,
+      "instrument": "NSE:TEST",
+      "pnl": 91.0,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3866.0,
+      "exit_price": 3935.0,
+      "instrument": "NSE:TEST",
+      "pnl": 483.0,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3918.0,
+      "exit_price": 3996.0,
+      "instrument": "NSE:TEST",
+      "pnl": 546.0,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4042.3,
+      "exit_price": 4105.45,
+      "instrument": "NSE:TEST",
+      "pnl": 442.05,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4113.0,
+      "exit_price": 4186.95,
+      "instrument": "NSE:TEST",
+      "pnl": 517.65,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4178.65,
+      "exit_price": 4209.05,
+      "instrument": "NSE:TEST",
+      "pnl": 212.8,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4182.6,
+      "exit_price": 4069.9,
+      "instrument": "NSE:TEST",
+      "pnl": -788.9,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4056.5,
+      "exit_price": 4115.55,
+      "instrument": "NSE:TEST",
+      "pnl": 413.35,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4095.8,
+      "exit_price": 3942.95,
+      "instrument": "NSE:TEST",
+      "pnl": -1069.95,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3931.05,
+      "exit_price": 3849.3,
+      "instrument": "NSE:TEST",
+      "pnl": -572.25,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3833.05,
+      "exit_price": 3927.05,
+      "instrument": "NSE:TEST",
+      "pnl": 658.0,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3916.0,
+      "exit_price": 3893.5,
+      "instrument": "NSE:TEST",
+      "pnl": -157.5,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3737.85,
+      "exit_price": 3671.4,
+      "instrument": "NSE:TEST",
+      "pnl": -531.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3668.5,
+      "exit_price": 3551.4,
+      "instrument": "NSE:TEST",
+      "pnl": -936.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3544.7,
+      "exit_price": 3612.6,
+      "instrument": "NSE:TEST",
+      "pnl": 543.2,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3616.6,
+      "exit_price": 3601.25,
+      "instrument": "NSE:TEST",
+      "pnl": -122.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3603.7,
+      "exit_price": 3695.7,
+      "instrument": "NSE:TEST",
+      "pnl": 736.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3697.4,
+      "exit_price": 3779.45,
+      "instrument": "NSE:TEST",
+      "pnl": 656.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3755.6,
+      "exit_price": 3931.55,
+      "instrument": "NSE:TEST",
+      "pnl": 1231.65,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3930.95,
+      "exit_price": 4007.45,
+      "instrument": "NSE:TEST",
+      "pnl": 535.5,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3941.5,
+      "exit_price": 3818.4,
+      "instrument": "NSE:TEST",
+      "pnl": -861.7,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3706.0,
+      "exit_price": 3807.35,
+      "instrument": "NSE:TEST",
+      "pnl": 810.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3566.15,
+      "exit_price": 3526.2,
+      "instrument": "NSE:TEST",
+      "pnl": -319.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3517.2,
+      "exit_price": 3638.25,
+      "instrument": "NSE:TEST",
+      "pnl": 968.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3674.4,
+      "exit_price": 3818.1,
+      "instrument": "NSE:TEST",
+      "pnl": 1149.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3798.45,
+      "exit_price": 3778.7,
+      "instrument": "NSE:TEST",
+      "pnl": -138.25,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3766.5,
+      "exit_price": 3801.0,
+      "instrument": "NSE:TEST",
+      "pnl": 241.5,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3782.0,
+      "exit_price": 3812.55,
+      "instrument": "NSE:TEST",
+      "pnl": 213.85,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3781.75,
+      "exit_price": 3818.0,
+      "instrument": "NSE:TEST",
+      "pnl": 253.75,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3777.0,
+      "exit_price": 3797.75,
+      "instrument": "NSE:TEST",
+      "pnl": 145.25,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3783.9,
+      "exit_price": 3700.85,
+      "instrument": "NSE:TEST",
+      "pnl": -581.35,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3687.7,
+      "exit_price": 3646.95,
+      "instrument": "NSE:TEST",
+      "pnl": -326.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3510.0,
+      "exit_price": 3576.05,
+      "instrument": "NSE:TEST",
+      "pnl": 528.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3601.5,
+      "exit_price": 3657.95,
+      "instrument": "NSE:TEST",
+      "pnl": 451.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3674.9,
+      "exit_price": 3706.1,
+      "instrument": "NSE:TEST",
+      "pnl": 249.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3608.95,
+      "exit_price": 3526.35,
+      "instrument": "NSE:TEST",
+      "pnl": -660.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3480.0,
+      "exit_price": 3525.25,
+      "instrument": "NSE:TEST",
+      "pnl": 362.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3496.05,
+      "exit_price": 3379.0,
+      "instrument": "NSE:TEST",
+      "pnl": -936.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3376.2,
+      "exit_price": 3308.45,
+      "instrument": "NSE:TEST",
+      "pnl": -542.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3394.0,
+      "exit_price": 3366.15,
+      "instrument": "NSE:TEST",
+      "pnl": -222.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3396.05,
+      "exit_price": 3438.4,
+      "instrument": "NSE:TEST",
+      "pnl": 338.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3371.3,
+      "exit_price": 3398.0,
+      "instrument": "NSE:TEST",
+      "pnl": 213.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3350.0,
+      "exit_price": 3339.2,
+      "instrument": "NSE:TEST",
+      "pnl": -86.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3327.95,
+      "exit_price": 3316.85,
+      "instrument": "NSE:TEST",
+      "pnl": -99.9,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3312.65,
+      "exit_price": 3279.85,
+      "instrument": "NSE:TEST",
+      "pnl": -295.2,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3250.35,
+      "exit_price": 3164.3,
+      "instrument": "NSE:TEST",
+      "pnl": -774.45,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3174.1,
+      "exit_price": 3100.8,
+      "instrument": "NSE:TEST",
+      "pnl": -659.7,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3102.75,
+      "exit_price": 3126.0,
+      "instrument": "NSE:TEST",
+      "pnl": 209.25,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3101.95,
+      "exit_price": 3202.6,
+      "instrument": "NSE:TEST",
+      "pnl": 905.85,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3193.7,
+      "exit_price": 3281.15,
+      "instrument": "NSE:TEST",
+      "pnl": 787.05,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3289.35,
+      "exit_price": 3312.35,
+      "instrument": "NSE:TEST",
+      "pnl": 207.0,
+      "quantity": 9
+    },
+    {
+      "entry_price": 3407.95,
+      "exit_price": 3460.45,
+      "instrument": "NSE:TEST",
+      "pnl": 420.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3418.65,
+      "exit_price": 3465.55,
+      "instrument": "NSE:TEST",
+      "pnl": 375.2,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3448.6,
+      "exit_price": 3503.05,
+      "instrument": "NSE:TEST",
+      "pnl": 435.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3503.25,
+      "exit_price": 3420.0,
+      "instrument": "NSE:TEST",
+      "pnl": -666.0,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3417.1,
+      "exit_price": 3447.0,
+      "instrument": "NSE:TEST",
+      "pnl": 239.2,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3435.65,
+      "exit_price": 3399.0,
+      "instrument": "NSE:TEST",
+      "pnl": -293.2,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3407.75,
+      "exit_price": 3449.95,
+      "instrument": "NSE:TEST",
+      "pnl": 337.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3446.45,
+      "exit_price": 3439.15,
+      "instrument": "NSE:TEST",
+      "pnl": -58.4,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3440.0,
+      "exit_price": 3551.6,
+      "instrument": "NSE:TEST",
+      "pnl": 892.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3552.6,
+      "exit_price": 3596.75,
+      "instrument": "NSE:TEST",
+      "pnl": 353.2,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3612.25,
+      "exit_price": 3730.85,
+      "instrument": "NSE:TEST",
+      "pnl": 948.8,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3724.95,
+      "exit_price": 3787.9,
+      "instrument": "NSE:TEST",
+      "pnl": 503.6,
+      "quantity": 8
+    },
+    {
+      "entry_price": 3767.75,
+      "exit_price": 3839.35,
+      "instrument": "NSE:TEST",
+      "pnl": 501.2,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3816.0,
+      "exit_price": 3901.2,
+      "instrument": "NSE:TEST",
+      "pnl": 596.4,
+      "quantity": 7
+    },
+    {
+      "entry_price": 3885.65,
+      "exit_price": 4027.9,
+      "instrument": "NSE:TEST",
+      "pnl": 995.75,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4044.75,
+      "exit_price": 4200.4,
+      "instrument": "NSE:TEST",
+      "pnl": 1089.55,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4103.0,
+      "exit_price": 4013.35,
+      "instrument": "NSE:TEST",
+      "pnl": -627.55,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4036.15,
+      "exit_price": 4140.0,
+      "instrument": "NSE:TEST",
+      "pnl": 726.95,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4152.0,
+      "exit_price": 4174.95,
+      "instrument": "NSE:TEST",
+      "pnl": 160.65,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4164.5,
+      "exit_price": 4227.05,
+      "instrument": "NSE:TEST",
+      "pnl": 437.85,
+      "quantity": 7
+    },
+    {
+      "entry_price": 4214.0,
+      "exit_price": 4207.0,
+      "instrument": "NSE:TEST",
+      "pnl": -49.0,
+      "quantity": 7
+    }
+  ]
+}

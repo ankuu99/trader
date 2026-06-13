@@ -23,6 +23,100 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _set(dst: dict, key: str, src: dict, src_key: str) -> None:
+    if src_key in src:
+        dst[key] = src[src_key]
+
+
+def flatten_strategy_params(params: dict) -> dict:
+    """Resolve the human-facing nested `entry_gates:` / `exits:` config blocks into
+    the flat keys the strategy and its policies read internally. Returns a copy.
+
+    Nested config is the UX; flat keys are the internal wire format. A present
+    optional gate/exit block means *enabled* (presence = enabled). Absent blocks
+    emit nothing — the consumer applies its own (disabled) default. `features:` /
+    `model:` / `forward_label:` blocks are left nested (read directly by their
+    owners). Idempotent: flat callers (tests/calibrate) pass through unchanged.
+
+    Centralised here so every config consumer — the strategy AND the live UI
+    (trader/ui, which reads config.strategy_config) — sees the same flat keys."""
+    p = dict(params)
+
+    exits = p.get("exits")
+    if isinstance(exits, dict):
+        _set(p, "hold_bars", exits, "hold_bars")
+        _set(p, "sell_min_pct", exits, "sell_min_pct")
+
+        hard_stop = exits.get("hard_stop") or {}
+        _set(p, "stop_pct", hard_stop, "stop_pct")
+
+        trailing = exits.get("trailing") or {}
+        _set(p, "profit_pct", trailing, "profit_pct")
+        _set(p, "trail_pct", trailing, "trail_pct")
+        _set(p, "force_trailing_close_time", trailing, "force_close_time")
+        _set(p, "pattern_top_floor_enabled", trailing, "pattern_top_floor_enabled")
+
+        pattern_top = exits.get("pattern_top") or {}
+        _set(p, "sell_threshold", pattern_top, "sell_threshold")
+        _set(p, "min_hold_before_exit", pattern_top, "min_hold_before_exit")
+
+        if "stale" in exits:
+            p["stale_exit_enabled"] = True
+            st = exits["stale"] or {}
+            _set(p, "stale_check_bars", st, "check_bars")
+            _set(p, "stale_min_gain_pct", st, "min_gain_pct")
+        if "stale_2" in exits:
+            p["stale_exit_2_enabled"] = True
+            st = exits["stale_2"] or {}
+            _set(p, "stale_check_bars_2", st, "check_bars")
+            _set(p, "stale_min_gain_pct_2", st, "min_gain_pct")
+        if "momentum_decay" in exits:
+            p["momentum_exit_enabled"] = True
+            md = exits["momentum_decay"] or {}
+            _set(p, "momentum_exit_p_min_floor", md, "p_min_floor")
+            _set(p, "momentum_exit_min_bars", md, "min_bars")
+        if "breakeven" in exits:
+            p["breakeven_stop_enabled"] = True
+            be = exits["breakeven"] or {}
+            _set(p, "breakeven_trigger_pct", be, "trigger_pct")
+            _set(p, "breakeven_buffer_pct", be, "buffer_pct")
+
+    gates = p.get("entry_gates")
+    if isinstance(gates, dict):
+        volume = gates.get("volume") or {}
+        _set(p, "entry_min_volume_ratio", volume, "min_ratio")
+        norm_price = gates.get("norm_price") or {}
+        _set(p, "entry_min_norm_price", norm_price, "min")
+        if "prior_decline" in gates:
+            p["entry_require_prior_decline"] = True
+        if "trend" in gates:
+            p["trend_gate_enabled"] = True
+            tr = gates["trend"] or {}
+            _set(p, "trend_gate_lookback", tr, "lookback")
+            _set(p, "trend_gate_min_return", tr, "min_return")
+        if "rsi" in gates:
+            p["rsi_gate_enabled"] = True
+            r = gates["rsi"] or {}
+            _set(p, "rsi_period", r, "period")
+            _set(p, "rsi_gate_max", r, "max")
+        if "stoch_rsi" in gates:
+            p["stoch_rsi_gate_enabled"] = True
+            s = gates["stoch_rsi"] or {}
+            _set(p, "stoch_rsi_period", s, "period")
+            _set(p, "stoch_rsi_smooth_k", s, "smooth_k")
+            _set(p, "stoch_rsi_gate_max", s, "max")
+        if "macd" in gates:
+            p["macd_gate_enabled"] = True
+            m = gates["macd"] or {}
+            _set(p, "macd_fast", m, "fast")
+            _set(p, "macd_slow", m, "slow")
+            _set(p, "macd_signal_period", m, "signal_period")
+            _set(p, "macd_slope_ma_period", m, "slope_ma_period")
+            _set(p, "macd_slope_threshold", m, "slope_threshold")
+
+    return p
+
+
 def _load() -> "Config":
     load_dotenv(ENV_FILE)
     missing = [k for k in _REQUIRED_ENV if not os.getenv(k)]
@@ -97,19 +191,20 @@ class Config:
         return self._data.get("interested", [])
 
     def strategy_config(self, name: str) -> dict:
-        return self._data["strategies"].get(name, {})
+        return flatten_strategy_params(self._data["strategies"].get(name, {}))
 
     def get_strategy_params(self, instrument: str, strategy_name: str) -> dict:
-        """Return strategy params for instrument, deep-merging any per_stock_params overrides."""
-        base = self.strategy_config(strategy_name)
+        """Return strategy params for instrument, deep-merging any per_stock_params
+        overrides. Merge happens on the raw nested config (so nested per-stock
+        overrides combine correctly), then the result is flattened."""
+        base = self._data["strategies"].get(strategy_name, {})
         override = (
             (self._data.get("per_stock_params") or {})
             .get(instrument, {})
             .get(strategy_name, {})
         )
-        if not override:
-            return base
-        return _deep_merge(base, override)
+        merged = _deep_merge(base, override) if override else base
+        return flatten_strategy_params(merged)
 
     @property
     def max_open_positions(self) -> int:

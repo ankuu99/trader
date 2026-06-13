@@ -1,13 +1,25 @@
 """
 Walk-forward backtest — true out-of-sample validation.
 
-Each fold has a dedicated training window (pre-warmup only, no trades recorded)
-followed by a non-overlapping test window (trades recorded).  This prevents the
-rolling training buffer from "seeing" the test period and inflating metrics.
+Two modes:
+
+1. Fixed-param (default) — validates that the self-training MODEL generalises.
+   Each fold trains the model only on data before the test window, then records
+   trades on the unseen test window using the config params unchanged.
+
+2. Calibrated (--calibrate) — validates that PARAMETER SELECTION generalises.
+   This is the honest answer to the curve-fitting risk in calibrate.py/screen.py:
+   per fold we search the param grid on the TRAIN window, pick the best params,
+   then evaluate THOSE EXACT params on the unseen TEST window. The train-vs-OOS
+   gap is the overfitting tell — if calibrated train returns are great but OOS
+   collapses, the calibration was fitting noise.
 
     python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31
     python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --train 6 --test 3
     python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --cache-only
+    # calibrated walk-forward (per-stock or global param selection):
+    python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --calibrate --unit per-stock --iterations 40 --cache-only
+    python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --calibrate --unit global --mode grid --cache-only
 
 --train : training window width in months (default 6)
 --test  : test window width in months (default 3); also the slide step
@@ -33,6 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for sibling calibrate import
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
@@ -89,6 +102,47 @@ def _generate_folds(
     return folds
 
 
+def _calibrate_on_window(
+    kite, store, symbols, symbol_to_token, combos,
+    train_from, train_end, pre_warmup_days, unit, capital,
+):
+    """Search *combos* on the TRAIN window and return the best params.
+
+    Returns (per_symbol_best, train_return) where per_symbol_best maps every
+    symbol → its chosen param dict. For unit='global' all symbols share one combo
+    chosen by aggregate train return; for 'per-stock' each symbol is optimised
+    independently. train_return holds the in-sample return of the chosen params
+    (keyed 'global' or per symbol) — reported alongside OOS to expose overfitting.
+    """
+    if unit == "global":
+        best_combo, best_ret = None, None
+        for combo in combos:
+            trades = run_backtest(
+                kite, store, symbols, symbol_to_token, combo,
+                train_from, train_end, pre_warmup_days=pre_warmup_days,
+            )
+            ret = compute_metrics(trades, capital)["return_pct"]
+            if best_ret is None or ret > best_ret:
+                best_ret, best_combo = ret, combo
+        return {s: best_combo for s in symbols}, {"global": best_ret}
+
+    # per-stock
+    per_symbol_best, train_return = {}, {}
+    for sym in symbols:
+        best_combo, best_ret = None, None
+        for combo in combos:
+            trades = run_backtest(
+                kite, store, [sym], symbol_to_token, combo,
+                train_from, train_end, pre_warmup_days=pre_warmup_days,
+            )
+            ret = compute_metrics(trades, capital)["return_pct"]
+            if best_ret is None or ret > best_ret:
+                best_ret, best_combo = ret, combo
+        per_symbol_best[sym] = best_combo
+        train_return[sym] = best_ret
+    return per_symbol_best, train_return
+
+
 def main():
     parser = argparse.ArgumentParser(description="Walk-forward out-of-sample backtest")
     parser.add_argument("--from", dest="from_date", required=True,
@@ -107,6 +161,17 @@ def main():
                         help="Candle timeframe (default: from config)")
     parser.add_argument("--cache-only", action="store_true",
                         help="Skip Kite auth — use only locally cached candle data")
+    # --- Calibrated walk-forward (param selection on train, validated on OOS) ---
+    parser.add_argument("--calibrate", action="store_true",
+                        help="Calibrate params on each train window and validate on the OOS test window")
+    parser.add_argument("--unit", choices=["per-stock", "global"], default="per-stock",
+                        help="Calibrate per stock or one shared global param set (default per-stock)")
+    parser.add_argument("--mode", choices=["grid", "random"], default="random",
+                        help="Param search mode for --calibrate (default random)")
+    parser.add_argument("--iterations", type=int, default=40,
+                        help="Random-search iterations per train window (random mode; default 40)")
+    parser.add_argument("--cal-params", nargs="+", default=None, metavar="PARAM",
+                        help="Restrict calibration to these params (default: full PARAM_GRID)")
     args = parser.parse_args()
 
     if args.timeframe:
@@ -138,9 +203,20 @@ def main():
 
     params = config.strategy_config("lr_extrema")
     folds  = _generate_folds(from_dt, to_dt, args.train, args.test)
+    capital = config.total_capital
 
+    # Build the calibration combo list once (same grid reused on every train window).
+    combos = None
+    if args.calibrate:
+        from calibrate import PARAM_GRID, _build_active_grid, _all_combinations, _random_combinations
+        grid = _build_active_grid(args.cal_params, params)
+        combos = (_all_combinations(grid) if args.mode == "grid"
+                  else _random_combinations(args.iterations, grid))
+
+    mode_label = (f"CALIBRATED ({args.unit}, {args.mode}"
+                  + (f"×{len(combos)}" if combos else "") + ")") if args.calibrate else "fixed-param"
     print(
-        f"\nWalk-forward backtest | {args.from_date} → {args.to_date}"
+        f"\nWalk-forward backtest [{mode_label}] | {args.from_date} → {args.to_date}"
         f" | train={args.train}m  test={args.test}m"
     )
     print(f"Instruments : {', '.join(valid_symbols)}")
@@ -157,12 +233,24 @@ def main():
         )
         print(f"[{i}/{len(folds)}] {label} ...", end=" ", flush=True)
 
+        per_symbol_params = None
+        train_ret_mean = None
+        if args.calibrate:
+            # Calibrate on [train_from, test_start); pre-warm the train backtest with the
+            # window's own train_days of prior history (still strictly before the OOS test).
+            per_symbol_params, train_ret = _calibrate_on_window(
+                kite, store, valid_symbols, symbol_to_token, combos,
+                train_from, test_start, train_days, args.unit, capital,
+            )
+            train_ret_mean = sum(train_ret.values()) / len(train_ret)
+
         trades = run_backtest(
             kite, store, valid_symbols, symbol_to_token, params,
             test_start, test_end,
             pre_warmup_days=train_days,
+            per_symbol_params=per_symbol_params,
         )
-        m = compute_metrics(trades, config.total_capital)
+        m = compute_metrics(trades, capital)
 
         for t in trades:
             t["fold"] = i
@@ -173,9 +261,12 @@ def main():
             "train_from": train_from.strftime("%Y-%m-%d"),
             "test_start": test_start.strftime("%Y-%m-%d"),
             "test_end":   test_end.strftime("%Y-%m-%d"),
+            "train_return_pct": train_ret_mean,
             **m,
         })
 
+        if train_ret_mean is not None:
+            print(f"[train {train_ret_mean:+.2f}%] ", end="")
         print(
             f"{m['total_trades']:>3} trades | "
             f"WR {m['money_weighted_win_rate']:>5.1f}% | "
@@ -231,6 +322,14 @@ def _print_summary(results: list[dict], train: int, test: int):
     print()
     print(f"  Profitable folds   : {len(profitable)}/{len(results)}  ({consistency:.0f}% consistency)")
     print(f"  Total trades       : {total_trades}  (across all folds; test windows are non-overlapping)")
+    # Calibrated mode: expose the train→OOS degradation (the overfitting tell).
+    _train = [r["train_return_pct"] for r in results if r.get("train_return_pct") is not None]
+    if _train:
+        avg_train = sum(_train) / len(_train)
+        print(f"  Avg TRAIN return   : {avg_train:+.2f}%  (in-sample, calibrated)")
+        print(f"  Avg OOS  return    : {avg_return:+.2f}%  (out-of-sample)")
+        print(f"  Train→OOS gap      : {avg_train - avg_return:+.2f}%  "
+              f"(large positive = calibration overfitting train noise)")
     print(f"  Avg return/fold    : {avg_return:+.2f}%")
     print(f"  Avg win rate       : {avg_wr:.1f}%")
     print(f"  Avg profit factor  : {avg_pf:.2f}")

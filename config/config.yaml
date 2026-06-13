@@ -16,12 +16,7 @@ risk:
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
-  - NSE:DCXINDIA
-  - NSE:MARICO
-  - NSE:GOKEX
-  - NSE:COROMANDEL
-  - NSE:SOLARINDS      # strong uptrend — LRExtrema gets 0 signals; needs a trend-following strategy
-
+- 
 
 watchlist:
   - NSE:ATHERENERG
@@ -46,6 +41,13 @@ watchlist:
   # --- Borderline (few trades, positive — keep for live monitoring) ---
   - NSE:DIXON          # +₹236,   4t — electronics manufacturing
 
+  # --- New additions (screened Jun 2026) ---
+  - NSE:AQYLON         # +₹30.2k, 97t — calibrated
+  - NSE:RMDRIP         # +₹13.9k, 104t
+  - NSE:SKYGOLD        # +₹16.9k, 119t
+  - NSE:DIACABS        # +₹18.7k, 112t — calibrated
+  - NSE:TARAPUR        # +₹20.6k, 170t — calibrated
+
 
 
 
@@ -54,66 +56,46 @@ strategies:
     enabled: true
     warmup_bars: 300
     lookback_bars: 1200
-    threshold: 0.90
-    profit_pct: 5
-    trail_pct: 2
-    sell_min_pct: 3.0
-    sell_threshold: 0.85
-    min_hold_before_exit: 1
-    stop_pct: 20
-    hold_bars: 200
+    threshold: 0.90               # min P(local-min) to enter
+    veto_threshold: 1.0           # block entry if P(local-max) >= this
     retrain_every: 25
     extrema_order: 10
-    veto_threshold: 1.0
-    volume_ma_bars: 20
-    entry_min_volume_ratio: 0  # e.g. 1.3 — block if volume < 1.3x average
-    entry_min_norm_price: 0.0     # e.g. 0.5 — block if close in lower half of candle range
-    entry_require_prior_decline: false  # true — block if 20-bar return slope is flat/rising
-    force_trailing_close_time: "15:25"
-    # Entry trend gate — block entries when stock is in a confirmed medium-term downtrend
-    # trend_gate_min_return: N-bar lookback return must exceed this floor, else entry is blocked
-    # e.g. -10.0 means block if stock is >10% below its price N bars ago
-    trend_gate_enabled: false
-    trend_gate_lookback: 800      # bars back to measure trend return (800 bars ≈ 5 weeks at 15min)
-    trend_gate_min_return: -20.0  # % return floor; entries blocked when return < this value
 
-    # RSI gate (disabled by default)
-    rsi_gate_enabled: false
-    rsi_period: 14
-    rsi_gate_max: 30.0           # RSI must be <= this to allow entry
-    # Stochastic RSI gate (disabled by default)
-    stoch_rsi_gate_enabled: false
-    stoch_rsi_period: 14         # used for both RSI calc and stochastic lookback
-    stoch_rsi_smooth_k: 3        # K-line smoothing
-    stoch_rsi_gate_max: 20.0     # StochRSI K must be <= this (deeply oversold)
-    # MACD gate (disabled by default)
-    # Passes when: histogram < 0 AND MA(bar-to-bar histogram slope) > macd_slope_threshold
-    macd_gate_enabled: false
-    macd_fast: 12
-    macd_slow: 26
-    macd_signal_period: 9
-    macd_slope_ma_period: 3      # number of consecutive slopes to average
-    macd_slope_threshold: 0.0    # avg slope must exceed this (positive = converging toward 0)
-    # Feature 1: Progress gate — exit if trade hasn't shown meaningful gain after N bars
-    stale_exit_enabled: true
-    stale_check_bars: 20          # bars held before stale check fires
-    stale_min_gain_pct: 0.5       # best gain must have exceeded this % or we exit
-    # Stale tier 2: at stale_check_bars_2 bars, exit if current gain < stale_min_gain_pct_2
-    # Catches trades that looked alive at bar 20 but have faded back below breakeven by bar N
-    stale_exit_2_enabled: true
-    stale_check_bars_2: 100       # second stale check at this bar count
-    stale_min_gain_pct_2: -2.0    # current gain floor at tier-2 check (-2.0 = exit only if > 2% underwater)
-    # Feature 2: Breakeven stop — move hard stop to entry once trigger_pct gain reached
-    breakeven_stop_enabled: false
-    breakeven_trigger_pct: 1.0    # % gain that arms the breakeven stop
-    breakeven_buffer_pct: 0.0     # stop set to entry + this % (0 = exact breakeven)
-    # Pattern-top trailing floor: when true, exit if gain drops below sell_min_pct even if
-    # trail_pct hasn't fired yet. When false, only trail_pct from peak governs the exit.
-    pattern_top_floor_enabled: false
-    # Feature 3: Momentum decay exit — exit if model loses confidence in the bottom thesis
-    momentum_exit_enabled: false
-    momentum_exit_p_min_floor: 0.35   # P(local-min) below this triggers exit
-    momentum_exit_min_bars: 5         # min bars held before momentum exit can fire
+    # --- Exit stack (Stage 3: trader/policy/ExtremaExitPolicy) ---
+    # Optional exits (stale / stale_2 / momentum_decay / breakeven) are enabled by the
+    # *presence* of their block; omit a block to disable it.
+    exits:
+      hold_bars: 200              # candle-count time cap
+      sell_min_pct: 3.0           # shared min-gain floor (pattern-top / momentum / trailing)
+      hard_stop:
+        stop_pct: 20              # hard stop-loss % from entry (also the entry SL hint)
+      trailing:
+        profit_pct: 5             # min profit % before trailing activates
+        trail_pct: 2              # trailing distance % from peak
+        force_close_time: "15:25" # force-close trailing positions before this time (None=off)
+        pattern_top_floor_enabled: false  # if true, exit when gain drops below sell_min_pct
+      pattern_top:
+        sell_threshold: 0.85      # P(local-max) that arms pattern-top trailing
+        min_hold_before_exit: 1   # min bars held before pattern-top can fire
+      stale:                      # present = enabled (Progress gate tier 1)
+        check_bars: 20
+        min_gain_pct: 0.5         # best gain must have exceeded this % or we exit
+      stale_2:                    # present = enabled (faded after early promise)
+        check_bars: 100
+        min_gain_pct: -2.0        # current gain floor at tier-2 check
+      # momentum_decay: { p_min_floor: 0.35, min_bars: 5 }   # absent = disabled
+      # breakeven:      { trigger_pct: 1.0, buffer_pct: 0.0 } # absent = disabled
+
+    # --- Entry gates (Stage 3: trader/policy/ExtremaEntryPolicy) ---
+    # All disabled. Add a block to enable a gate (presence = enabled). Examples:
+    entry_gates: {}
+      # volume:    { min_ratio: 1.3 }                # block if volume_ratio < min_ratio
+      # norm_price:{ min: 0.5 }                      # block if close in lower half of bar
+      # prior_decline: {}                            # block if 20-bar return slope >= 0
+      # trend:     { lookback: 800, min_return: -20.0 }  # block sustained downtrends
+      # rsi:       { period: 14, max: 30.0 }
+      # stoch_rsi: { period: 14, smooth_k: 3, max: 20.0 }
+      # macd:      { fast: 12, slow: 26, signal_period: 9, slope_ma_period: 3, slope_threshold: 0.0 }
 
     # --- Fundamental model enhancements (nested, each has an enabled toggle) ---
 
@@ -127,14 +109,34 @@ strategies:
       forward_bars: 150             # bars forward to measure outcome (~5 trading days at 15min)
       min_return_pct: 1.5           # min % rise required to keep as a class-0 label
 
-    # Enhancement B: Depth-of-decline feature
-    # Adds a 7th feature to every candle: how far price has fallen from its recent high
-    # (drawdown_from_high = (close - max_close_over_lookback) / max_close_over_lookback).
-    # Deeper declines from a higher base are stronger reversal candidates.
-    # When disabled: identical 6-feature vector, identical model, identical results.
-    depth_feature:
-      enabled: true
-      lookback_bars: 50             # bars back to find the recent high
+    # --- Model config (Stage 2: trader/models) ---
+    # Swappable classifier behind the ExtremaModel interface. Only `logistic` is
+    # registered today; kNN/GBM/MLP land in Stage 4 (need pooled training first).
+    model:
+      type: logistic
+
+    # --- Feature pipeline config (Stage 1: trader/features/ExtremaFeaturePipeline) ---
+    # Base vector is always [volume_ratio, norm_price, slope3/5/10/20]; depth and macd
+    # are optional add-ons. When an add-on is disabled the vector is unchanged.
+    features:
+      volume_ma_bars: 20            # rolling window for volume_ratio normalisation
+
+      # Depth-of-decline — adds drawdown_from_high (7th feature): how far price has fallen
+      # from its recent high (close - max_close_over_lookback) / max_close_over_lookback.
+      # Deeper declines from a higher base are stronger reversal candidates.
+      depth:
+        enabled: true
+        lookback_bars: 50           # bars back to find the recent high
+
+      # MACD features — adds macd_hist_norm (histogram / price) and macd_hist_slope (linreg
+      # slope of last hist_lookback histogram values / price). Captures medium-term momentum
+      # the short-term return slopes miss (decaying-positive = top, recovering-negative = bottom).
+      macd:
+        enabled: false
+        fast: 12
+        slow: 26
+        signal_period: 9
+        hist_lookback: 3
 
 
 per_stock_params:
@@ -149,10 +151,7 @@ per_stock_params:
         min_return_pct: 2.0
   NSE:M&MFIN:
     lr_extrema:
-      threshold: 0.90
-      forward_label:
-        enabled: true
-        min_return_pct: 2.5
+      threshold: 0.92
   NSE:INDUSTOWER:
     lr_extrema:
       threshold: 0.88
@@ -161,10 +160,13 @@ per_stock_params:
         min_return_pct: 1.0
   NSE:RADICO:
     lr_extrema:
-      threshold: 0.88
+      threshold: 0.92
   NSE:TVSMOTOR:
     lr_extrema:
-      threshold: 0.88
+      threshold: 0.90
+      forward_label:
+        enabled: true
+        min_return_pct: 1.0
   NSE:ASHOKLEY:
     lr_extrema:
       threshold: 0.92
@@ -206,12 +208,32 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 1.0
+  NSE:MCX:
+    lr_extrema:
+      exits:
+        trailing:
+          profit_pct: 5
+          trail_pct: 2
+  NSE:AQYLON:
+    lr_extrema:
+      threshold: 0.95
+      forward_label:
+        enabled: true
+        min_return_pct: 2.0
+  NSE:DIACABS:
+    lr_extrema:
+      forward_label:
+        enabled: true
+        min_return_pct: 3.0
+  NSE:TARAPUR:
+    lr_extrema:
+      threshold: 0.95
 
 data:
   db_path: data/market.db
   historical_cache_days: 100
 logging:
-  level: INFO
+  level: WARNING
   dir: logs/
 ui:
   enabled: true

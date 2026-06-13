@@ -5,7 +5,6 @@ Tests the key behavioural flows — warmup guard, exit conditions, the L2
 pending-state fix, and order-update state management. Uses stub model/scaler
 so tests are deterministic and fast without requiring real training data.
 """
-import numpy as np
 import pytest
 from datetime import datetime, time
 from unittest.mock import patch, PropertyMock
@@ -19,16 +18,19 @@ from trader.strategies.base import Direction, SignalType
 # ---------------------------------------------------------------------------
 
 class _AlwaysMinModel:
-    """Always predicts class 0 (local minimum) with 99% confidence."""
-    classes_ = [0, 1]
+    """Stub ExtremaModel: always predicts P(local-min)=0.99, P(local-max)=0.01.
+    Implements the Stage 2 ExtremaModel interface (predict_proba returns a
+    (p_min, p_max) tuple; is_trained is always True)."""
 
-    def predict_proba(self, X):
-        return np.array([[0.99, 0.01]])
+    @property
+    def is_trained(self) -> bool:
+        return True
 
+    def fit(self, X, y) -> None:  # pragma: no cover - stub never trained
+        pass
 
-class _PassthroughScaler:
-    def transform(self, X):
-        return X
+    def predict_proba(self, x):
+        return 0.99, 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +65,7 @@ def _ready_strategy(*, entry_price: float | None = None) -> LRExtremaStrategy:
     If entry_price is given, put the strategy in-position (filled state).
     """
     strat = LRExtremaStrategy("NSE:TEST", _PARAMS)
-    strat._trained = True
     strat._model = _AlwaysMinModel()
-    strat._scaler = _PassthroughScaler()
     # 25 candles satisfies the >= 20 requirement for feature computation
     strat._candles = [_candle(100.0) for _ in range(25)]
     if entry_price is not None:

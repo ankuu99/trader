@@ -1,0 +1,221 @@
+//@version=5
+strategy(
+     title             = "LR Extrema Strategy",
+     shorttitle        = "LR-Extrema",
+     overlay           = true,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 10,
+     initial_capital   = 50000,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 2
+ )
+
+// ══════════════════════════════════════════════════════════════════
+//  IMPORTANT: Pine Script cannot train logistic regression at runtime.
+//  P(local-min) and P(local-max) are approximated with heuristic
+//  weights whose signs and magnitudes encode domain knowledge:
+//    • norm_price low + negative slopes  → local bottom  → high p_min
+//    • norm_price high + positive slopes → local top     → high p_max
+//  All entry/exit thresholds, features, and exit logic are faithful
+//  reproductions of lr_extrema.py.
+// ══════════════════════════════════════════════════════════════════
+
+// ── Inputs ────────────────────────────────────────────────────────
+var string G1 = "Model"
+threshold     = input.float(0.70, "Entry Threshold P(min)",        0.0, 1.0, 0.05, group=G1)
+veto_thr      = input.float(0.50, "Veto Threshold P(max)",         0.0, 1.0, 0.05, group=G1)
+sell_thr      = input.float(0.65, "Pattern-Top P(max)",            0.0, 1.0, 0.05, group=G1)
+extrema_order = input.int  (5,    "Extrema Neighbourhood",         1,   20,         group=G1)
+warmup_bars   = input.int  (200,  "Warmup Bars",                   50,              group=G1)
+vol_ma_bars   = input.int  (20,   "Volume MA Bars",                5,               group=G1)
+
+var string G2 = "Exit"
+profit_pct    = input.float(3.0,  "Trailing Profit Floor %",       0.1, step=0.5,  group=G2)
+trail_pct     = input.float(1.5,  "Trail Distance %",              0.1, step=0.1,  group=G2)
+stop_pct      = input.float(3.0,  "Hard Stop %",                   0.1, step=0.5,  group=G2)
+sell_min_pct  = input.float(2.0,  "Min Profit % for Pattern Exit", 0.0, step=0.5,  group=G2)
+hold_bars_max = input.int  (150,  "Max Hold Bars",                 10,              group=G2)
+min_hold_exit = input.int  (3,    "Min Hold Before Pattern Exit",  1,               group=G2)
+
+// ── Features ──────────────────────────────────────────────────────
+// Mirrors lr_extrema.py _compute_features():
+//   volume_ratio, norm_price, slope3, slope5, slope10, slope20
+
+vol_mean     = ta.sma(volume, vol_ma_bars)
+volume_ratio = vol_mean > 0 ? volume / vol_mean : 1.0
+
+// Normalised close position within bar (0 = at low, 1 = at high)
+norm_price = high != low ? (close - low) / (high - low) : 0.5
+
+// 1-bar % return (×100 → %-points so slope weights are readable)
+ret_pct = close[1] > 0 ? (close / close[1] - 1.0) * 100.0 : 0.0
+
+// OLS slope of series over `len` bars via ta.linreg endpoints
+slope(src, len) =>
+    len > 1 ? (ta.linreg(src, len, 0) - ta.linreg(src, len, len - 1)) / float(len - 1) : 0.0
+
+slope3  = slope(ret_pct,  3)
+slope5  = slope(ret_pct,  5)
+slope10 = slope(ret_pct, 10)
+slope20 = slope(ret_pct, 20)
+
+// ── Probability Scoring ───────────────────────────────────────────
+// sigmoid(weighted_sum) approximates the LR output in (0, 1).
+// Bias of −0.8 makes a flat, average bar score p_min ≈ 0.31.
+// A canonical bottom (low bar close, steep decline) scores ≈ 0.85.
+sigmoid(x) => 1.0 / (1.0 + math.exp(-math.max(-10.0, math.min(10.0, x))))
+
+score_min = -0.80
+          +  0.40 * volume_ratio   // above-avg volume at turning points
+          -  3.00 * norm_price     // bar closed near its low  → bottom cue
+          -  3.50 * slope3         // steep recent % decline
+          -  2.50 * slope5
+          -  1.50 * slope10
+          -  0.80 * slope20
+
+score_max = -0.80
+          +  0.40 * volume_ratio
+          +  3.00 * norm_price     // bar closed near its high → top cue
+          +  3.50 * slope3
+          +  2.50 * slope5
+          +  1.50 * slope10
+          +  0.80 * slope20
+
+p_min = sigmoid(score_min)
+p_max = sigmoid(score_max)
+
+// ── Local Extrema Overlay ─────────────────────────────────────────
+// Mirrors _find_local_extrema(): bar[extrema_order] is confirmed as
+// a local min/max if it is the lowest/highest in the (2×order+1)-bar
+// window ending now. Markers appear extrema_order bars late by design.
+local_min = ta.lowest (close, 2 * extrema_order + 1) == close[extrema_order]
+local_max = ta.highest(close, 2 * extrema_order + 1) == close[extrema_order]
+
+// ── Position State ────────────────────────────────────────────────
+var int   held_bars      = 0
+var float entry_px       = na
+var float peak_px        = na
+var bool  trail_armed    = false   // true once profit_pct floor hit or pattern-top fires
+var bool  pattern_top_tr = false   // true once a pattern-top has been detected
+
+in_pos = strategy.position_size > 0
+
+if in_pos
+    held_bars += 1
+    peak_px   := math.max(nz(peak_px, close), close)
+    if not trail_armed and close >= entry_px * (1.0 + profit_pct / 100.0)
+        trail_armed := true
+else
+    held_bars      := 0
+    entry_px       := na
+    peak_px        := na
+    trail_armed    := false
+    pattern_top_tr := false
+
+pct_gain = not na(entry_px) and entry_px > 0
+         ? (close - entry_px) / entry_px * 100.0 : 0.0
+
+// ── Entry ─────────────────────────────────────────────────────────
+in_warmup = bar_index < warmup_bars
+
+go_long = not in_warmup and not in_pos
+        and p_min >= threshold and p_max < veto_thr
+
+if go_long
+    strategy.entry("Long", strategy.long)
+    entry_px       := close
+    peak_px        := close
+    held_bars      := 0
+    trail_armed    := false
+    pattern_top_tr := false
+
+// ── Exits ─────────────────────────────────────────────────────────
+exit_comment = ""
+
+if in_pos and not na(entry_px)
+
+    // 1. Hard stop-loss (fires regardless of gain, mirrors on_tick in Python)
+    if close <= entry_px * (1.0 - stop_pct / 100.0)
+        exit_comment := "STOP"
+
+    // 2. Max-hold-bars timeout (mirrors on_candle hold_bars check)
+    if exit_comment == "" and held_bars >= hold_bars_max
+        exit_comment := "HOLD_BARS"
+
+    // 3. Pattern-top detection → arm trailing (mirrors on_candle pattern-top block)
+    if exit_comment == "" and held_bars >= min_hold_exit and pct_gain >= sell_min_pct
+        if p_max >= sell_thr and not pattern_top_tr
+            pattern_top_tr := true
+            trail_armed    := true   // arm trailing even if profit_pct not yet reached
+
+    // 4. Trailing stop (armed by profit_pct OR pattern-top)
+    //    floor_pct: sell_min_pct when pattern-top trailing, profit_pct otherwise
+    //    (mirrors pattern_top_floor_enabled=true logic in on_tick)
+    if exit_comment == "" and trail_armed and not na(peak_px)
+        trail_stop = peak_px * (1.0 - trail_pct / 100.0)
+        floor_pct  = pattern_top_tr ? sell_min_pct : profit_pct
+        if close <= trail_stop
+            exit_comment := pattern_top_tr ? "PATTERN_TOP" : "TRAILING"
+        else if pct_gain < floor_pct
+            exit_comment := "TRAIL_FLOOR"
+
+do_exit = exit_comment != ""
+if do_exit
+    strategy.close("Long", comment=exit_comment)
+
+// ── Plots ─────────────────────────────────────────────────────────
+// Confirmed local extrema (extrema_order bars late — uses lookback, not lookahead)
+plotshape(local_min, "Local Min", shape.triangleup,   location.belowbar,
+          color.new(color.green, 20), size=size.tiny)
+plotshape(local_max, "Local Max", shape.triangledown, location.abovebar,
+          color.new(color.red, 20),   size=size.tiny)
+
+// Entry and exit arrows
+plotshape(go_long, "Entry", shape.arrowup,   location.belowbar, color.lime, size=size.small)
+plotshape(do_exit, "Exit",  shape.arrowdown, location.abovebar, color.red,  size=size.small)
+
+// Position reference lines
+plot(in_pos ? entry_px : na,
+     "Entry Price", color.blue,   1, plot.style_linebr)
+plot(in_pos ? entry_px * (1.0 - stop_pct / 100.0) : na,
+     "Hard Stop",   color.red,    1, plot.style_linebr)
+plot(in_pos and trail_armed and not na(peak_px) ? peak_px * (1.0 - trail_pct / 100.0) : na,
+     "Trail Stop",  color.orange, 1, plot.style_linebr)
+
+
+// ══════════════════════════════════════════════════════════════════
+//  COMPANION INDICATOR (paste as a separate script in TradingView
+//  to see P(min) and P(max) in a pane below the chart)
+// ══════════════════════════════════════════════════════════════════
+//
+// //@version=5
+// indicator("LR Extrema Scores", overlay=false)
+// vol_ma_bars = input.int(20, "Volume MA Bars")
+// threshold   = input.float(0.70, "P(min) threshold", step=0.05)
+// veto_thr    = input.float(0.50, "P(max) veto",      step=0.05)
+// sell_thr    = input.float(0.65, "P(max) sell",       step=0.05)
+//
+// sigmoid(x) => 1.0 / (1.0 + math.exp(-math.max(-10.0, math.min(10.0, x))))
+// slope(src, len) =>
+//     len > 1 ? (ta.linreg(src, len, 0) - ta.linreg(src, len, len - 1)) / float(len - 1) : 0.0
+//
+// vol_mean     = ta.sma(volume, vol_ma_bars)
+// volume_ratio = vol_mean > 0 ? volume / vol_mean : 1.0
+// norm_price   = high != low ? (close - low) / (high - low) : 0.5
+// ret_pct      = close[1] > 0 ? (close / close[1] - 1.0) * 100.0 : 0.0
+//
+// s3  = slope(ret_pct,  3)
+// s5  = slope(ret_pct,  5)
+// s10 = slope(ret_pct, 10)
+// s20 = slope(ret_pct, 20)
+//
+// base  = -0.80 + 0.40 * volume_ratio
+// p_min = sigmoid(base - 3.00*norm_price - 3.50*s3 - 2.50*s5 - 1.50*s10 - 0.80*s20)
+// p_max = sigmoid(base + 3.00*norm_price + 3.50*s3 + 2.50*s5 + 1.50*s10 + 0.80*s20)
+//
+// hline(threshold, "Entry",  color.green,  linestyle=hline.style_dashed)
+// hline(veto_thr,  "Veto",   color.orange, linestyle=hline.style_dashed)
+// hline(sell_thr,  "Sell",   color.red,    linestyle=hline.style_dashed)
+// plot(p_min, "P(local-min)", color.green, 2)
+// plot(p_max, "P(local-max)", color.red,   2)

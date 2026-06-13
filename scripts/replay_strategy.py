@@ -27,16 +27,12 @@ from trader.strategies.lr_extrema import LRExtremaStrategy
 
 def _model_proba(strategy):
     """Compute P(local-min), P(local-max), and raw features from the trained model."""
-    if not strategy._trained:
+    if not strategy._model.is_trained:
         return 0.0, 0.0, None
-    x = strategy._compute_features(strategy._candles)
+    x = strategy._features.compute(list(strategy._candles))
     if x is None:
         return 0.0, 0.0, None
-    x_scaled = strategy._scaler.transform(x.reshape(1, -1))
-    classes = list(strategy._model.classes_)
-    proba = strategy._model.predict_proba(x_scaled)[0]
-    p_min = proba[classes.index(0)] if 0 in classes else 0.0
-    p_max = proba[classes.index(1)] if 1 in classes else 0.0
+    p_min, p_max = strategy._model.predict_proba(x)
     return p_min, p_max, x
 
 

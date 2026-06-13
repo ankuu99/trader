@@ -190,11 +190,11 @@ def _run_signal_probe(_store, instrument: str, timeframe: str, params_json: str,
         if len(strategy._candles) < strategy._warmup_bars:
             continue
 
-        if not strategy._trained or candles_since_train >= strategy._retrain_every:
+        if not strategy._model.is_trained or candles_since_train >= strategy._retrain_every:
             strategy._train()
             candles_since_train = 0
 
-        if not strategy._trained:
+        if not strategy._model.is_trained:
             continue
 
         ts = candle.get("timestamp")
@@ -212,15 +212,11 @@ def _run_signal_probe(_store, instrument: str, timeframe: str, params_json: str,
         if ts_cmp > to_dt:
             break
 
-        x = strategy._compute_features(list(strategy._candles))
+        x = strategy._features.compute(list(strategy._candles))
         if x is None:
             continue
 
-        x_scaled = strategy._scaler.transform(x.reshape(1, -1))
-        classes   = list(strategy._model.classes_)
-        proba     = strategy._model.predict_proba(x_scaled)[0]
-        p_min = proba[classes.index(0)] if 0 in classes else 0.0
-        p_max = proba[classes.index(1)] if 1 in classes else 1.0
+        p_min, p_max = strategy._model.predict_proba(x)
 
         is_min = p_min >= strategy._threshold
         is_max = p_max >= strategy._sell_threshold
@@ -301,7 +297,7 @@ with st.sidebar:
         sell_min_pct         = st.number_input("sell_min_pct",    value=float(p.get("sell_min_pct", 2.0)),   step=0.5, min_value=0.5)
         veto_threshold       = st.slider("veto_threshold",        0.30, 0.90, float(p.get("veto_threshold", 0.50)),  0.01)
         min_hold_before_exit = st.number_input("min_hold_before_exit", value=int(p.get("min_hold_before_exit", 3)), step=1, min_value=1)
-        volume_ma_bars       = st.number_input("volume_ma_bars",  value=int(p.get("volume_ma_bars", 20)),    step=5, min_value=5)
+        volume_ma_bars       = st.number_input("volume_ma_bars",  value=int((p.get("features") or {}).get("volume_ma_bars", 20)),    step=5, min_value=5)
         st.caption("Entry filters")
         entry_min_volume_ratio      = st.number_input("entry_min_volume_ratio",      value=float(p.get("entry_min_volume_ratio", 0.0)),   step=0.1,  min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
         entry_min_norm_price        = st.number_input("entry_min_norm_price",        value=float(p.get("entry_min_norm_price", 0.0)),     step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
@@ -345,7 +341,7 @@ if run_clicked:
         "sell_min_pct":                float(sell_min_pct),
         "veto_threshold":              float(veto_threshold),
         "min_hold_before_exit":        int(min_hold_before_exit),
-        "volume_ma_bars":              int(volume_ma_bars),
+        "features":                    {"volume_ma_bars": int(volume_ma_bars)},
         "entry_min_volume_ratio":      float(entry_min_volume_ratio),
         "entry_min_norm_price":        float(entry_min_norm_price),
         "entry_require_prior_decline": bool(entry_require_prior_decline),
@@ -663,7 +659,7 @@ with tab2:
             "hold_bars": int(hold_bars), "sell_threshold": float(sell_threshold),
             "sell_min_pct": float(sell_min_pct), "veto_threshold": float(veto_threshold),
             "min_hold_before_exit": int(min_hold_before_exit),
-            "volume_ma_bars": int(volume_ma_bars),
+            "features": {"volume_ma_bars": int(volume_ma_bars)},
         }
         with st.spinner("Computing model signals…"):
             _signal_log = _run_signal_probe(
