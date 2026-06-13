@@ -63,6 +63,22 @@ class RiskManager:
         self._cumulative_pnl: float = 0.0  # lifetime P&L — never resets; persisted to DB in live mode
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
+        self._paused: set[str] = set()   # instruments paused from NEW entries (exits still allowed)
+
+    # --- Per-stock pause (UI-toggled; blocks new entries, never exits) ---
+    def pause(self, instrument: str) -> None:
+        self._paused.add(instrument)
+        logger.info("Stock paused from new entries | %s", instrument)
+
+    def unpause(self, instrument: str) -> None:
+        self._paused.discard(instrument)
+        logger.info("Stock unpaused | %s", instrument)
+
+    def is_paused(self, instrument: str) -> bool:
+        return instrument in self._paused
+
+    def paused_instruments(self) -> list[str]:
+        return sorted(self._paused)
 
     @property
     def capital_available(self) -> float:
@@ -114,6 +130,13 @@ class RiskManager:
         if signal.instrument in self._pending_orders:
             logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
             self._last_reject_reason = "pending_order_exists"
+            return None
+
+        # Per-stock pause — block NEW entries only (EXIT signals returned earlier, line ~92,
+        # so an open position still closes normally).
+        if signal.instrument in self._paused:
+            logger.info("Signal rejected — stock paused | %s", signal.instrument)
+            self._last_reject_reason = "stock_paused"
             return None
 
         price = signal.price_hint

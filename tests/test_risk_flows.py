@@ -139,3 +139,52 @@ def test_exit_passes_through_when_halted():
     assert order is not None
     assert order.direction == Direction.SELL
     assert order.quantity == 10
+
+
+# ---------------------------------------------------------------------------
+# Per-stock pause — blocks new entries only, exits always allowed
+# ---------------------------------------------------------------------------
+
+def test_paused_stock_blocks_new_entry():
+    risk = RiskManager()
+    risk.pause("NSE:TEST")
+
+    order = risk.validate(_entry())
+
+    assert order is None
+    assert risk._last_reject_reason == "stock_paused"
+    assert risk.is_paused("NSE:TEST")
+    assert risk.paused_instruments() == ["NSE:TEST"]
+
+
+def test_paused_stock_still_allows_exit():
+    """A paused stock with an open position must still be able to close."""
+    risk = RiskManager()
+    risk.on_order_filled("NSE:TEST", 100.0, 10)
+    risk.pause("NSE:TEST")
+
+    order = risk.validate(_exit())
+
+    assert order is not None
+    assert order.direction == Direction.SELL
+    assert order.quantity == 10
+
+
+def test_unpause_reallows_entry():
+    risk = RiskManager()
+    risk.pause("NSE:TEST")
+    assert risk.validate(_entry()) is None
+
+    risk.unpause("NSE:TEST")
+
+    assert not risk.is_paused("NSE:TEST")
+    assert risk.validate(_entry()) is not None
+
+
+def test_pause_is_per_stock():
+    """Pausing one stock must not affect entries for another."""
+    risk = RiskManager()
+    risk.pause("NSE:AAA")
+
+    assert risk.validate(_entry("NSE:AAA")) is None
+    assert risk.validate(_entry("NSE:BBB", price=50.0, sl=49.0)) is not None

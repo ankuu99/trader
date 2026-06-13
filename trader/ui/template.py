@@ -192,6 +192,37 @@ def _render_watchlist_sparkline(
     return "".join(parts)
 
 
+def _render_equity_sparkline(values: list[float], width: int = 300, height: int = 70) -> str:
+    """Line of a cumulative-P&L series with a dashed zero baseline. Green if the
+    series ends positive, red otherwise. (Clone of _render_sparkline's polyline.)"""
+    if len(values) < 2:
+        return "<span class='dim'>—</span>"
+    lo = min(min(values), 0.0)
+    hi = max(max(values), 0.0)
+    rng = (hi - lo) or 1.0
+    pad = 4
+
+    def sx(i: int) -> float:
+        return pad + (i / (len(values) - 1)) * (width - 2 * pad)
+
+    def sy(v: float) -> float:
+        return pad + (1 - (v - lo) / rng) * (height - 2 * pad)
+
+    pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(values))
+    zero_y = max(pad, min(height - pad, sy(0.0)))
+    last = values[-1]
+    color = "#3fb950" if last >= 0 else "#f85149"
+    return (
+        f'<svg width="{width}" height="{height}" '
+        f'style="vertical-align:middle;display:inline-block">'
+        f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
+        f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5"/>'
+        f'<circle cx="{sx(len(values) - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
+        f'</svg>'
+    )
+
+
 def _render_sparkline(closes: list[float], entry_price: float,
                       width: int = 160, height: int = 45) -> str:
     if len(closes) < 2:
@@ -635,6 +666,66 @@ def render_page(bot_state, risk, store, config) -> str:
         "ORDER BY id DESC LIMIT 30",
     )
 
+    # ── capital utilisation + equity curve (reconstructed from closed BUY→SELL pairs) ──
+    from trader.backtest.engine import compute_utilisation
+
+    all_closed = _read_db(
+        config.db_path,
+        """
+        WITH buy_q AS (
+          SELECT instrument, price AS entry_price, quantity, placed_at AS entry_time,
+                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
+          FROM orders WHERE direction='BUY' AND status='COMPLETE'
+        ),
+        sell_q AS (
+          SELECT instrument, price AS exit_price, placed_at AS exit_time,
+                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
+          FROM orders WHERE direction='SELL' AND status='COMPLETE'
+        )
+        SELECT b.instrument, b.entry_price, s.exit_price, b.quantity,
+               (s.exit_price - b.entry_price) * b.quantity AS gross_pnl,
+               b.entry_time, s.exit_time
+        FROM buy_q b JOIN sell_q s ON b.instrument = s.instrument AND b.rn = s.rn
+        ORDER BY b.entry_time ASC
+        """,
+    )
+
+    def _parse_ts(ts):
+        try:
+            return datetime.fromisoformat(str(ts))
+        except Exception:
+            return None
+
+    util_trades = []
+    for t in all_closed:
+        ed, xd = _parse_ts(t["entry_time"]), _parse_ts(t["exit_time"])
+        if ed and xd:
+            util_trades.append({
+                "entry": t["entry_price"], "exit": t["exit_price"], "qty": t["quantity"],
+                "pnl": t["gross_pnl"] or 0.0, "entry_date": ed, "exit_date": xd,
+            })
+    # Currently-open positions still tie up capital → count as deployed through "now".
+    _now_naive = datetime.now()
+    for p in positions:
+        ed = _parse_ts(p["entry_time"])
+        if ed:
+            util_trades.append({
+                "entry": p["entry_price"], "exit": p["entry_price"], "qty": p["quantity"],
+                "pnl": 0.0, "entry_date": ed, "exit_date": _now_naive,
+            })
+    util = compute_utilisation(util_trades, total, bucket="day")
+
+    # Equity curve: cumulative gross P&L over closed trades, ordered by exit time.
+    _closed_sorted = sorted(
+        (t for t in all_closed if _parse_ts(t["exit_time"])),
+        key=lambda t: _parse_ts(t["exit_time"]),
+    )
+    equity_vals, _cum = [], 0.0
+    for t in _closed_sorted:
+        _cum += t["gross_pnl"] or 0.0
+        equity_vals.append(_cum)
+    equity_total = _cum
+
     # ── strategy config ───────────────────────────────────────────────────────
     lr = config.strategy_config("lr_extrema")
 
@@ -681,6 +772,48 @@ def render_page(bot_state, risk, store, config) -> str:
         </table>
         <div class="bar-bg"><div class="bar-fill {pnl_bar_danger}" style="width:{pnl_bar_w}%"></div></div>
     </div>"""
+
+    # ── capital utilisation panel (over time) ──
+    _o = util["overall"]
+    _u_rows = util["monthly"][-20:]   # last ~20 trading days
+    if _u_rows:
+        _util_body = "".join(
+            f"<tr><td class='dim'>{r['month']}</td>"
+            f"<td class='val'>{r['avg_util_pct']:.0f}%</td>"
+            f"<td class='val'>{r['peak_util_pct']:.0f}%</td>"
+            f"<td class='val'>{r['avg_positions']:.1f}</td>"
+            f"<td class='val'>{r['peak_positions']}</td></tr>"
+            for r in _u_rows
+        )
+        util_section = f"""
+    <div class="card">
+        <h2>Capital Utilisation (gross, daily)</h2>
+        <div class="dim" style="margin-bottom:6px;font-size:11px">
+            time-avg {_o['time_avg_util_pct']:.0f}% &nbsp;·&nbsp; peak {_o['peak_util_pct']:.0f}%
+            &nbsp;·&nbsp; peak deployed &#8377;{_o['peak_deployed']:,.0f}
+            &nbsp;·&nbsp; peak pos {_o['peak_positions']}/{config.max_open_positions}
+        </div>
+        <table>
+            <tr><th>day</th><th>avgUtil</th><th>peakUtil</th><th>avgPos</th><th>peakPos</th></tr>
+            {_util_body}
+        </table>
+    </div>"""
+    else:
+        util_section = ""
+
+    # ── cumulative equity curve panel ──
+    if equity_vals:
+        _eq_sign = "+" if equity_total >= 0 else ""
+        equity_section = f"""
+    <div class="card">
+        <h2>Cumulative P&amp;L (gross)</h2>
+        <div class="val {_pnl_class(equity_total)}" style="font-size:18px">
+            &#8377; {_eq_sign}{equity_total:,.0f}</div>
+        <div class="dim" style="font-size:11px;margin-bottom:6px">{len(equity_vals)} closed trades</div>
+        {_render_equity_sparkline(equity_vals)}
+    </div>"""
+    else:
+        equity_section = ""
 
     # Open positions
     _lr_cfg = config.strategy_config("lr_extrema") or {}
@@ -1002,6 +1135,8 @@ def render_page(bot_state, risk, store, config) -> str:
     _sell_threshold = float(_lr_cfg.get("sell_threshold", 0.65))
 
     ws_rows = ""
+    _open_set = {p["instrument"] for p in positions}
+    _pending_set = set(risk._pending_orders.keys())
     for sym in config.watchlist:
         ws = bot_state.warmup_status.get(sym, {})
         st = ws.get("status", "—")
@@ -1071,6 +1206,38 @@ def render_page(bot_state, risk, store, config) -> str:
             ws_closes, ws_buys, ws_sells, open_entry=open_entry_for_sym
         )
 
+        # ── per-stock decision status (priority order) ──
+        if risk.is_paused(sym):
+            status_html = _badge("PAUSED", "red")
+        elif st != "TRAINED":
+            status_html = _badge("WARMING", "orange")
+        elif sym in _open_set:
+            status_html = _badge("IN POSITION", "green")
+        elif sym in _pending_set:
+            status_html = _badge("PENDING", "orange")
+        elif scores and p_min >= _threshold and p_max >= _veto_threshold:
+            status_html = _badge("VETOED", "dim")
+        elif scores and p_min >= _threshold:
+            status_html = _badge("ENTRY-READY", "green")
+        elif scores:
+            status_html = _badge("WAITING", "dim")
+        else:
+            status_html = "<span class='dim'>—</span>"
+
+        # ── pause / resume control (form POST → /pause → redirect) ──
+        _paused = risk.is_paused(sym)
+        _act = "resume" if _paused else "pause"
+        _btn_label = "Resume" if _paused else "Pause"
+        _btn_col = "#3fb950" if _paused else "#f85149"
+        action_html = (
+            f'<form method="POST" action="/pause" style="margin:0">'
+            f'<input type="hidden" name="instrument" value="{sym}">'
+            f'<input type="hidden" name="action" value="{_act}">'
+            f'<button type="submit" style="font-size:10px;padding:2px 7px;border-radius:3px;'
+            f'border:1px solid {_btn_col};background:#21262d;color:{_btn_col};cursor:pointer">'
+            f'{_btn_label}</button></form>'
+        )
+
         ticker = sym.split(":")[-1]
         ws_rows += (
             f"<tr>"
@@ -1080,9 +1247,11 @@ def render_page(bot_state, risk, store, config) -> str:
             f"<td class='dim'>{vol_html}</td>"
             f"<td>{p_min_html}</td>"
             f"<td>{p_max_html}</td>"
+            f"<td>{status_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
             f"<td class='dim'>{candles} candles</td>"
             f"<td>{sparkline_html}</td>"
+            f"<td>{action_html}</td>"
             f"</tr>"
         )
     watchlist_section = f"""
@@ -1093,7 +1262,8 @@ def render_page(bot_state, risk, store, config) -> str:
                 <th>Volume</th>
                 <th>P(buy) <span class="dim" style="font-weight:normal">thr={int(_threshold*100)}%</span></th>
                 <th>P(sell) <span class="dim" style="font-weight:normal">veto={int(_veto_threshold*100)}%</span></th>
-                <th>Warm-up</th><th>Candles</th><th>Trend (last 80)</th></tr>
+                <th>Status</th>
+                <th>Warm-up</th><th>Candles</th><th>Trend (last 80)</th><th>Action</th></tr>
             {ws_rows}
         </table>
     </div>"""
@@ -1112,6 +1282,8 @@ def render_page(bot_state, risk, store, config) -> str:
 <div class="grid">
     {capital_card}
     {pnl_card}
+    {util_section}
+    {equity_section}
     {pos_section}
     {orders_section}
     {trades_section}

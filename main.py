@@ -89,6 +89,12 @@ def main():
     if missing:
         logger.warning("Instruments not found on NSE: %s", missing)
 
+    # Restore per-stock pause flags (UI-toggled, persisted in the state table) so a
+    # paused stock stays paused across restarts. Pause blocks new entries only.
+    for symbol in valid_watchlist:
+        if store.get_state(f"{symbol}.paused", 0.0) > 0.5:
+            risk.pause(symbol)
+
     # Build strategies
     strategies = []
     for symbol in valid_watchlist:

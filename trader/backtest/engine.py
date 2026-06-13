@@ -677,6 +677,7 @@ def compute_utilisation(
     capital: float,
     from_dt: datetime | None = None,
     to_dt: datetime | None = None,
+    bucket: str = "month",
 ) -> dict:
     """Reconstruct capital deployment and open-position count over time from a
     trades list — to judge whether capital is under-utilised (i.e. whether
@@ -733,7 +734,7 @@ def compute_utilisation(
         avail = capital + realised
         util = deployed / avail * 100 if avail > 0 else 0.0
 
-        mk = s.strftime("%Y-%m")
+        mk = s.strftime("%Y-%m-%d" if bucket == "day" else "%Y-%m")
         b = monthly.setdefault(mk, {"dep": [], "util": [], "pos": [], "entries": 0})
         b["dep"].append(deployed); b["util"].append(util); b["pos"].append(npos)
 
@@ -746,7 +747,7 @@ def compute_utilisation(
             peak_pos = npos; peak_date = s
 
     for t in dated:
-        mk = t["entry_date"].strftime("%Y-%m")
+        mk = t["entry_date"].strftime("%Y-%m-%d" if bucket == "day" else "%Y-%m")
         if mk in monthly:
             monthly[mk]["entries"] += 1
 

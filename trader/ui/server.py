@@ -9,7 +9,7 @@ Then open: http://localhost:<port>
 import logging
 import threading
 
-from flask import Flask, Response
+from flask import Flask, Response, redirect, request
 
 from trader.ui.template import render_page, render_chart_page
 
@@ -36,6 +36,20 @@ def start_dashboard(bot_state, risk, store, config) -> threading.Thread:
     def chart(symbol):
         html = render_chart_page(f"NSE:{symbol}", store, config)
         return Response(html, mimetype="text/html")
+
+    @app.route("/pause", methods=["POST"])
+    def pause():
+        # Form fields (not URL path) so symbols like "M&MFIN" / "NIFTY 50" need no encoding.
+        instrument = (request.form.get("instrument") or "").strip()
+        action = request.form.get("action")
+        if instrument:
+            if action == "pause":
+                risk.pause(instrument)
+                store.set_state(f"{instrument}.paused", 1.0)
+            elif action == "resume":
+                risk.unpause(instrument)
+                store.set_state(f"{instrument}.paused", 0.0)
+        return redirect("/", code=303)  # 303 → browser re-GETs "/" (no resubmit on refresh)
 
     @app.route("/healthz")
     def healthz():

@@ -83,6 +83,18 @@ def test_compute_utilisation_empty():
     assert u["overall"]["peak_positions"] == 0
 
 
+def test_compute_utilisation_daily_bucket():
+    """bucket='day' keys rows by YYYY-MM-DD (used by the live dashboard); overall
+    stats are identical to the monthly bucketing (same daily grid underneath)."""
+    u_day = compute_utilisation(_TRADES, _CAPITAL, bucket="day")
+    u_mon = compute_utilisation(_TRADES, _CAPITAL, bucket="month")
+    keys = [r["month"] for r in u_day["monthly"]]
+    assert all(len(k) == 10 and k.count("-") == 2 for k in keys)  # YYYY-MM-DD
+    assert "2025-01-06" in keys  # trade A entry day
+    assert len(keys) > len(u_mon["monthly"])  # more granular than monthly
+    assert u_day["overall"] == u_mon["overall"]  # bucketing doesn't change overall peaks
+
+
 # ---------------------------------------------------------------------------
 # Engine per-trade invariant on the real candle fixture
 # ---------------------------------------------------------------------------
