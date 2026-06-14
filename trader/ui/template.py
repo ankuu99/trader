@@ -137,8 +137,13 @@ def _render_watchlist_sparkline(
     width: int = 180,
     height: int = 50,
 ) -> str:
+    # Drop any NULL closes — an order/candle with a missing price would crash min/max.
+    closes = [c for c in closes if c is not None]
     if len(closes) < 2:
         return "<span class='dim'>—</span>"
+    # Markers can carry a NULL price (completed order with no recorded fill price); skip those.
+    buy_markers = [(i, p) for i, p in buy_markers if p is not None]
+    sell_markers = [(i, p) for i, p in sell_markers if p is not None]
     n = len(closes)
     pad = 4
     all_prices = list(closes)
@@ -271,13 +276,17 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
     ch = height - pt - pb
     n = len(closes)
 
-    prices = list(closes)
+    # Markers can carry a NULL price (completed order with no recorded fill price); skip those.
+    buy_markers = [(i, p) for i, p in (buy_markers or []) if p is not None]
+    sell_markers = [(i, p) for i, p in (sell_markers or []) if p is not None]
+    phantom_markers = [(i, p) for i, p in (phantom_markers or []) if p is not None]
+    prices = [c for c in closes if c is not None]
     for ref in [entry_price, sl_price, sell_min_price, trail_price, trail_stop_price]:
         if ref:
             prices.append(ref)
-    for _, p in (buy_markers or []):
+    for _, p in buy_markers:
         prices.append(p)
-    for _, p in (sell_markers or []):
+    for _, p in sell_markers:
         prices.append(p)
     lo = min(prices) * 0.997
     hi = max(prices) * 1.003
