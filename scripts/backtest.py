@@ -149,16 +149,75 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             f"{t.get('product','CNC'):<4}  {t['reason']}"
         )
 
+    # ANSI style definitions
+    _G = "\033[92m"       # bright green
+    _R = "\033[91m"       # bright red
+    _RESET = "\033[0m"    # reset color
+
     mr = m.get("monthly_returns", {})
     if mr:
-        print(f"  {'─'*W}")
-        print(f"  Monthly P&L:")
-        for month, data in mr.items():
-            bar_width = int(abs(data['pnl']) / max(abs(v['pnl']) for v in mr.values()) * 20) if mr else 0
-            sign = "+" if data['pnl'] >= 0 else "-"
-            bar = ("█" * bar_width) if data['pnl'] >= 0 else ("░" * bar_width)
-            print(f"    {month}  {sign}₹{abs(data['pnl']):>8,.0f}  ({data['return_pct']:+.2f}%)  {bar}  [{data['trades']}t]")
+        from collections import defaultdict
+        yr_stats = defaultdict(lambda: {"pnl": 0.0, "trades": 0})
+        for month_str, data in mr.items():
+            yr = month_str.split("-")[0] if "-" in month_str else "Total"
+            yr_stats[yr]["pnl"] += data["pnl"]
+            yr_stats[yr]["trades"] += data["trades"]
 
+        print(f"  {'─'*115}")
+        print(f"  {'Monthly P&L Distribution':<54} │  Yearly Breakdown")
+        print(f"  {'─'*54} ┼ {'─'*58}")
+        
+        m_keys = sorted(mr.keys())
+        y_keys = sorted(yr_stats.keys())
+        max_lines = max(len(m_keys), len(y_keys))
+        
+        max_m_pnl = max(abs(v['pnl']) for v in mr.values()) if mr else 1
+        max_y_pnl = max(abs(v['pnl']) for v in yr_stats.values()) if yr_stats else 1
+
+        for i in range(max_lines):
+            # 1. Process Monthly (Left side)
+            if i < len(m_keys):
+                m_key = m_keys[i]
+                m_data = mr[m_key]
+                m_color = _G if m_data['pnl'] >= 0 else _R
+                m_sign = "+" if m_data['pnl'] >= 0 else "-"
+                m_bar_char = "█" if m_data['pnl'] >= 0 else "░"
+                m_bar_width = int(abs(m_data['pnl']) / max_m_pnl * 15)
+                m_bar = m_bar_char * m_bar_width
+                
+                # Construct data string segment without color escape noise for proper padding width math
+                text_part = f"    {m_key}  {m_sign}₹{abs(m_data['pnl']):>8,.0f}  ({m_data['return_pct']:+.2f}%)"
+                colored_text = f"    {m_key}  {m_color}{m_sign}₹{abs(m_data['pnl']):>8,.0f}  ({m_data['return_pct']:+.2f}%){_RESET}"
+                
+                # Fill space out evenly between metric values text and visual bars
+                space_fill = " " * (35 - len(text_part))
+                bar_part = f"{m_color}{m_bar:<15}{_RESET}  [{m_data['trades']:>2}t]"
+                left_side = f"{colored_text}{space_fill}{bar_part}"
+            else:
+                left_side = f"{'':<54}"
+
+            # 2. Process Yearly (Right side)
+            if i < len(y_keys):
+                y_key = y_keys[i]
+                y_data = yr_stats[y_key]
+                y_color = _G if y_data['pnl'] >= 0 else _R
+                y_sign = "+" if y_data['pnl'] >= 0 else "-"
+                y_bar_char = "█" if y_data['pnl'] >= 0 else "░"
+                y_bar_width = int(abs(y_data['pnl']) / max_y_pnl * 12)
+                y_bar = y_bar_char * y_bar_width
+                y_ret_pct = (y_data['pnl'] / config.total_capital) * 100
+                
+                y_text_part = f"  {y_key}: {y_sign}₹{abs(y_data['pnl']):>9,.0f} ({y_ret_pct:+.2f}%)"
+                y_colored_text = f"  {y_key}: {y_color}{y_sign}₹{abs(y_data['pnl']):>9,.0f}{_RESET} ({y_color}{y_ret_pct:+.2f}%{_RESET})"
+                
+                y_space_fill = " " * (34 - len(y_text_part))
+                y_bar_part = f"{y_color}{y_bar:<12}{_RESET} [{y_data['trades']:>3}t]"
+                right_side = f" │{y_colored_text}{y_space_fill}{y_bar_part}"
+            else:
+                right_side = ""
+
+            print(f"{left_side}{right_side}")
+        print(f"  {'─'*115}")
 
     C = 28  # width of each column (excluding separator)
     col1 = [
@@ -219,8 +278,6 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         "OPEN@END": "END", "STAGNATION": "STG", "MODEL_EXIT": "MOD",
         "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC", "STALE": "STL",
     }
-    # ANSI colours
-    _R = "\033[0m"         # reset
     _REASON_COLOUR = {
         "SL":                "\033[91m",   # bright red
         "TRAILING":          "\033[93m",   # yellow
@@ -240,12 +297,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         colour = "\033[92m" if v >= 0 else "\033[91m"
         sign = "+" if v >= 0 else "-"
         amt = f"₹{abs(v)/1000:.1f}k" if abs(v) >= 1000 else f"₹{abs(v):.0f}"
-        return f"{colour}{sign}{amt}{_R}"
-
-    def _fmt_tag(reason: str, cnt: int, pnl: float) -> str:
-        abbr = _REASON_ABBREV.get(reason, reason[:3])
-        colour = _REASON_COLOUR.get(reason, "")
-        return f"{colour}{abbr}×{cnt}{_R}({_fmt_pnl(pnl)})"
+        return f"{colour}{sign}{amt}{_RESET}"
 
     per_stock: dict[str, dict] = defaultdict(lambda: defaultdict(lambda: {"count": 0, "pnl": 0.0}))
     for t in trades:
@@ -263,25 +315,23 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         filled = 0
         for i, reason in enumerate(ordered):
             cnt = reasons[reason]["count"]
-            # last segment gets remainder to avoid rounding gaps
             width = (BAR_W - filled) if i == len(ordered) - 1 else int(cnt / total * BAR_W)
             if width > 0:
                 colour = _REASON_COLOUR.get(reason, "")
-                segments.append(f"{colour}{'█' * width}{_R}")
+                segments.append(f"{colour}{'█' * width}{_RESET}")
             filled += width
         return "".join(segments)
 
     print(f"  {'─'*W}")
     print(f"  Per-stock exits:")
-    legend_parts = [f"{_REASON_COLOUR.get(r, '')}{_REASON_ABBREV.get(r, r[:3])}{'█'}{_R}" for r in _REASON_ORDER]
+    legend_parts = [f"{_REASON_COLOUR.get(r, '')}{_REASON_ABBREV.get(r, r[:3])}{'█'}{_RESET}" for r in _REASON_ORDER]
     print(f"    {'  '.join(legend_parts)}")
     print()
     for sym, reasons in sorted(per_stock.items()):
         total_t = sum(r["count"] for r in reasons.values())
         sym_short = sym.replace("NSE:", "")
-        stock_pnl = sum(r["pnl"] for r in reasons.values())
-        pnl_colour = "\033[92m" if stock_pnl >= 0 else "\033[91m"
         bar = _stacked_bar(reasons, total_t)
+        stock_pnl = sum(r["pnl"] for r in reasons.values())
         pnl_str = _fmt_pnl(stock_pnl)
         print(f"    {sym_short:<16} {total_t:>3}t  {bar}  {pnl_str}")
 

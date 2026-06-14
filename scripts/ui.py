@@ -29,7 +29,7 @@ from trader.core.config import config
 from trader.core.logger import get_logger, setup
 from trader.data.store import Store
 
-setup(log_dir=config.log_dir, level="WARNING")  # suppress engine noise in UI
+setup(log_dir=config.log_dir, level="ERROR")  # suppress engine noise in UI
 logger = get_logger(__name__)
 
 from trader.notifications import telegram
