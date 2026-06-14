@@ -667,7 +667,7 @@ def render_page(bot_state, risk, store, config) -> str:
     )
 
     # ── capital utilisation + equity curve (reconstructed from closed BUY→SELL pairs) ──
-    from trader.backtest.engine import compute_utilisation
+    from trader.analytics import compute_utilisation
 
     all_closed = _read_db(
         config.db_path,
@@ -699,7 +699,9 @@ def render_page(bot_state, risk, store, config) -> str:
     util_trades = []
     for t in all_closed:
         ed, xd = _parse_ts(t["entry_time"]), _parse_ts(t["exit_time"])
-        if ed and xd:
+        # Skip rows with a NULL fill price / qty — some completed orders carry no
+        # recorded price; None * qty would crash compute_utilisation.
+        if ed and xd and t["entry_price"] is not None and t["quantity"] is not None:
             util_trades.append({
                 "entry": t["entry_price"], "exit": t["exit_price"], "qty": t["quantity"],
                 "pnl": t["gross_pnl"] or 0.0, "entry_date": ed, "exit_date": xd,
@@ -708,7 +710,7 @@ def render_page(bot_state, risk, store, config) -> str:
     _now_naive = datetime.now()
     for p in positions:
         ed = _parse_ts(p["entry_time"])
-        if ed:
+        if ed and p["entry_price"] is not None and p["quantity"] is not None:
             util_trades.append({
                 "entry": p["entry_price"], "exit": p["entry_price"], "qty": p["quantity"],
                 "pnl": 0.0, "entry_date": ed, "exit_date": _now_naive,
