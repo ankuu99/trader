@@ -21,25 +21,25 @@ interested:
 watchlist:
   - NSE:ATHERENERG
   - NSE:CUPID
-  - NSE:GOKEX
+  # - NSE:GOKEX
   - NSE:GUJALKALI
   - NSE:MARKSANS       # +₹18.3k, 107t — pharma
   - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
 
   - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
-  - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
+  # - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
   - NSE:RADICO         # +₹5.2k, 15t — spirits
   - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
-  - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
+  # - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
   - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
   - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
   - NSE:RECLTD         # +₹1.3k, 18t — power finance
-  - NSE:MCX            # +₹390,  26t — commodity exchange
+  # - NSE:MCX            # +₹390,  26t — commodity exchange
   # --- Borderline (few trades, positive — keep for live monitoring) ---
-  - NSE:DIXON          # +₹236,   4t — electronics manufacturing
+  # - NSE:DIXON          # +₹236,   4t — electronics manufacturing
 
   # --- New additions (screened Jun 2026) ---
   - NSE:AQYLON         # +₹30.2k, 97t — calibrated
@@ -47,7 +47,6 @@ watchlist:
   - NSE:SKYGOLD        # +₹16.9k, 119t
   - NSE:DIACABS        # +₹18.7k, 112t — calibrated
   - NSE:TARAPUR        # +₹20.6k, 170t — calibrated
-
 
 
 
@@ -228,7 +227,7 @@ data:
   db_path: data/market.db
   historical_cache_days: 200
 logging:
-  level: WARNING
+  level: INFO
   dir: logs/
 ui:
   enabled: true
