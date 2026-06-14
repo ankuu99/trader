@@ -197,11 +197,6 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 1.0
-  NSE:INDHOTEL:
-    lr_extrema:
-      forward_label:
-        enabled: true
-        min_return_pct: 1.5
   NSE:MARKSANS:
     lr_extrema:
       threshold: 0.92

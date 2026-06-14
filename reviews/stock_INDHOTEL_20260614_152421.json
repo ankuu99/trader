@@ -1,0 +1,1248 @@
+{
+  "generated_at": "2026-06-14T15:24:21",
+  "symbol": "NSE:INDHOTEL",
+  "full_from": "2023-01-01",
+  "recent_from": "2025-12-16",
+  "in_watchlist": true,
+  "override": {
+    "forward_label": {
+      "enabled": true,
+      "min_return_pct": 1.5
+    }
+  },
+  "params_used": {
+    "enabled": true,
+    "warmup_bars": 300,
+    "lookback_bars": 1200,
+    "threshold": 0.9,
+    "veto_threshold": 1.0,
+    "retrain_every": 25,
+    "extrema_order": 10,
+    "exits": {
+      "hold_bars": 200,
+      "sell_min_pct": 3.0,
+      "hard_stop": {
+        "stop_pct": 20
+      },
+      "trailing": {
+        "profit_pct": 5,
+        "trail_pct": 2,
+        "force_close_time": "15:25",
+        "pattern_top_floor_enabled": false
+      },
+      "pattern_top": {
+        "sell_threshold": 0.85,
+        "min_hold_before_exit": 1
+      },
+      "stale": {
+        "check_bars": 20,
+        "min_gain_pct": 0.5
+      },
+      "stale_2": {
+        "check_bars": 100,
+        "min_gain_pct": -2.0
+      }
+    },
+    "entry_gates": {},
+    "forward_label": {
+      "enabled": true,
+      "forward_bars": 150,
+      "min_return_pct": 1.5
+    },
+    "model": {
+      "type": "logistic"
+    },
+    "features": {
+      "volume_ma_bars": 20,
+      "depth": {
+        "enabled": true,
+        "lookback_bars": 50
+      },
+      "macd": {
+        "enabled": false,
+        "fast": 12,
+        "slow": 26,
+        "signal_period": 9,
+        "hist_lookback": 3
+      }
+    },
+    "hold_bars": 200,
+    "sell_min_pct": 3.0,
+    "stop_pct": 20,
+    "profit_pct": 5,
+    "trail_pct": 2,
+    "force_trailing_close_time": "15:25",
+    "pattern_top_floor_enabled": false,
+    "sell_threshold": 0.85,
+    "min_hold_before_exit": 1,
+    "stale_exit_enabled": true,
+    "stale_check_bars": 20,
+    "stale_min_gain_pct": 0.5,
+    "stale_exit_2_enabled": true,
+    "stale_check_bars_2": 100,
+    "stale_min_gain_pct_2": -2.0
+  },
+  "full": {
+    "pnl": 5172.36,
+    "trades": 107,
+    "win_rate": 47.7,
+    "avg_win": 349.53,
+    "avg_loss": -225.96
+  },
+  "recent": {
+    "pnl": -127.99,
+    "trades": 17,
+    "win_rate": 47.1,
+    "avg_win": 219.8,
+    "avg_loss": -209.6
+  },
+  "yearly": {
+    "2023": {
+      "pnl": 2208.51,
+      "trades": 30,
+      "win_rate": 53.3,
+      "avg_win": 315.36,
+      "avg_loss": -202.66
+    },
+    "2024": {
+      "pnl": 3111.07,
+      "trades": 33,
+      "win_rate": 45.5,
+      "avg_win": 463.4,
+      "avg_loss": -213.33
+    },
+    "2025": {
+      "pnl": -28.53,
+      "trades": 27,
+      "win_rate": 44.4,
+      "avg_win": 334.07,
+      "avg_loss": -269.16
+    },
+    "2026": {
+      "pnl": -118.69,
+      "trades": 17,
+      "win_rate": 47.1,
+      "avg_win": 227.55,
+      "avg_loss": -215.45
+    }
+  },
+  "monthly_recent": {
+    "2026-01": {
+      "pnl": -697.46,
+      "trades": 2,
+      "win_rate": 0.0,
+      "avg_win": 0.0,
+      "avg_loss": -348.73
+    },
+    "2026-02": {
+      "pnl": 338.52,
+      "trades": 4,
+      "win_rate": 50.0,
+      "avg_win": 225.5,
+      "avg_loss": -56.24
+    },
+    "2026-03": {
+      "pnl": 33.82,
+      "trades": 8,
+      "win_rate": 50.0,
+      "avg_win": 229.98,
+      "avg_loss": -221.52
+    },
+    "2026-04": {
+      "pnl": 197.13,
+      "trades": 3,
+      "win_rate": 66.7,
+      "avg_win": 193.74,
+      "avg_loss": -190.36
+    }
+  },
+  "reasons": {
+    "TRAILING": {
+      "count": 39,
+      "pnl": 13840.84,
+      "avg": 354.89
+    },
+    "STRATEGY": {
+      "count": 16,
+      "pnl": 1230.89,
+      "avg": 76.93
+    },
+    "STALE": {
+      "count": 52,
+      "pnl": -9899.38,
+      "avg": -190.37
+    }
+  },
+  "trades": [
+    {
+      "entry_date": "2023-01-25",
+      "exit_date": "2023-02-01",
+      "entry": 293.3,
+      "exit": 323.6,
+      "qty": 34,
+      "pnl": 1006.94,
+      "reason": "TRAILING",
+      "held_candles": 115
+    },
+    {
+      "entry_date": "2023-02-01",
+      "exit_date": "2023-02-07",
+      "entry": 323.65,
+      "exit": 315.35,
+      "qty": 31,
+      "pnl": -279.35,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2023-03-09",
+      "exit_date": "2023-03-10",
+      "entry": 327.0,
+      "exit": 317.5,
+      "qty": 30,
+      "pnl": -306.53,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-03-13",
+      "exit_date": "2023-03-14",
+      "entry": 316.25,
+      "exit": 309.55,
+      "qty": 31,
+      "pnl": -229.3,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-03-27",
+      "exit_date": "2023-04-03",
+      "entry": 303.9,
+      "exit": 320.2,
+      "qty": 32,
+      "pnl": 499.42,
+      "reason": "TRAILING",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2023-04-28",
+      "exit_date": "2023-05-03",
+      "entry": 338.6,
+      "exit": 355.55,
+      "qty": 29,
+      "pnl": 469.19,
+      "reason": "TRAILING",
+      "held_candles": 49
+    },
+    {
+      "entry_date": "2023-05-11",
+      "exit_date": "2023-05-12",
+      "entry": 367.05,
+      "exit": 359.1,
+      "qty": 27,
+      "pnl": -236.48,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-05-12",
+      "exit_date": "2023-05-16",
+      "entry": 358.15,
+      "exit": 364.05,
+      "qty": 28,
+      "pnl": 142.72,
+      "reason": "TRAILING",
+      "held_candles": 54
+    },
+    {
+      "entry_date": "2023-05-17",
+      "exit_date": "2023-05-25",
+      "entry": 365.95,
+      "exit": 383.85,
+      "qty": 27,
+      "pnl": 460.82,
+      "reason": "TRAILING",
+      "held_candles": 137
+    },
+    {
+      "entry_date": "2023-05-29",
+      "exit_date": "2023-05-29",
+      "entry": 378.6,
+      "exit": 379.9,
+      "qty": 26,
+      "pnl": 23.32,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-05-31",
+      "exit_date": "2023-06-08",
+      "entry": 381.8,
+      "exit": 390.95,
+      "qty": 26,
+      "pnl": 215.57,
+      "reason": "TRAILING",
+      "held_candles": 138
+    },
+    {
+      "entry_date": "2023-06-08",
+      "exit_date": "2023-06-19",
+      "entry": 380.85,
+      "exit": 394.8,
+      "qty": 26,
+      "pnl": 340.29,
+      "reason": "TRAILING",
+      "held_candles": 169
+    },
+    {
+      "entry_date": "2023-06-22",
+      "exit_date": "2023-06-23",
+      "entry": 388.1,
+      "exit": 380.0,
+      "qty": 26,
+      "pnl": -232.83,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-06-23",
+      "exit_date": "2023-07-03",
+      "entry": 379.65,
+      "exit": 390.05,
+      "qty": 26,
+      "pnl": 248.16,
+      "reason": "TRAILING",
+      "held_candles": 123
+    },
+    {
+      "entry_date": "2023-07-04",
+      "exit_date": "2023-07-05",
+      "entry": 382.15,
+      "exit": 379.7,
+      "qty": 26,
+      "pnl": -85.74,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-07-05",
+      "exit_date": "2023-07-07",
+      "entry": 379.1,
+      "exit": 382.95,
+      "qty": 26,
+      "pnl": 78.07,
+      "reason": "TRAILING",
+      "held_candles": 38
+    },
+    {
+      "entry_date": "2023-07-25",
+      "exit_date": "2023-08-04",
+      "entry": 389.25,
+      "exit": 398.75,
+      "qty": 25,
+      "pnl": 215.6,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2023-08-08",
+      "exit_date": "2023-08-09",
+      "entry": 389.1,
+      "exit": 384.5,
+      "qty": 25,
+      "pnl": -136.52,
+      "reason": "STALE",
+      "held_candles": 21
+    },
+    {
+      "entry_date": "2023-08-23",
+      "exit_date": "2023-09-04",
+      "entry": 401.5,
+      "exit": 418.8,
+      "qty": 25,
+      "pnl": 409.72,
+      "reason": "TRAILING",
+      "held_candles": 198
+    },
+    {
+      "entry_date": "2023-09-12",
+      "exit_date": "2023-09-13",
+      "entry": 420.55,
+      "exit": 411.9,
+      "qty": 24,
+      "pnl": -229.84,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-09-13",
+      "exit_date": "2023-09-26",
+      "entry": 413.8,
+      "exit": 410.75,
+      "qty": 24,
+      "pnl": -95.22,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2023-10-04",
+      "exit_date": "2023-10-09",
+      "entry": 405.65,
+      "exit": 413.7,
+      "qty": 24,
+      "pnl": 171.34,
+      "reason": "TRAILING",
+      "held_candles": 66
+    },
+    {
+      "entry_date": "2023-10-09",
+      "exit_date": "2023-10-19",
+      "entry": 413.7,
+      "exit": 408.7,
+      "qty": 24,
+      "pnl": -141.97,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2023-10-20",
+      "exit_date": "2023-10-20",
+      "entry": 406.25,
+      "exit": 404.75,
+      "qty": 24,
+      "pnl": -46.34,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-10-23",
+      "exit_date": "2023-10-30",
+      "entry": 401.1,
+      "exit": 378.35,
+      "qty": 25,
+      "pnl": -590.47,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2023-10-30",
+      "exit_date": "2023-11-07",
+      "entry": 381.05,
+      "exit": 397.6,
+      "qty": 26,
+      "pnl": 407.81,
+      "reason": "TRAILING",
+      "held_candles": 104
+    },
+    {
+      "entry_date": "2023-11-29",
+      "exit_date": "2023-11-29",
+      "entry": 423.8,
+      "exit": 421.8,
+      "qty": 23,
+      "pnl": -56.33,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-11-30",
+      "exit_date": "2023-12-05",
+      "entry": 420.05,
+      "exit": 430.8,
+      "qty": 24,
+      "pnl": 235.3,
+      "reason": "TRAILING",
+      "held_candles": 86
+    },
+    {
+      "entry_date": "2023-12-13",
+      "exit_date": "2023-12-20",
+      "entry": 433.5,
+      "exit": 439.75,
+      "qty": 23,
+      "pnl": 121.42,
+      "reason": "TRAILING",
+      "held_candles": 133
+    },
+    {
+      "entry_date": "2023-12-20",
+      "exit_date": "2023-12-21",
+      "entry": 431.35,
+      "exit": 424.9,
+      "qty": 23,
+      "pnl": -170.27,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2023-12-27",
+      "exit_date": "2024-01-08",
+      "entry": 434.55,
+      "exit": 455.2,
+      "qty": 23,
+      "pnl": 452.22,
+      "reason": "TRAILING",
+      "held_candles": 158
+    },
+    {
+      "entry_date": "2024-01-16",
+      "exit_date": "2024-01-16",
+      "entry": 472.5,
+      "exit": 469.1,
+      "qty": 21,
+      "pnl": -81.9,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-01-17",
+      "exit_date": "2024-01-18",
+      "entry": 465.0,
+      "exit": 459.3,
+      "qty": 21,
+      "pnl": -141.3,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-01-18",
+      "exit_date": "2024-01-23",
+      "entry": 461.5,
+      "exit": 473.3,
+      "qty": 21,
+      "pnl": 225.98,
+      "reason": "TRAILING",
+      "held_candles": 74
+    },
+    {
+      "entry_date": "2024-01-23",
+      "exit_date": "2024-01-24",
+      "entry": 473.35,
+      "exit": 470.7,
+      "qty": 21,
+      "pnl": -77.71,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-01-24",
+      "exit_date": "2024-01-30",
+      "entry": 467.85,
+      "exit": 488.85,
+      "qty": 21,
+      "pnl": 418.68,
+      "reason": "TRAILING",
+      "held_candles": 73
+    },
+    {
+      "entry_date": "2024-01-31",
+      "exit_date": "2024-02-02",
+      "entry": 489.15,
+      "exit": 499.9,
+      "qty": 20,
+      "pnl": 193.01,
+      "reason": "TRAILING",
+      "held_candles": 60
+    },
+    {
+      "entry_date": "2024-02-02",
+      "exit_date": "2024-02-09",
+      "entry": 498.0,
+      "exit": 525.5,
+      "qty": 20,
+      "pnl": 527.27,
+      "reason": "TRAILING",
+      "held_candles": 115
+    },
+    {
+      "entry_date": "2024-02-14",
+      "exit_date": "2024-02-26",
+      "entry": 519.3,
+      "exit": 588.65,
+      "qty": 19,
+      "pnl": 1294.33,
+      "reason": "TRAILING",
+      "held_candles": 191
+    },
+    {
+      "entry_date": "2024-02-26",
+      "exit_date": "2024-03-07",
+      "entry": 577.9,
+      "exit": 588.7,
+      "qty": 17,
+      "pnl": 161.55,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-03-11",
+      "exit_date": "2024-03-12",
+      "entry": 574.2,
+      "exit": 572.55,
+      "qty": 17,
+      "pnl": -49.74,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-03-12",
+      "exit_date": "2024-03-13",
+      "entry": 569.0,
+      "exit": 561.55,
+      "qty": 17,
+      "pnl": -148.04,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-03-13",
+      "exit_date": "2024-03-19",
+      "entry": 560.4,
+      "exit": 548.4,
+      "qty": 18,
+      "pnl": -238.22,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2024-03-19",
+      "exit_date": "2024-04-02",
+      "entry": 545.4,
+      "exit": 601.65,
+      "qty": 18,
+      "pnl": 989.61,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-04-08",
+      "exit_date": "2024-04-15",
+      "entry": 594.8,
+      "exit": 598.8,
+      "qty": 17,
+      "pnl": 45.43,
+      "reason": "TRAILING",
+      "held_candles": 85
+    },
+    {
+      "entry_date": "2024-04-16",
+      "exit_date": "2024-04-25",
+      "entry": 589.6,
+      "exit": 597.65,
+      "qty": 17,
+      "pnl": 114.41,
+      "reason": "TRAILING",
+      "held_candles": 136
+    },
+    {
+      "entry_date": "2024-04-25",
+      "exit_date": "2024-04-25",
+      "entry": 587.65,
+      "exit": 577.1,
+      "qty": 17,
+      "pnl": -189.85,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-04-26",
+      "exit_date": "2024-04-26",
+      "entry": 572.95,
+      "exit": 567.15,
+      "qty": 17,
+      "pnl": -108.89,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-06-04",
+      "exit_date": "2024-06-05",
+      "entry": 555.65,
+      "exit": 525.55,
+      "qty": 18,
+      "pnl": -563.49,
+      "reason": "STALE",
+      "held_candles": 21
+    },
+    {
+      "entry_date": "2024-06-05",
+      "exit_date": "2024-06-18",
+      "entry": 570.95,
+      "exit": 622.0,
+      "qty": 17,
+      "pnl": 845.36,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-06-27",
+      "exit_date": "2024-06-28",
+      "entry": 629.65,
+      "exit": 622.8,
+      "qty": 16,
+      "pnl": -131.9,
+      "reason": "STALE",
+      "held_candles": 21
+    },
+    {
+      "entry_date": "2024-07-08",
+      "exit_date": "2024-07-19",
+      "entry": 606.95,
+      "exit": 577.1,
+      "qty": 16,
+      "pnl": -498.71,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-07-23",
+      "exit_date": "2024-07-24",
+      "entry": 609.9,
+      "exit": 623.15,
+      "qty": 16,
+      "pnl": 190.07,
+      "reason": "TRAILING",
+      "held_candles": 24
+    },
+    {
+      "entry_date": "2024-07-29",
+      "exit_date": "2024-08-08",
+      "entry": 641.85,
+      "exit": 613.4,
+      "qty": 15,
+      "pnl": -447.73,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-09-06",
+      "exit_date": "2024-09-06",
+      "entry": 664.45,
+      "exit": 657.2,
+      "qty": 15,
+      "pnl": -119.27,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-09-19",
+      "exit_date": "2024-09-27",
+      "entry": 674.6,
+      "exit": 702.95,
+      "qty": 15,
+      "pnl": 402.3,
+      "reason": "TRAILING",
+      "held_candles": 143
+    },
+    {
+      "entry_date": "2024-09-30",
+      "exit_date": "2024-10-07",
+      "entry": 691.55,
+      "exit": 670.9,
+      "qty": 14,
+      "pnl": -310.34,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2024-10-09",
+      "exit_date": "2024-10-21",
+      "entry": 695.6,
+      "exit": 689.15,
+      "qty": 14,
+      "pnl": -111.87,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2024-10-21",
+      "exit_date": "2024-10-22",
+      "entry": 681.85,
+      "exit": 663.6,
+      "qty": 15,
+      "pnl": -296.22,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-10-22",
+      "exit_date": "2024-10-23",
+      "entry": 663.15,
+      "exit": 661.55,
+      "qty": 15,
+      "pnl": -46.11,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2024-10-23",
+      "exit_date": "2024-10-28",
+      "entry": 658.0,
+      "exit": 679.25,
+      "qty": 15,
+      "pnl": 296.46,
+      "reason": "TRAILING",
+      "held_candles": 62
+    },
+    {
+      "entry_date": "2024-10-28",
+      "exit_date": "2024-11-05",
+      "entry": 673.55,
+      "exit": 656.45,
+      "qty": 15,
+      "pnl": -278.71,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2024-11-08",
+      "exit_date": "2024-11-22",
+      "entry": 731.85,
+      "exit": 794.65,
+      "qty": 13,
+      "pnl": 794.39,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-01-06",
+      "exit_date": "2025-01-07",
+      "entry": 854.8,
+      "exit": 857.55,
+      "qty": 12,
+      "pnl": 10.14,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-01-09",
+      "exit_date": "2025-01-10",
+      "entry": 824.0,
+      "exit": 811.15,
+      "qty": 12,
+      "pnl": -176.04,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-01-10",
+      "exit_date": "2025-01-22",
+      "entry": 805.35,
+      "exit": 759.75,
+      "qty": 12,
+      "pnl": -568.13,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-01-27",
+      "exit_date": "2025-01-27",
+      "entry": 765.2,
+      "exit": 760.9,
+      "qty": 13,
+      "pnl": -66.44,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-01-28",
+      "exit_date": "2025-01-30",
+      "entry": 752.75,
+      "exit": 764.85,
+      "qty": 13,
+      "pnl": 135.37,
+      "reason": "TRAILING",
+      "held_candles": 64
+    },
+    {
+      "entry_date": "2025-02-01",
+      "exit_date": "2025-02-01",
+      "entry": 751.75,
+      "exit": 778.0,
+      "qty": 13,
+      "pnl": 330.64,
+      "reason": "TRAILING",
+      "held_candles": 5
+    },
+    {
+      "entry_date": "2025-02-03",
+      "exit_date": "2025-02-13",
+      "entry": 810.65,
+      "exit": 741.75,
+      "qty": 12,
+      "pnl": -847.58,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-02-14",
+      "exit_date": "2025-02-21",
+      "entry": 708.05,
+      "exit": 761.5,
+      "qty": 14,
+      "pnl": 725.47,
+      "reason": "TRAILING",
+      "held_candles": 114
+    },
+    {
+      "entry_date": "2025-03-25",
+      "exit_date": "2025-04-01",
+      "entry": 826.95,
+      "exit": 789.0,
+      "qty": 12,
+      "pnl": -477.01,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2025-04-04",
+      "exit_date": "2025-04-04",
+      "entry": 816.15,
+      "exit": 799.45,
+      "qty": 12,
+      "pnl": -210.68,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-04-07",
+      "exit_date": "2025-04-21",
+      "entry": 744.8,
+      "exit": 827.2,
+      "qty": 13,
+      "pnl": 1048.55,
+      "reason": "TRAILING",
+      "held_candles": 191
+    },
+    {
+      "entry_date": "2025-04-25",
+      "exit_date": "2025-04-25",
+      "entry": 808.35,
+      "exit": 786.35,
+      "qty": 12,
+      "pnl": -274.14,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-05-07",
+      "exit_date": "2025-05-08",
+      "entry": 737.85,
+      "exit": 760.4,
+      "qty": 13,
+      "pnl": 271.51,
+      "reason": "TRAILING",
+      "held_candles": 43
+    },
+    {
+      "entry_date": "2025-05-09",
+      "exit_date": "2025-05-09",
+      "entry": 727.0,
+      "exit": 712.7,
+      "qty": 13,
+      "pnl": -195.83,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-07-14",
+      "exit_date": "2025-07-22",
+      "entry": 725.4,
+      "exit": 759.7,
+      "qty": 14,
+      "pnl": 457.11,
+      "reason": "TRAILING",
+      "held_candles": 135
+    },
+    {
+      "entry_date": "2025-08-05",
+      "exit_date": "2025-08-18",
+      "entry": 744.1,
+      "exit": 780.65,
+      "qty": 13,
+      "pnl": 453.14,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-08-18",
+      "exit_date": "2025-08-19",
+      "entry": 773.85,
+      "exit": 774.25,
+      "qty": 13,
+      "pnl": -17.19,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-08-21",
+      "exit_date": "2025-08-22",
+      "entry": 797.5,
+      "exit": 788.65,
+      "qty": 12,
+      "pnl": -127.38,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-08-22",
+      "exit_date": "2025-08-25",
+      "entry": 787.85,
+      "exit": 787.6,
+      "qty": 13,
+      "pnl": -26.03,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-08-26",
+      "exit_date": "2025-09-08",
+      "entry": 773.95,
+      "exit": 778.95,
+      "qty": 13,
+      "pnl": 42.55,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-09-09",
+      "exit_date": "2025-09-19",
+      "entry": 768.55,
+      "exit": 774.4,
+      "qty": 13,
+      "pnl": 53.74,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-09-19",
+      "exit_date": "2025-09-25",
+      "entry": 772.5,
+      "exit": 744.85,
+      "qty": 13,
+      "pnl": -381.42,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2025-09-25",
+      "exit_date": "2025-10-01",
+      "entry": 734.4,
+      "exit": 717.25,
+      "qty": 14,
+      "pnl": -262.73,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2025-11-06",
+      "exit_date": "2025-11-06",
+      "entry": 724.55,
+      "exit": 706.55,
+      "qty": 14,
+      "pnl": -262.62,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-11-06",
+      "exit_date": "2025-11-07",
+      "entry": 698.75,
+      "exit": 690.0,
+      "qty": 14,
+      "pnl": -144.14,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2025-11-07",
+      "exit_date": "2025-11-19",
+      "entry": 690.35,
+      "exit": 719.5,
+      "qty": 14,
+      "pnl": 386.17,
+      "reason": "STRATEGY",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2025-12-08",
+      "exit_date": "2025-12-16",
+      "entry": 717.45,
+      "exit": 725.8,
+      "qty": 14,
+      "pnl": 94.43,
+      "reason": "TRAILING",
+      "held_candles": 149
+    },
+    {
+      "entry_date": "2026-01-05",
+      "exit_date": "2026-01-09",
+      "entry": 735.5,
+      "exit": 696.65,
+      "qty": 13,
+      "pnl": -525.8,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2026-01-20",
+      "exit_date": "2026-01-20",
+      "entry": 659.6,
+      "exit": 648.85,
+      "qty": 15,
+      "pnl": -171.66,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-01-20",
+      "exit_date": "2026-02-01",
+      "entry": 645.4,
+      "exit": 657.65,
+      "qty": 15,
+      "pnl": 162.02,
+      "reason": "TRAILING",
+      "held_candles": 189
+    },
+    {
+      "entry_date": "2026-02-01",
+      "exit_date": "2026-02-06",
+      "entry": 657.65,
+      "exit": 678.4,
+      "qty": 15,
+      "pnl": 288.98,
+      "reason": "TRAILING",
+      "held_candles": 116
+    },
+    {
+      "entry_date": "2026-02-13",
+      "exit_date": "2026-02-13",
+      "entry": 707.0,
+      "exit": 702.4,
+      "qty": 14,
+      "pnl": -74.88,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-02-16",
+      "exit_date": "2026-02-16",
+      "entry": 693.5,
+      "exit": 691.55,
+      "qty": 14,
+      "pnl": -37.6,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-02-27",
+      "exit_date": "2026-03-02",
+      "entry": 666.25,
+      "exit": 647.5,
+      "qty": 15,
+      "pnl": -303.19,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-03-04",
+      "exit_date": "2026-03-10",
+      "entry": 633.2,
+      "exit": 615.7,
+      "qty": 16,
+      "pnl": -302.25,
+      "reason": "STALE",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2026-03-12",
+      "exit_date": "2026-03-13",
+      "entry": 604.55,
+      "exit": 616.6,
+      "qty": 16,
+      "pnl": 171.08,
+      "reason": "TRAILING",
+      "held_candles": 25
+    },
+    {
+      "entry_date": "2026-03-13",
+      "exit_date": "2026-03-13",
+      "entry": 613.3,
+      "exit": 614.55,
+      "qty": 16,
+      "pnl": 9.56,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-03-16",
+      "exit_date": "2026-03-19",
+      "entry": 599.85,
+      "exit": 624.05,
+      "qty": 17,
+      "pnl": 388.29,
+      "reason": "TRAILING",
+      "held_candles": 72
+    },
+    {
+      "entry_date": "2026-03-19",
+      "exit_date": "2026-03-19",
+      "entry": 621.7,
+      "exit": 615.95,
+      "qty": 16,
+      "pnl": -102.51,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-03-23",
+      "exit_date": "2026-03-23",
+      "entry": 598.65,
+      "exit": 585.7,
+      "qty": 17,
+      "pnl": -230.83,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-03-24",
+      "exit_date": "2026-03-25",
+      "entry": 588.55,
+      "exit": 613.25,
+      "qty": 17,
+      "pnl": 397.2,
+      "reason": "TRAILING",
+      "held_candles": 33
+    },
+    {
+      "entry_date": "2026-04-01",
+      "exit_date": "2026-04-02",
+      "entry": 587.9,
+      "exit": 578.0,
+      "qty": 17,
+      "pnl": -190.36,
+      "reason": "STALE",
+      "held_candles": 20
+    },
+    {
+      "entry_date": "2026-04-02",
+      "exit_date": "2026-04-07",
+      "entry": 566.6,
+      "exit": 583.65,
+      "qty": 18,
+      "pnl": 283.89,
+      "reason": "TRAILING",
+      "held_candles": 49
+    },
+    {
+      "entry_date": "2026-04-09",
+      "exit_date": "2026-04-13",
+      "entry": 620.45,
+      "exit": 629.3,
+      "qty": 16,
+      "pnl": 119.37,
+      "reason": "TRAILING",
+      "held_candles": 49
+    }
+  ]
+}
