@@ -7,12 +7,18 @@ Outputs a JSON report with per-stock metrics for two periods:
 
 Usage:
     python scripts/watchlist_review.py [--from 2023-01-01] [--skip-refresh]
+    python scripts/watchlist_review.py --symbol NSE:MARICO [--from 2023-01-01]
 
 Flags:
     --from       Full-period start date (default: 2023-01-01)
     --skip-refresh  Skip kite_totp_refresh (use existing token)
+    --symbol     Single-stock detailed review mode — emits richer JSON for one
+                 stock (yearly breakdown, exit-reason breakdown, full trade list)
+                 instead of the watchlist-wide report. Symbol need not be in the
+                 watchlist.
 
 Prints JSON to stdout; also writes to reviews/quant_<timestamp>.json
+(or reviews/stock_<SYMBOL>_<timestamp>.json in --symbol mode).
 """
 
 import argparse
@@ -111,10 +117,78 @@ def _stock_metrics(trades: list) -> dict:
     }
 
 
+def _period_breakdown(trades: list, span: int) -> dict:
+    """Group trades by the first `span` chars of exit_date (4 = year, 7 = month)."""
+    buckets = defaultdict(list)
+    for t in trades:
+        key = str(t.get("exit_date") or "?")[:span]
+        buckets[key].append(t)
+    return {k: _stock_metrics(v) for k, v in sorted(buckets.items())}
+
+
+def _reason_breakdown(trades: list) -> dict:
+    """Group trades by exit reason — count + total/avg P&L per reason."""
+    buckets = defaultdict(list)
+    for t in trades:
+        buckets[t.get("reason", "?")].append(t)
+    out = {}
+    for reason, ts in buckets.items():
+        out[reason] = {
+            "count": len(ts),
+            "pnl":   round(sum(t["pnl"] for t in ts), 2),
+            "avg":   round(sum(t["pnl"] for t in ts) / len(ts), 2),
+        }
+    # Sort by total P&L descending so the dominant exit path is first.
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["pnl"]))
+
+
+def _trade_rows(trades: list) -> list:
+    """Compact, chronological trade list for the report."""
+    rows = []
+    for t in sorted(trades, key=lambda x: str(x.get("entry_date") or "")):
+        rows.append({
+            "entry_date": str(t.get("entry_date") or "")[:10],
+            "exit_date":  str(t.get("exit_date") or "")[:10],
+            "entry":      round(t.get("entry", 0), 2),
+            "exit":       round(t.get("exit", 0), 2),
+            "qty":        t.get("qty", 0),
+            "pnl":        round(t.get("pnl", 0), 2),
+            "reason":     t.get("reason", "?"),
+            "held_candles": t.get("held_candles", 0),
+        })
+    return rows
+
+
+def _run_single_stock(store, sym_to_tok, symbol, full_from, recent_from, now, per_symbol_params):
+    """Detailed single-stock review — richer breakdowns than the watchlist row."""
+    full_trades   = _run_period(store, [symbol], sym_to_tok, full_from, now, per_symbol_params).get(symbol, [])
+    recent_trades = _run_period(store, [symbol], sym_to_tok, recent_from, now, per_symbol_params).get(symbol, [])
+
+    override = (config._data.get("per_stock_params") or {}).get(symbol, {}).get("lr_extrema")
+
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "symbol":       symbol,
+        "full_from":    full_from.strftime("%Y-%m-%d"),
+        "recent_from":  recent_from.strftime("%Y-%m-%d"),
+        "in_watchlist": symbol in config.watchlist,
+        "override":     override,
+        "params_used":  config.get_strategy_params(symbol, "lr_extrema"),
+        "full":         _stock_metrics(full_trades),
+        "recent":       _stock_metrics(recent_trades),
+        "yearly":       _period_breakdown(full_trades, 4),
+        "monthly_recent": _period_breakdown(recent_trades, 7),
+        "reasons":      _reason_breakdown(full_trades),
+        "trades":       _trade_rows(full_trades),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="from_date", default="2023-01-01")
     parser.add_argument("--skip-refresh", action="store_true")
+    parser.add_argument("--symbol", default=None,
+                        help="Single-stock detailed review (e.g. NSE:MARICO)")
     args = parser.parse_args()
 
     if not args.skip_refresh:
@@ -128,8 +202,20 @@ def main():
     with store._conn() as conn:
         conn.executescript("DELETE FROM orders; DELETE FROM trades; DELETE FROM signals;")
 
-    symbols = list(config.watchlist)
+    single = args.symbol
+    if single:
+        single = single.upper()
+        if not single.startswith("NSE:"):
+            single = f"NSE:{single}"
+        symbols = [single]
+    else:
+        symbols = list(config.watchlist)
+
     sym_to_tok, valid = _fetch_candles(kite, store, symbols, args.from_date)
+
+    if single and single not in valid:
+        print(json.dumps({"error": f"{single} not found on NSE or has no candles"}))
+        sys.exit(1)
 
     # Build per_symbol_params
     _overrides = config._data.get("per_stock_params") or {}
@@ -141,6 +227,21 @@ def main():
     now     = datetime.datetime.now()
     full_from  = datetime.datetime.strptime(args.from_date, "%Y-%m-%d")
     recent_from = now - datetime.timedelta(days=180)
+
+    if single:
+        print(f"Running detailed single-stock review for {single}...", file=sys.stderr)
+        output = _run_single_stock(
+            store, sym_to_tok, single, full_from, recent_from, now, per_symbol_params,
+        )
+        reviews_dir = Path(__file__).resolve().parents[1] / "reviews"
+        reviews_dir.mkdir(exist_ok=True)
+        ts = now.strftime("%Y%m%d_%H%M%S")
+        safe_sym = single.replace("NSE:", "").replace(":", "_")
+        out_path = reviews_dir / f"stock_{safe_sym}_{ts}.json"
+        out_path.write_text(json.dumps(output, indent=2))
+        print(f"Stock data saved: {out_path}", file=sys.stderr)
+        print(json.dumps(output, indent=2))
+        return
 
     print("Running full-period backtest...", file=sys.stderr)
     full_by_sym = _run_period(store, valid, sym_to_tok, full_from, now, per_symbol_params)
