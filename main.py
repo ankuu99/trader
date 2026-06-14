@@ -30,6 +30,7 @@ from trader.core.logger import get_logger, setup
 from trader.data.historical import warm_up
 from trader.data.live import LiveFeed
 from trader.data.store import Store
+from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
@@ -107,6 +108,8 @@ def main():
         token = symbol_to_token[symbol]
         warm_up(kite, store, token, symbol, config.candle_timeframe,
                 config.historical_cache_days)
+        if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
+            warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
 
     # Warm up strategies from cached historical candles so they don't need
     # 200+ live candles (33+ trading days) before emitting any signal.
@@ -373,10 +376,66 @@ def main():
 
     orders.register_update_callback(handle_order_update)
 
+    # --- Higher-timeframe (4h) trend regime for the ht_trend entry gate ---
+    _htf_regime_cache: dict[str, tuple] = {}  # symbol -> (latest_closed_4h_ts, regime_dict | None)
+
+    def _htf_close_time(open_ts):
+        # NSE 4h bars open at 09:15 (closes 13:15) and 13:15 (closes at market
+        # close 15:30, not 17:15) — fixed schedule, verified empirically.
+        if open_ts.time() == dtime(9, 15):
+            return open_ts + timedelta(hours=4)
+        return open_ts + timedelta(hours=2, minutes=15)
+
+    def _get_htf_regime(symbol: str, candle_ts) -> dict | None:
+        """Return the latest CLOSED 4h regime dict for *symbol* as of *candle_ts*
+        (no-lookahead), or None if the ht_trend gate is disabled or there isn't
+        enough cached 4h history yet. Cached per-symbol on the latest usable 4h
+        bar so it isn't recomputed on every 5-minute candle."""
+        if candle_ts is None:
+            return None
+        lr_cfg = config.get_strategy_params(symbol, "lr_extrema")
+        if not lr_cfg.get("ht_trend_gate_enabled"):
+            return None
+        htf_df = store.read_candles(symbol, "4hour", candle_ts - timedelta(days=30), candle_ts)
+        if htf_df.empty:
+            return None
+        closes = [
+            float(row["close"]) for _, row in htf_df.iterrows()
+            if _htf_close_time(row["timestamp"]) <= candle_ts
+        ]
+        if not closes:
+            return None
+        latest_ts = max(
+            row["timestamp"] for _, row in htf_df.iterrows()
+            if _htf_close_time(row["timestamp"]) <= candle_ts
+        )
+        cached = _htf_regime_cache.get(symbol)
+        if cached and cached[0] == latest_ts:
+            return cached[1]
+        regime = htf_trend_regime(
+            closes,
+            rsi_period=lr_cfg.get("ht_trend_rsi_period", 14),
+            macd_fast=lr_cfg.get("ht_trend_macd_fast", 12),
+            macd_slow=lr_cfg.get("ht_trend_macd_slow", 26),
+            macd_signal_period=lr_cfg.get("ht_trend_macd_signal_period", 9),
+            macd_slope_ma_period=lr_cfg.get("ht_trend_macd_slope_ma_period", 3),
+            rsi_downtrend_max=lr_cfg.get("ht_trend_rsi_downtrend_max", 50.0),
+            rsi_oversold=lr_cfg.get("ht_trend_rsi_oversold", 30.0),
+            oversold_lookback=lr_cfg.get("ht_trend_oversold_lookback", 6),
+        )
+        _htf_regime_cache[symbol] = (latest_ts, regime)
+        return regime
+
     # Candle handler
     def handle_candle(candle: dict):
         symbol = token_to_symbol.get(candle.get("instrument_token"))
         candle["_symbol"] = symbol
+        _htf = _get_htf_regime(symbol, candle.get("timestamp")) if symbol else None
+        candle["_htf_rsi"]        = _htf["rsi"]        if _htf else None
+        candle["_htf_macd_hist"]  = _htf["macd_hist"]  if _htf else None
+        candle["_htf_macd_slope"] = _htf["macd_slope"] if _htf else None
+        candle["_htf_downtrend"]  = _htf["downtrend"]  if _htf else None
+        candle["_htf_inversion"]  = _htf["inversion"]  if _htf else None
         orders.on_candle(candle)
         bot_state.last_candle_at = datetime.now()
         bot_state.halted = risk.is_halted()
@@ -479,7 +538,20 @@ def main():
             token = symbol_to_token[symbol]
             warm_up(kite, store, token, symbol, config.candle_timeframe,
                     config.historical_cache_days)
+            if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
+                warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
         feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
+
+    def midday_refresh():
+        # A 4h bar closes at 13:15 IST — refresh the 4h cache so the ht_trend gate
+        # sees today's 09:15-13:15 bar for the rest of the session. Small lookback
+        # keeps this a cache-hit for everything except the just-closed bar.
+        logger.info("Midday: refreshing 4h candle cache")
+        for symbol in valid_watchlist:
+            if not config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
+                continue
+            token = symbol_to_token[symbol]
+            warm_up(kite, store, token, symbol, "4hour", lookback_days=5)
 
     def post_market():
         portfolio.refresh()  # fetch live P&L from Kite before summarising
@@ -519,6 +591,7 @@ def main():
         )
 
     scheduler.on_pre_market(pre_market)
+    scheduler.on_midday(midday_refresh)
     scheduler.on_post_market(post_market)
     scheduler.on_heartbeat(heartbeat)
 

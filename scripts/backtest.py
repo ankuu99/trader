@@ -30,7 +30,7 @@ from trader.data.store import Store
 from trader.notifications import telegram
 telegram.disable()
 
-setup(log_dir=config.log_dir, level=config.log_level)
+setup(log_dir=config.log_dir, level="ERROR")
 logger = get_logger(__name__)
 
 

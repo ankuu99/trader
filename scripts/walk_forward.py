@@ -40,7 +40,10 @@ be profitable in >60% of folds across different market regimes.
 import argparse
 import calendar
 import csv
+import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -54,11 +57,12 @@ from trader.auth.session import create_kite
 from trader.backtest.engine import compute_metrics, run_backtest
 from trader.core.config import config
 from trader.core.logger import get_logger, setup
+from trader.data.historical import get_candles
 from trader.data.store import Store
 from trader.notifications import telegram
 telegram.disable()
 
-setup(log_dir=config.log_dir, level=config.log_level)
+setup(log_dir=config.log_dir, level="ERROR")
 logger = get_logger(__name__)
 
 
@@ -102,45 +106,52 @@ def _generate_folds(
     return folds
 
 
-def _calibrate_on_window(
-    kite, store, symbols, symbol_to_token, combos,
-    train_from, train_end, pre_warmup_days, unit, capital,
-):
-    """Search *combos* on the TRAIN window and return the best params.
+def _run_calib_job(job: tuple) -> dict:
+    """Phase-1 worker — search one combo for one (fold, key) on its TRAIN window.
+    Top-level for multiprocessing pickling."""
+    # Worker processes (spawn) don't inherit parent's logging config — silence them.
+    logging.getLogger().setLevel(logging.CRITICAL)
+    (fold, key, params, symbols, symbol_to_token,
+     train_from, train_end, pre_warmup_days, db_path, capital, timeframe) = job
+    if timeframe:
+        config._data["candle_timeframe"] = timeframe
+    store = Store(db_path)
+    trades = run_backtest(
+        None, store, symbols, symbol_to_token, params,
+        train_from, train_end, pre_warmup_days=pre_warmup_days,
+    )
+    return {
+        "fold": fold, "key": key, "params": params,
+        "return_pct": compute_metrics(trades, capital)["return_pct"],
+    }
 
-    Returns (per_symbol_best, train_return) where per_symbol_best maps every
-    symbol → its chosen param dict. For unit='global' all symbols share one combo
-    chosen by aggregate train return; for 'per-stock' each symbol is optimised
-    independently. train_return holds the in-sample return of the chosen params
-    (keyed 'global' or per symbol) — reported alongside OOS to expose overfitting.
-    """
-    if unit == "global":
-        best_combo, best_ret = None, None
-        for combo in combos:
-            trades = run_backtest(
-                kite, store, symbols, symbol_to_token, combo,
-                train_from, train_end, pre_warmup_days=pre_warmup_days,
-            )
-            ret = compute_metrics(trades, capital)["return_pct"]
-            if best_ret is None or ret > best_ret:
-                best_ret, best_combo = ret, combo
-        return {s: best_combo for s in symbols}, {"global": best_ret}
 
-    # per-stock
-    per_symbol_best, train_return = {}, {}
-    for sym in symbols:
-        best_combo, best_ret = None, None
-        for combo in combos:
-            trades = run_backtest(
-                kite, store, [sym], symbol_to_token, combo,
-                train_from, train_end, pre_warmup_days=pre_warmup_days,
-            )
-            ret = compute_metrics(trades, capital)["return_pct"]
-            if best_ret is None or ret > best_ret:
-                best_ret, best_combo = ret, combo
-        per_symbol_best[sym] = best_combo
-        train_return[sym] = best_ret
-    return per_symbol_best, train_return
+def _run_oos_job(job: tuple) -> dict:
+    """Phase-2 worker — run the OOS backtest for one fold. Top-level for pickling."""
+    logging.getLogger().setLevel(logging.CRITICAL)
+    (fold, params, per_symbol_params, symbols, symbol_to_token,
+     test_start, test_end, train_days, db_path, timeframe) = job
+    if timeframe:
+        config._data["candle_timeframe"] = timeframe
+    store = Store(db_path)
+    trades = run_backtest(
+        None, store, symbols, symbol_to_token, params,
+        test_start, test_end, pre_warmup_days=train_days,
+        per_symbol_params=per_symbol_params,
+    )
+    return {"fold": fold, "trades": trades}
+
+
+def _prefetch_range(kite, store, symbols, symbol_to_token, from_dt, to_dt):
+    """Warm the candle cache for [from_dt, to_dt] so worker processes (kite=None)
+    hit cache only. Covers regime symbols (NIFTY 50, INDIA VIX) too."""
+    if kite is None:
+        return
+    for sym in set(symbols) | {"NSE:NIFTY 50", "NSE:INDIA VIX"}:
+        token = symbol_to_token.get(sym)
+        if token is None:
+            continue
+        get_candles(kite, store, token, sym, config.candle_timeframe, from_dt, to_dt)
 
 
 def main():
@@ -172,6 +183,8 @@ def main():
                         help="Random-search iterations per train window (random mode; default 40)")
     parser.add_argument("--cal-params", nargs="+", default=None, metavar="PARAM",
                         help="Restrict calibration to these params (default: full PARAM_GRID)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Parallel worker processes for --calibrate (default: CPU count)")
     args = parser.parse_args()
 
     if args.timeframe:
@@ -213,6 +226,8 @@ def main():
         combos = (_all_combinations(grid) if args.mode == "grid"
                   else _random_combinations(args.iterations, grid))
 
+    n_workers = args.workers or os.cpu_count() or 1
+
     mode_label = (f"CALIBRATED ({args.unit}, {args.mode}"
                   + (f"×{len(combos)}" if combos else "") + ")") if args.calibrate else "fixed-param"
     print(
@@ -220,42 +235,92 @@ def main():
         f" | train={args.train}m  test={args.test}m"
     )
     print(f"Instruments : {', '.join(valid_symbols)}")
-    print(f"Folds       : {len(folds)}\n")
+    print(f"Folds       : {len(folds)}")
+    print(f"Workers     : {n_workers}\n")
 
+    # Pre-warm the candle cache for the full span covered by every fold (train+test)
+    # so all worker processes below run cache-only (kite=None).
+    if folds:
+        earliest = min(test_start - timedelta(days=2 * train_days) for test_start, _, train_days in folds)
+        _prefetch_range(kite, store, valid_symbols, symbol_to_token, earliest, to_dt)
+
+    # --- Phase 1: calibrate params per fold (all folds × keys × combos run in parallel) ---
+    fold_per_symbol_params: dict[int, dict] = {}
+    fold_train_return: dict[int, dict] = {}
+    if args.calibrate:
+        jobs = []
+        for i, (test_start, test_end, train_days) in enumerate(folds, 1):
+            train_from = test_start - timedelta(days=train_days)
+            if args.unit == "global":
+                jobs.extend(
+                    (i, "global", combo, valid_symbols, symbol_to_token,
+                     train_from, test_start, train_days, config.db_path, capital, args.timeframe)
+                    for combo in combos
+                )
+            else:
+                jobs.extend(
+                    (i, sym, combo, [sym], symbol_to_token,
+                     train_from, test_start, train_days, config.db_path, capital, args.timeframe)
+                    for sym in valid_symbols for combo in combos
+                )
+
+        print(f"Calibrating {len(jobs)} (fold × key × combo) jobs across {n_workers} workers...")
+        best: dict[tuple[int, str], tuple[float, dict]] = {}
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_run_calib_job, job): job for job in jobs}
+            done = 0
+            for future in as_completed(futures):
+                done += 1
+                result = future.result()
+                bk = (result["fold"], result["key"])
+                if bk not in best or result["return_pct"] > best[bk][0]:
+                    best[bk] = (result["return_pct"], result["params"])
+                print(f"\r  [{done}/{len(jobs)}]", end="", flush=True)
+        print()
+
+        for i in range(1, len(folds) + 1):
+            if args.unit == "global":
+                ret, combo = best[(i, "global")]
+                fold_per_symbol_params[i] = {s: combo for s in valid_symbols}
+                fold_train_return[i] = {"global": ret}
+            else:
+                fold_per_symbol_params[i] = {s: best[(i, s)][1] for s in valid_symbols}
+                fold_train_return[i] = {s: best[(i, s)][0] for s in valid_symbols}
+
+    # --- Phase 2: OOS backtest per fold (all folds run in parallel) ---
+    oos_jobs = [
+        (i, params, fold_per_symbol_params.get(i), valid_symbols, symbol_to_token,
+         test_start, test_end, train_days, config.db_path, args.timeframe)
+        for i, (test_start, test_end, train_days) in enumerate(folds, 1)
+    ]
+
+    print(f"Running {len(oos_jobs)} OOS fold backtests across {n_workers} workers...\n")
+    fold_trades: dict[int, list[dict]] = {}
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_run_oos_job, job): job[0] for job in oos_jobs}
+        for future in as_completed(futures):
+            result = future.result()
+            fold_trades[result["fold"]] = result["trades"]
+
+    # --- Assemble + print results in fold order ---
     fold_results: list[dict] = []
     all_trades:   list[dict] = []
 
     for i, (test_start, test_end, train_days) in enumerate(folds, 1):
         train_from = test_start - timedelta(days=train_days)
-        label = (
-            f"train {train_from.strftime('%Y-%m-%d')}→{test_start.strftime('%Y-%m-%d')}"
-            f"  test {test_start.strftime('%Y-%m-%d')}→{test_end.strftime('%Y-%m-%d')}"
-        )
-        print(f"[{i}/{len(folds)}] {label} ...", end=" ", flush=True)
-
-        per_symbol_params = None
-        train_ret_mean = None
-        if args.calibrate:
-            # Calibrate on [train_from, test_start); pre-warm the train backtest with the
-            # window's own train_days of prior history (still strictly before the OOS test).
-            per_symbol_params, train_ret = _calibrate_on_window(
-                kite, store, valid_symbols, symbol_to_token, combos,
-                train_from, test_start, train_days, args.unit, capital,
-            )
-            train_ret_mean = sum(train_ret.values()) / len(train_ret)
-
-        trades = run_backtest(
-            kite, store, valid_symbols, symbol_to_token, params,
-            test_start, test_end,
-            pre_warmup_days=train_days,
-            per_symbol_params=per_symbol_params,
-        )
+        trades = fold_trades[i]
         m = compute_metrics(trades, capital)
 
         for t in trades:
             t["fold"] = i
             t["test_window"] = f"{test_start.strftime('%Y-%m-%d')}→{test_end.strftime('%Y-%m-%d')}"
         all_trades.extend(trades)
+
+        train_ret_mean = None
+        if i in fold_train_return:
+            tr = fold_train_return[i]
+            train_ret_mean = sum(tr.values()) / len(tr)
+
         fold_results.append({
             "fold": i,
             "train_from": train_from.strftime("%Y-%m-%d"),
@@ -265,9 +330,15 @@ def main():
             **m,
         })
 
+        label = (
+            f"train {train_from.strftime('%Y-%m-%d')}→{test_start.strftime('%Y-%m-%d')}"
+            f"  test {test_start.strftime('%Y-%m-%d')}→{test_end.strftime('%Y-%m-%d')}"
+        )
+        prefix = f"[{i}/{len(folds)}] {label} ... "
         if train_ret_mean is not None:
-            print(f"[train {train_ret_mean:+.2f}%] ", end="")
+            prefix += f"[train {train_ret_mean:+.2f}%] "
         print(
+            prefix +
             f"{m['total_trades']:>3} trades | "
             f"WR {m['money_weighted_win_rate']:>5.1f}% | "
             f"PF {m['profit_factor']:>4.2f} | "

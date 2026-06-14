@@ -40,6 +40,13 @@ class ExtremaEntryPolicy:
         self._macd_slope_ma_period: int = int(params.get("macd_slope_ma_period", 3))
         self._macd_slope_threshold: float = float(params.get("macd_slope_threshold", 0.0))
 
+        # Higher-timeframe (4h) trend-context gate. The regime classification
+        # (_htf_downtrend / _htf_inversion) is precomputed by main.py / the backtest
+        # engine and injected onto each candle dict — this gate only consumes it.
+        self._ht_trend_gate_enabled: bool = bool(params.get("ht_trend_gate_enabled", False))
+        self._ht_trend_rsi_downtrend_max: float = float(params.get("ht_trend_rsi_downtrend_max", 50.0))
+        self._ht_trend_rsi_oversold: float = float(params.get("ht_trend_rsi_oversold", 30.0))
+
     def gate_blocks(self, x, candles: list[dict], close: float) -> list[str]:
         """Return the list of gate-failure reason strings for a would-be entry.
         *x* is the feature vector for the current candle; *candles* is the candle
@@ -98,5 +105,19 @@ class ExtremaEntryPolicy:
                     blocks.append(
                         f"macd_avg_slope={avg_slope:.5f}<={self._macd_slope_threshold}(not converging)"
                     )
+
+        if self._ht_trend_gate_enabled:
+            cur = candles[-1] if candles else {}
+            htf_rsi = cur.get("_htf_rsi")
+            htf_macd_hist = cur.get("_htf_macd_hist")
+            if htf_rsi is None or htf_macd_hist is None:
+                pass  # insufficient HTF data — neutral, do not block
+            elif cur.get("_htf_inversion"):
+                pass  # inversion suspected — explicitly allow, overrides downtrend
+            elif cur.get("_htf_downtrend"):
+                blocks.append(
+                    f"htf_downtrend: htf_rsi={htf_rsi:.1f}<{self._ht_trend_rsi_downtrend_max} "
+                    f"& htf_macd_hist={htf_macd_hist:.4f}<0 (no inversion)"
+                )
 
         return blocks

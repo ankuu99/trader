@@ -10,13 +10,14 @@ Backtest engine — core replay loop shared by backtest.py, calibrate.py, and sc
 import bisect
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 
 from trader.core.config import config
 from trader.core.logger import get_logger
 from trader.costs import round_trip_cost
 from trader.data.historical import get_candles
 from trader.data.store import Store
+from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram as _telegram
 from trader.orders.manager import OrderManager
 from trader.risk.manager import RiskManager
@@ -229,6 +230,91 @@ def run_backtest(
         idx = bisect.bisect_right(ts_list, ts) - 1
         return close_list[idx] if idx >= 0 else None
 
+    # --- Fetch 4h candles for the ht_trend gate (one series per symbol that has
+    # the gate enabled — params and 4h closes are per-instrument, unlike NIFTY/VIX) ---
+    _htf_regime_series: dict[str, tuple[list, list[dict]]] = {}
+    for symbol in symbols:
+        _sym_params = _params_for(symbol)
+        if not _sym_params.get("ht_trend_gate_enabled"):
+            continue
+        token = symbol_to_token.get(symbol)
+        if token is None:
+            continue
+        _htf_df = get_candles(kite, store, token, symbol, "4hour", pre_warmup_from, to_dt)
+        if _htf_df.empty:
+            logger.info("No 4h candles for %s — ht_trend gate will be neutral", symbol)
+            continue
+
+        _htf_closes = _htf_df["close"].astype(float).tolist()
+        _htf_open_ts = _htf_df["timestamp"].tolist()
+
+        _ht_rsi_period = _sym_params.get("ht_trend_rsi_period", 14)
+        _ht_macd_fast = _sym_params.get("ht_trend_macd_fast", 12)
+        _ht_macd_slow = _sym_params.get("ht_trend_macd_slow", 26)
+        _ht_macd_signal = _sym_params.get("ht_trend_macd_signal_period", 9)
+        _ht_macd_slope_ma = _sym_params.get("ht_trend_macd_slope_ma_period", 3)
+        _ht_rsi_downtrend_max = _sym_params.get("ht_trend_rsi_downtrend_max", 50.0)
+        _ht_rsi_oversold = _sym_params.get("ht_trend_rsi_oversold", 30.0)
+        _ht_oversold_lookback = _sym_params.get("ht_trend_oversold_lookback", 6)
+        _ht_min_bars = max(_ht_rsi_period + 1, _ht_macd_slow + _ht_macd_signal + _ht_macd_slope_ma)
+
+        _close_times: list = []
+        _regime_dicts: list[dict] = []
+        for i in range(_ht_min_bars - 1, len(_htf_closes)):
+            regime = htf_trend_regime(
+                _htf_closes[: i + 1],
+                rsi_period=_ht_rsi_period,
+                macd_fast=_ht_macd_fast, macd_slow=_ht_macd_slow,
+                macd_signal_period=_ht_macd_signal, macd_slope_ma_period=_ht_macd_slope_ma,
+                rsi_downtrend_max=_ht_rsi_downtrend_max, rsi_oversold=_ht_rsi_oversold,
+                oversold_lookback=_ht_oversold_lookback,
+            )
+            if regime is None:
+                continue
+            # NSE 4h bars open at 09:15 (closes 13:15) and 13:15 (closes at
+            # market close 15:30, not 17:15) — fixed schedule, verified empirically.
+            open_ts = _htf_open_ts[i]
+            if open_ts.time() == dtime(9, 15):
+                close_ts = open_ts + timedelta(hours=4)
+            else:
+                close_ts = open_ts + timedelta(hours=2, minutes=15)
+            _close_times.append(close_ts)
+            _regime_dicts.append(regime)
+
+        _htf_regime_series[symbol] = (_close_times, _regime_dicts)
+        logger.info("HTF regime series | %s | %d bars", symbol, len(_regime_dicts))
+
+    def _htf_regime_at(symbol: str, ts) -> dict | None:
+        """Return the most recent CLOSED 4h regime dict at or before *ts* (forward-fill).
+        No-lookahead: a 4h bar's regime is only usable once that bar has closed."""
+        series = _htf_regime_series.get(symbol)
+        if not series:
+            return None
+        close_times, regime_dicts = series
+        idx = bisect.bisect_right(close_times, ts) - 1
+        return regime_dicts[idx] if idx >= 0 else None
+
+    def _build_candle(row, token: int, symbol: str) -> dict:
+        ts = row["timestamp"]
+        _htf = _htf_regime_at(symbol, ts)
+        return {
+            "instrument_token": token,
+            "timestamp": ts,
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": int(row["volume"]),
+            "_symbol": symbol,
+            "_nifty_close": _regime_at(_nifty_ts, _nifty_cl, ts),
+            "_vix_close":   _regime_at(_vix_ts,   _vix_cl,   ts),
+            "_htf_rsi":        _htf["rsi"]        if _htf else None,
+            "_htf_macd_hist":  _htf["macd_hist"]  if _htf else None,
+            "_htf_macd_slope": _htf["macd_slope"] if _htf else None,
+            "_htf_downtrend":  _htf["downtrend"]  if _htf else None,
+            "_htf_inversion":  _htf["inversion"]  if _htf else None,
+        }
+
     # Progress phases: 0-20% pre-warmup fetch, 20-35% main fetch,
     #                  35-45% warmup replay, 45-100% main replay loop.
     _n_sym = max(len(symbols), 1)
@@ -252,21 +338,7 @@ def run_backtest(
         if pre_df.empty:
             logger.info("No pre-warmup candles for %s before %s — model will be cold", symbol, from_dt.date())
             continue
-        pre_warmup_candles[symbol] = [
-            {
-                "instrument_token": token,
-                "timestamp": row["timestamp"],
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(row["volume"]),
-                "_symbol": symbol,
-                "_nifty_close": _regime_at(_nifty_ts, _nifty_cl, row["timestamp"]),
-                "_vix_close":   _regime_at(_vix_ts,   _vix_cl,   row["timestamp"]),
-            }
-            for _, row in pre_df.iterrows()
-        ]
+        pre_warmup_candles[symbol] = [_build_candle(row, token, symbol) for _, row in pre_df.iterrows()]
         logger.info(
             "Pre-warmup fetched | %s | %d candles over %d days before %s",
             symbol, len(pre_df), pre_warmup_days, from_dt.date(),
@@ -287,21 +359,7 @@ def run_backtest(
         if df.empty:
             logger.warning("No candles for %s in range %s – %s", symbol, from_dt.date(), to_dt.date())
             continue
-        symbol_candles[symbol] = [
-            {
-                "instrument_token": symbol_to_token[symbol],
-                "timestamp": row["timestamp"],
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(row["volume"]),
-                "_symbol": symbol,
-                "_nifty_close": _regime_at(_nifty_ts, _nifty_cl, row["timestamp"]),
-                "_vix_close":   _regime_at(_vix_ts,   _vix_cl,   row["timestamp"]),
-            }
-            for _, row in df.iterrows()
-        ]
+        symbol_candles[symbol] = [_build_candle(row, token, symbol) for _, row in df.iterrows()]
 
     total_main_candles = sum(len(v) for v in symbol_candles.values())
     logger.info(

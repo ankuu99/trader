@@ -113,6 +113,18 @@ def flatten_strategy_params(params: dict) -> dict:
             _set(p, "macd_signal_period", m, "signal_period")
             _set(p, "macd_slope_ma_period", m, "slope_ma_period")
             _set(p, "macd_slope_threshold", m, "slope_threshold")
+        if "ht_trend" in gates:
+            p["ht_trend_gate_enabled"] = True
+            ht = gates["ht_trend"] or {}
+            _set(p, "ht_trend_rsi_period", ht, "rsi_period")
+            _set(p, "ht_trend_rsi_downtrend_max", ht, "rsi_downtrend_max")
+            _set(p, "ht_trend_rsi_oversold", ht, "rsi_oversold")
+            _set(p, "ht_trend_oversold_lookback", ht, "oversold_lookback")
+            ht_macd = ht.get("macd") or {}
+            _set(p, "ht_trend_macd_fast", ht_macd, "fast")
+            _set(p, "ht_trend_macd_slow", ht_macd, "slow")
+            _set(p, "ht_trend_macd_signal_period", ht_macd, "signal_period")
+            _set(p, "ht_trend_macd_slope_ma_period", ht_macd, "slope_ma_period")
 
     return p
 

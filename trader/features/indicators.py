@@ -81,6 +81,58 @@ def stoch_rsi_k(closes: list[float], period: int, smooth_k: int) -> float | None
     return sum(stoch_vals[-smooth_k:]) / smooth_k
 
 
+def htf_trend_regime(
+    closes: list[float],
+    rsi_period: int,
+    macd_fast: int,
+    macd_slow: int,
+    macd_signal_period: int,
+    macd_slope_ma_period: int,
+    rsi_downtrend_max: float,
+    rsi_oversold: float,
+    oversold_lookback: int,
+) -> dict | None:
+    """Classify the higher-timeframe trend regime from a list of CLOSED HTF closes.
+
+    Returns None if there is insufficient data for either indicator — callers
+    treat None as "neutral / gate inactive".
+
+    Returns a dict with:
+        rsi        : latest RSI value
+        macd_hist  : latest MACD histogram value
+        macd_slope : avg slope of the last `macd_slope_ma_period` histogram diffs
+        downtrend  : MACD histogram < 0 AND RSI < rsi_downtrend_max AND macd_slope <= 0
+        inversion  : RSI was < rsi_oversold within the last `oversold_lookback`
+                      closed bars and has since risen, OR MACD histogram is
+                      negative but its slope has turned positive
+    """
+    rsi_vals = rsi_series(closes, rsi_period)
+    macd_st = macd_state(closes, macd_fast, macd_slow, macd_signal_period, macd_slope_ma_period)
+    if not rsi_vals or macd_st is None:
+        return None
+
+    rsi = rsi_vals[-1]
+    macd_hist, macd_slope = macd_st
+
+    downtrend = macd_hist < 0 and rsi < rsi_downtrend_max and macd_slope <= 0
+
+    recent_rsi = rsi_vals[-oversold_lookback:] if len(rsi_vals) >= oversold_lookback else rsi_vals
+    was_oversold_and_rising = any(
+        recent_rsi[i] < rsi_oversold and rsi > recent_rsi[i]
+        for i in range(len(recent_rsi) - 1)
+    )
+    macd_turning_up = macd_hist < 0 and macd_slope > 0
+    inversion = was_oversold_and_rising or macd_turning_up
+
+    return {
+        "rsi": rsi,
+        "macd_hist": macd_hist,
+        "macd_slope": macd_slope,
+        "downtrend": downtrend,
+        "inversion": inversion,
+    }
+
+
 def macd_state(
     closes: list[float],
     fast: int,
