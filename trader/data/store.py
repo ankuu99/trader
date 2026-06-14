@@ -214,8 +214,20 @@ class Store:
         if df.empty:
             return
 
-        rows = [
-            (
+        # SQLite INTEGER is signed 64-bit; Kite occasionally returns garbage
+        # volume values (observed: exactly 2**63) that overflow it.
+        SQLITE_MAX_INT = 2**63 - 1
+
+        rows = []
+        for _, row in df.iterrows():
+            volume = int(row["volume"])
+            if volume > SQLITE_MAX_INT or volume < -SQLITE_MAX_INT - 1:
+                logger.warning(
+                    "Clamping out-of-range volume %d for %s [%s] @ %s to 0",
+                    volume, instrument, timeframe, row["timestamp"],
+                )
+                volume = 0
+            rows.append((
                 instrument,
                 timeframe,
                 self._to_naive(row["timestamp"]).isoformat(),
@@ -223,10 +235,8 @@ class Store:
                 row["high"],
                 row["low"],
                 row["close"],
-                int(row["volume"]),
-            )
-            for _, row in df.iterrows()
-        ]
+                volume,
+            ))
 
         with self._conn() as conn:
             conn.executemany(

@@ -12,7 +12,7 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 4.0
+  max_capital_per_stock_pct: 7.0
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
