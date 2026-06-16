@@ -379,3 +379,71 @@ def test_limit_order_uses_price_hint_exactly(store):
     assert kwargs["order_type"] == "LIMIT"
     assert kwargs["price"] == pytest.approx(100.0)
     assert "market_protection" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: cross-exchange / external SELL reconciliation
+# ---------------------------------------------------------------------------
+
+def _bse_sell_update(order_id, symbol, fill_price, qty=4):
+    """An external SELL that filled on BSE for a symbol the bot holds on NSE."""
+    return {
+        "order_id": order_id,
+        "tradingsymbol": symbol,
+        "exchange": "BSE",
+        "transaction_type": "SELL",
+        "status": "COMPLETE",
+        "average_price": fill_price,
+        "filled_quantity": qty,
+        "trigger_price": 0,
+        "order_type": "MARKET",
+        "product": "CNC",
+    }
+
+
+def test_cross_exchange_sell_remapped_to_held_position(store):
+    """A BSE sell of an NSE-held position must reconcile against NSE:SYMBOL."""
+    kite = _make_kite()
+    dispatched = []
+    with _live_config(gtt_enabled=False):
+        mgr = OrderManager(kite=kite, store=store, mode="live",
+                           position_lookup=lambda: ["NSE:GAIL", "NSE:RELIANCE"])
+        mgr.register_update_callback(dispatched.append)
+        mgr.on_kite_order_update(_bse_sell_update("EXT1", "GAIL", 175.15))
+
+    assert len(dispatched) == 1
+    assert dispatched[0]["instrument"] == "NSE:GAIL"
+    assert dispatched[0]["direction"] == "SELL"
+    assert dispatched[0]["signal_type"] == SignalType.EXIT
+    # Stored order must also carry the remapped instrument so trade history pairs.
+    import sqlite3
+    conn = sqlite3.connect(store._path)
+    instruments = [r[0] for r in conn.execute(
+        "SELECT instrument FROM orders WHERE direction='SELL'")]
+    conn.close()
+    assert instruments == ["NSE:GAIL"]
+
+
+def test_cross_exchange_sell_no_remap_when_ambiguous(store):
+    """No remap if the symbol isn't uniquely held (safety: leave as-is)."""
+    kite = _make_kite()
+    dispatched = []
+    with _live_config(gtt_enabled=False):
+        mgr = OrderManager(kite=kite, store=store, mode="live",
+                           position_lookup=lambda: ["NSE:RELIANCE"])
+        mgr.register_update_callback(dispatched.append)
+        mgr.on_kite_order_update(_bse_sell_update("EXT2", "GAIL", 175.15))
+
+    assert dispatched[0]["instrument"] == "BSE:GAIL"  # unchanged
+
+
+def test_cross_exchange_remap_skipped_without_position_lookup(store):
+    """Backward-compat: no position_lookup => behaviour unchanged (BSE:GAIL)."""
+    kite = _make_kite()
+    dispatched = []
+    with _live_config(gtt_enabled=False):
+        mgr = OrderManager(kite=kite, store=store, mode="live")
+        mgr.register_update_callback(dispatched.append)
+        mgr.on_kite_order_update(_bse_sell_update("EXT3", "GAIL", 175.15))
+
+    assert dispatched[0]["instrument"] == "BSE:GAIL"

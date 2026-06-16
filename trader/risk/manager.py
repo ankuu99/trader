@@ -157,6 +157,11 @@ class RiskManager:
 
         quantity = int(config.max_risk_per_trade // sl_distance)
 
+        # Confidence sizing (meta-labeling Phase 2): scale the risk-based quantity by
+        # the signal's size_weight (derived from meta P(win)). None => full size.
+        if signal.size_weight is not None and signal.size_weight > 0:
+            quantity = int(quantity * signal.size_weight)
+
         # Cap quantity so total capital deployed doesn't exceed max_capital_per_stock.
         # When compounding is enabled, the cap scales with the strategy's own cumulative P&L
         # (base_capital + cumulative_pnl), keeping Kite available cash out of the calculation.

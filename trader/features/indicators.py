@@ -51,6 +51,48 @@ def rsi_series(closes: list[float], period: int) -> list[float]:
     return result
 
 
+def atr_at(candles: list[dict], idx: int, period: int = 14) -> float:
+    """Average True Range at candle `idx` over the preceding `period` bars.
+
+    True range = max(high-low, |high-prev_close|, |low-prev_close|). Returns 0.0 if
+    there isn't enough history before idx. Used to set volatility-scaled barriers."""
+    if idx <= 0 or idx >= len(candles):
+        return 0.0
+    start = max(1, idx - period + 1)
+    trs = []
+    for j in range(start, idx + 1):
+        h, l, pc = candles[j]["high"], candles[j]["low"], candles[j - 1]["close"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return sum(trs) / len(trs) if trs else 0.0
+
+
+def linreg_tstat(prices: list[float]) -> tuple[float, float]:
+    """OLS slope of prices vs index and the t-stat of that slope.
+
+    t-stat = slope / standard-error(slope). Used by trend-scanning labeling to pick
+    the forward horizon with the most statistically significant trend. Returns
+    (0.0, 0.0) for < 3 points or a degenerate fit."""
+    n = len(prices)
+    if n < 3:
+        return 0.0, 0.0
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(prices) / n
+    sxx = sum((i - x_mean) ** 2 for i in range(n))
+    if sxx == 0.0:
+        return 0.0, 0.0
+    sxy = sum((i - x_mean) * (prices[i] - y_mean) for i in range(n))
+    slope = sxy / sxx
+    intercept = y_mean - slope * x_mean
+    resid_ss = sum((prices[i] - (intercept + slope * i)) ** 2 for i in range(n))
+    if resid_ss <= 0.0:
+        # Perfect fit => zero standard error => maximally significant trend.
+        if slope == 0.0:
+            return 0.0, 0.0
+        return slope, float("inf") if slope > 0 else float("-inf")
+    se = (resid_ss / (n - 2) / sxx) ** 0.5
+    return slope, (slope / se if se > 0 else 0.0)
+
+
 def ema_series(values: list[float], period: int) -> list[float]:
     """Standard EMA series seeded with the first-period SMA."""
     if len(values) < period:

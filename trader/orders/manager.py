@@ -26,11 +26,16 @@ _EXCHANGE = "NSE"
 
 
 class OrderManager:
-    def __init__(self, kite: KiteConnect, store: Store, mode: str):
+    def __init__(self, kite: KiteConnect, store: Store, mode: str,
+                 position_lookup: Callable[[], list[str]] | None = None):
         self._kite = kite
         self._store = store
         self._mode = mode
         self._callbacks: list[OrderUpdateCallback] = []
+        # Optional accessor returning the currently-held position instrument keys
+        # (e.g. risk._open_positions). Used to reconcile cross-exchange / external
+        # SELL fills against the position we actually hold.
+        self._position_lookup = position_lookup
         # Paper mode: { order_id: Order } waiting for next candle open
         self._pending_paper: dict[str, Order] = {}
         # Live mode: { order_id: Order } so we can enrich Kite's postback
@@ -160,6 +165,27 @@ class OrderManager:
         fill_price = float(kite_update.get("average_price") or 0)
         quantity = int(kite_update.get("filled_quantity") or 0)
         trigger_price = float(kite_update.get("trigger_price") or 0)
+
+        # Layer 1 — cross-exchange / external SELL reconciliation.
+        # An equity held on NSE can be sold on BSE (or vice-versa), and manual /
+        # external sells aren't in our order maps. Such a fill arrives keyed by the
+        # other exchange (e.g. BSE:GAIL) and won't match the position we hold
+        # (NSE:GAIL), so the close silently no-ops and P&L is lost. If this is a
+        # SELL with no matching order and the fill's instrument isn't a tracked
+        # position, remap it to the held position with the same trading symbol so
+        # the close reconciles and the stored order pairs in trade history.
+        if (original is None and direction == "SELL"
+                and self._position_lookup is not None):
+            held = self._position_lookup()
+            if instrument not in held:
+                same_symbol = [p for p in held if p.split(":", 1)[-1] == symbol]
+                if len(same_symbol) == 1:
+                    logger.warning(
+                        "External/cross-exchange SELL reconciled by symbol | "
+                        "fill=%s -> position=%s @ %.2f",
+                        instrument, same_symbol[0], fill_price,
+                    )
+                    instrument = same_symbol[0]
 
         # GTT exits should be treated as EXIT signal_type so strategy state is reset.
         # _instrument_orders stores the original BUY ENTRY order — if the fill is a

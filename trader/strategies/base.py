@@ -32,6 +32,7 @@ class Signal:
     stop_loss_hint: float | None = None   # ENTRY only: if set, RiskManager uses this as GTT SL price instead of computing one
     exit_reason: str | None = None        # EXIT only: reason code passed to backtest trade record (e.g. "PATTERN_TOP")
     timestamp: object | None = None       # candle/tick timestamp; used by RiskManager for trading-window gate
+    size_weight: float | None = None      # ENTRY only: confidence multiplier (meta-labeling sizing); scales risk-based qty. None = full size
 
 
 class Strategy(ABC):

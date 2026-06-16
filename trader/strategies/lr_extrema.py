@@ -39,13 +39,14 @@ import numpy as np
 
 from trader.core.config import config, flatten_strategy_params
 from trader.core.logger import get_logger
-from trader.features.extrema_features import ExtremaFeaturePipeline
+from trader.features.registry import build_feature_pipeline
 from trader.features.labels import MIN_SAMPLES_PER_CLASS, build_labeler
 from trader.models.registry import build_model
 from trader.policy.base import PositionState
 from trader.policy.extrema_entry import ExtremaEntryPolicy
 from trader.policy.extrema_exit import ExtremaExitPolicy
 from trader.strategies.base import Direction, Signal, SignalType, Strategy
+from trader.strategies.meta_filter import MetaFilter
 
 logger = get_logger(__name__)
 
@@ -70,11 +71,20 @@ class LRExtremaStrategy(Strategy):
         self._retrain_every: int = params.get("retrain_every", 50)
 
         # --- Pipeline (S1) / model (S2) / policies (S3) / labeler (S4) ---
-        self._features = ExtremaFeaturePipeline(params.get("features", {}))
+        self._features = build_feature_pipeline(params.get("features", {}))
         self._model = build_model(params.get("model"))
         self._entry_policy = ExtremaEntryPolicy(params)
         self._exit_policy = ExtremaExitPolicy(params)
         self._labeler = build_labeler(instrument, params)
+
+        # Meta-labeling precision gate (no-op unless meta_label.enabled). Barriers for
+        # the meta triple-barrier labels default to the strategy's own exit params.
+        self._meta = MetaFilter(instrument, params)
+        self._meta_exit_defaults = {
+            "profit_pct": params.get("profit_pct", 3.0),
+            "stop_pct": params.get("stop_pct", 3.0),
+            "max_bars": params.get("hold_bars", 150),
+        }
 
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._candles_since_train: int = 0
@@ -213,6 +223,28 @@ class LRExtremaStrategy(Strategy):
                         self._candles_since_train += 1
                         return None
 
+                    # Meta-labeling precision gate — secondary model vetoes low-quality
+                    # firings. No-op unless meta_label.enabled and trained.
+                    size_weight = None
+                    if self._meta.enabled and self._meta.is_trained:
+                        x_meta = self._meta.features_for(self._candles, p_min, p_max, self._threshold)
+                        take, p_win = self._meta.allow(x_meta)
+                        if not take:
+                            _log_entry["type"] = "META_BLOCKED"
+                            _log_entry["p_win"] = p_win
+                            self.last_filter_block = (
+                                f"meta p_win={p_win:.2f}<{self._meta.meta_threshold:.2f}"
+                            )
+                            logger.debug(
+                                "LR-Extrema META BLOCKED | %s | p_win=%.3f < %.2f | candle=%s",
+                                self.instrument, p_win, self._meta.meta_threshold,
+                                candle.get("timestamp"),
+                            )
+                            self._candles_since_train += 1
+                            return None
+                        # Phase 2: confidence sizing — scale qty by P(win). None = full size.
+                        size_weight = self._meta.size_weight(p_win)
+
                     logger.info(
                         "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",
                         self.instrument, p_min, self._threshold, p_max, self._veto_threshold, close,
@@ -231,6 +263,7 @@ class LRExtremaStrategy(Strategy):
                         stop_loss_hint=sl_hint,
                         target_price=None,  # trailing stop manages upside; no fixed target
                         timestamp=candle.get("timestamp"),
+                        size_weight=size_weight,
                     )
 
         # In-position phantom signal — emitted when threshold crossed while already holding.
@@ -376,4 +409,11 @@ class LRExtremaStrategy(Strategy):
         logger.info(
             "LR-Extrema trained | %s | samples=%d (min=%d max=%d)",
             self.instrument, len(rows), labels.count(0), labels.count(1),
+        )
+
+        # Retrain the meta-labeling filter on the primary's historical firings.
+        # No-op unless meta_label.enabled. Past-only buffer => no look-ahead.
+        self._meta.train(
+            candles, self._features, self._model.predict_proba,
+            self._threshold, self._veto_threshold, self._meta_exit_defaults,
         )

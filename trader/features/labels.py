@@ -16,7 +16,7 @@ byte-identical to the pre-extraction code.
 from abc import ABC, abstractmethod
 
 from trader.core.logger import get_logger
-from trader.features.indicators import find_local_extrema
+from trader.features.indicators import find_local_extrema, linreg_tstat
 
 logger = get_logger(__name__)
 
@@ -86,6 +86,109 @@ class ExtremaLabeler(Labeler):
         return indices, classes
 
 
+class TrendScanningLabeler(Labeler):
+    """Trend-scanning labels (López de Prado, *ML for Asset Managers*).
+
+    For each candle, fit forward regressions over every horizon in
+    [min_bars, max_bars] and keep the one with the largest |t-stat| on the slope —
+    a *statistically chosen* horizon per candle rather than a fixed neighbourhood.
+    This is the principled, dynamic-horizon alternative to ExtremaLabeler's fixed
+    ±extrema_order window.
+
+    For this buy-the-dip primary the mapping is: a strong forward *up*-trend
+    (t-stat >= +t_threshold) marks a bottom -> class 0 (buy candidate); a strong
+    forward *down*-trend (t-stat <= -t_threshold) marks a top -> class 1. Candles
+    whose best |t-stat| is below the threshold are unlabelled (no clear trend).
+
+    Like ExtremaLabeler, labels use forward candles — fine for *training* labels
+    (the model still predicts from past-only features at inference)."""
+
+    def __init__(self, instrument: str, params: dict):
+        self._instrument = instrument
+        _ts = (params.get("labels") or {}).get("trend_scan") or {}
+        self._min_bars: int = int(_ts.get("min_bars", 10))
+        self._max_bars: int = int(_ts.get("max_bars", 60))
+        self._t_threshold: float = float(_ts.get("t_threshold", 2.0))
+
+    def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
+        closes = [c["close"] for c in candles]
+        n = len(closes)
+        minima: list[int] = []
+        maxima: list[int] = []
+        for i in range(0, n - self._min_bars):
+            best_t = 0.0
+            best_sign = 0
+            for L in range(self._min_bars, self._max_bars + 1):
+                end = i + L
+                if end >= n:
+                    break
+                _slope, t = linreg_tstat(closes[i: end + 1])
+                if abs(t) > abs(best_t):
+                    best_t = t
+                    best_sign = 1 if t > 0 else -1
+            if abs(best_t) >= self._t_threshold:
+                if best_sign > 0:
+                    minima.append(i)   # forward uptrend -> bottom -> buy candidate
+                else:
+                    maxima.append(i)   # forward downtrend -> top -> sell candidate
+
+        if len(minima) < MIN_SAMPLES_PER_CLASS or len(maxima) < MIN_SAMPLES_PER_CLASS:
+            logger.warning(
+                "TrendScan | %s | not enough labels (up=%d down=%d)",
+                self._instrument, len(minima), len(maxima),
+            )
+            return [], []
+        indices = minima + maxima
+        classes = [0] * len(minima) + [1] * len(maxima)
+        return indices, classes
+
+
+def triple_barrier_label(
+    candles: list[dict], entry_idx: int, profit_pct: float, stop_pct: float, max_bars: int,
+    atr: float | None = None, atr_mult_pt: float | None = None, atr_mult_sl: float | None = None,
+) -> int | None:
+    """Meta-label one candidate entry by the triple-barrier method.
+
+    Barriers are percentage-based by default (profit barrier entry × (1+profit_pct/100),
+    stop barrier entry × (1-stop_pct/100)). If `atr` and the matching `atr_mult_*` are
+    supplied, that side uses a volatility-scaled barrier instead (entry ± atr_mult·ATR) —
+    Phase 3a: barriers adapt to each stock's volatility rather than a fixed %.
+
+    A vertical (time) barrier sits max_bars ahead. Returns 1 if the profit barrier is hit
+    first, 0 if the stop is hit first, and falls back to the sign of P&L at the time barrier.
+
+    Returns **None** when the full barrier window extends past the available
+    candles (entry_idx + max_bars > last index) — the outcome is unknown, so the
+    sample is dropped. This is the leakage/truncation guard: callers only ever
+    pass candle history up to "now", so a non-None label is always fully resolved
+    within the past.
+
+    Intrabar tie (both barriers touched in the same candle) is resolved
+    conservatively as a stop (loss), matching the engine's pessimistic fills.
+    """
+    last = len(candles) - 1
+    end = entry_idx + max_bars
+    if end > last:
+        return None
+    entry = candles[entry_idx]["close"]
+    if entry <= 0:
+        return None
+    if atr and atr_mult_pt:
+        pt = entry + atr_mult_pt * atr
+    else:
+        pt = entry * (1 + profit_pct / 100.0)
+    if atr and atr_mult_sl:
+        sl = entry - atr_mult_sl * atr
+    else:
+        sl = entry * (1 - stop_pct / 100.0)
+    for j in range(entry_idx + 1, end + 1):
+        if candles[j]["low"] <= sl:
+            return 0
+        if candles[j]["high"] >= pt:
+            return 1
+    return 1 if candles[end]["close"] > entry else 0
+
+
 def build_labeler(instrument: str, params: dict) -> Labeler:
     """Factory: returns the configured labeler. Driven by the nested `labels.type`
     config (default: extrema). Kept as a plug point for future labelers."""
@@ -93,4 +196,6 @@ def build_labeler(instrument: str, params: dict) -> Labeler:
     ltype = labels_cfg.get("type", "extrema")
     if ltype == "extrema":
         return ExtremaLabeler(instrument, params)
-    raise ValueError(f"Unknown labeler type {ltype!r}. Available: ['extrema']")
+    if ltype == "trend_scan":
+        return TrendScanningLabeler(instrument, params)
+    raise ValueError(f"Unknown labeler type {ltype!r}. Available: ['extrema', 'trend_scan']")

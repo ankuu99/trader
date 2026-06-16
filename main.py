@@ -75,7 +75,10 @@ def main():
             )
         except Exception as e:
             logger.warning("Failed to fetch Kite margins — cumulative P&L not seeded: %s", e)
-    orders = OrderManager(kite=kite, store=store, mode=config.env)
+    orders = OrderManager(
+        kite=kite, store=store, mode=config.env,
+        position_lookup=lambda: list(risk._open_positions.keys()),
+    )
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
     bot_state = BotState()
 

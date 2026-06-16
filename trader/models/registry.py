@@ -2,19 +2,22 @@
 Model factory — builds an ExtremaModel from the nested `model:` config block.
 
     model:
-      type: logistic     # logistic (default) | knn | gbm | mlp (future)
+      type: logistic     # logistic (default) | mlp
       ...type-specific params...
 
-kNN/GBM/MLP are intentionally not registered yet: on per-stock training data they
-overfit (see todo_revamp.md Stage 4). They become viable once pooled cross-sectional
-training lands.
+`mlp` (Plan 5) is a nonlinear net intended for use with WindowFeaturePipeline —
+it learns price-window morphology the linear logistic model cannot. On per-stock
+data it is overfit-prone, so it carries L2 regularization; judge it on walk-forward.
+kNN/GBM remain unregistered (overfit on per-stock data — see todo_revamp.md Stage 4).
 """
 
 from trader.models.base import ExtremaModel
 from trader.models.logistic import LogisticModel
+from trader.models.mlp import MLPModel
 
 _REGISTRY = {
     "logistic": LogisticModel,
+    "mlp": MLPModel,
 }
 
 

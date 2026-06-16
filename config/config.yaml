@@ -12,7 +12,7 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0
+  max_capital_per_stock_pct: 20.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
@@ -108,6 +108,16 @@ strategies:
       forward_bars: 150             # bars forward to measure outcome (~5 trading days at 15min)
       min_return_pct: 1.5           # min % rise required to keep as a class-0 label
 
+    # Primary training labels (Stage 4 Labeler). type: extrema (default, fixed
+    # ±extrema_order neighbourhood) | trend_scan (Phase 3b: dynamic horizon — fits
+    # forward regressions over min_bars..max_bars and keeps the max-|t-stat| trend).
+    labels:
+      type: extrema
+      trend_scan:
+        min_bars: 10
+        max_bars: 60
+        t_threshold: 2.0
+
     # --- Model config (Stage 2: trader/models) ---
     # Swappable classifier behind the ExtremaModel interface. Only `logistic` is
     # registered today; kNN/GBM/MLP land in Stage 4 (need pooled training first).
@@ -136,6 +146,39 @@ strategies:
         slow: 26
         signal_period: 9
         hist_lookback: 3
+
+    # --- Meta-labeling precision gate (secondary model) ---
+    # A secondary classifier that, after the primary fires a candidate entry, predicts
+    # P(this trade hits profit before stop/time) and vetoes low-confidence firings.
+    # Trained on the primary's historical firings via triple-barrier outcome labels.
+    # Off by default (parity-preserving). See meta_labeling_plan.md.
+    meta_label:
+      enabled: true                   # FINALIZED deploy candidate (meta@0.55 + cap20 + per-stock). NOTE: needs prod cadence/frozen-artifact work before live (t2.micro warm-up cost).
+      meta_threshold: 0.55            # min P(win) to allow the entry
+      sizing:                         # Phase 2: confidence sizing — qty scaled by P(win)
+        enabled: false                # when off, the gate is binary (full size)
+        min_fraction: 0.5             # qty multiplier at p_win == meta_threshold
+        max_fraction: 1.0             # qty multiplier at p_win == 1.0 (>1 = lever up high-conviction)
+      model:
+        type: xgboost                 # xgboost | logistic (logistic = leakage canary)
+        max_depth: 3
+        n_estimators: 100
+        min_child_weight: 5
+        reg_lambda: 1.0
+      features:
+        vol_bars: 20
+        rsi_period: 14
+        depth_bars: 50
+        include_primary_scores: true
+      barriers:                       # null => inherit from exits: (profit/stop/hold_bars)
+        profit_pct: null
+        stop_pct: null
+        max_bars: null
+        # Phase 3a: volatility-scaled barriers. Set atr_mult_pt/atr_mult_sl to use
+        # entry ± mult·ATR for that side instead of the % barrier (null => use %).
+        atr_mult_pt: null
+        atr_mult_sl: null
+        atr_period: 14
 
 
 per_stock_params:
