@@ -89,11 +89,26 @@ class RiskManager:
     def cumulative_pnl(self) -> float:
         return self._cumulative_pnl
 
+    @property
+    def capital_deployed(self) -> float:
+        """Capital currently tied up in open positions (cost basis)."""
+        return self._capital_deployed
+
     def seed_cumulative_pnl(self, pnl: float) -> None:
         """Restore persisted cumulative P&L on startup (live mode only)."""
         self._cumulative_pnl = pnl
         logger.info("Seeded cumulative P&L | pnl=%.2f | effective_capital=%.0f",
                     pnl, config.total_capital + pnl)
+
+    def reset_cumulative_pnl(self, value: float = 0.0) -> None:
+        """Manually override lifetime P&L (operator action from the UI).
+
+        Sets the in-memory value; the caller persists it via store.set_state so the
+        next close doesn't clobber it. Used to recover from a corrupted cumulative_pnl.
+        """
+        old = self._cumulative_pnl
+        self._cumulative_pnl = value
+        logger.warning("Cumulative P&L manually reset | %.2f -> %.2f", old, value)
 
     def validate(self, signal: Signal) -> Order | None:
         self._last_reject_reason = None

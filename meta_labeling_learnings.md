@@ -112,9 +112,19 @@ So meta helps even after per-stock tuning — it is not just cleaning up an untu
    whose full barrier window is in the past. The logistic canary + walk-forward are the
    checks that it held.
 5. **Production cost is real on t2.micro** (deferred): meta retrain is the expensive
-   part. Decouple `meta_retrain_every`, shrink xgboost, and/or train a frozen nightly
-   artifact loaded at startup. Backtest cost (~13 min/run) ≠ production cost (warm-up +
-   a few retrains/day).
+   part. The right fix is the byte-identical O(n^2)->O(n*win) speedup in
+   `MetaFilter.train` (bounded feature window) — it cuts the daily warm-up cost
+   WITHOUT changing the retrain cadence or any results. Optionally shrink xgboost.
+
+6. **DO NOT decouple `meta_retrain_every` from the primary's 25.** `retrain_every: 25`
+   is intentional: 25 = one NSE trading day of 15-min candles (09:15-15:30). More
+   importantly, the **live server restarts daily (08:15 cron) and retrains from
+   scratch on every warm-up** — so live effectively retrains daily no matter what.
+   Setting `retrain_every: 25` makes the BACKTEST mirror that live daily cadence
+   (backtest-live parity). The meta-model also retrains on each daily restart's
+   warm-up, so it too must stay on the daily (25) cadence; a larger meta cadence
+   would break parity with live. Speed up via the bounded-window fix, never by
+   changing cadence. (If ever changed, only use multiples of 25 to keep day-alignment.)
 
 ## Architecture notes (everything is opt-in, parity-golden preserved)
 

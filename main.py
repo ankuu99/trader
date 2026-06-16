@@ -59,19 +59,19 @@ def main():
     store = Store(config.db_path)
     risk = RiskManager()
 
+    _kite_cash: float | None = None
     if config.env == "live":
         try:
             margins = kite.margins(segment="equity")
-            kite_cash = float(margins.get("available", {}).get("cash", 0.0))
+            _kite_cash = float(margins.get("available", {}).get("cash", 0.0))
             persisted_pnl = store.get_state("cumulative_pnl", 0.0)
-            tracked_capital = config.total_capital + persisted_pnl
-            # Kite cash acts as a floor — handles withdrawals; extra cash (refunds etc.) is ignored
-            effective = min(tracked_capital, kite_cash)
-            adjusted_pnl = effective - config.total_capital
-            risk.seed_cumulative_pnl(adjusted_pnl)
+            # Seed lifetime realised P&L untouched. The buying-power cap is applied
+            # separately, after position reconciliation, via set_effective_capital()
+            # — so a config ceiling above available cash never corrupts cumulative P&L.
+            risk.seed_cumulative_pnl(persisted_pnl)
             logger.info(
-                "Capital seeded | kite_cash=%.0f config_cap=%.0f persisted_pnl=%.0f effective=%.0f",
-                kite_cash, config.total_capital, persisted_pnl, effective,
+                "Cumulative P&L seeded | persisted_pnl=%.2f | kite_cash=%.0f",
+                persisted_pnl, _kite_cash,
             )
         except Exception as e:
             logger.warning("Failed to fetch Kite margins — cumulative P&L not seeded: %s", e)
@@ -322,6 +322,22 @@ def main():
             logger.info(
                 "Pending order re-locked on restart | %s | qty=%d est_cost=%.0f",
                 instrument, qty, estimated_cost,
+            )
+
+        # Cap buying power at real account equity (free cash + already-deployed
+        # holdings), bounded by the config ceiling. Run here — after reconciliation —
+        # so capital_deployed is known and not double-counted (capital_available
+        # already subtracts it). Cumulative P&L is left intact.
+        if _kite_cash is not None:
+            config_ceiling = config.total_capital
+            account_equity = _kite_cash + risk.capital_deployed
+            effective = min(config_ceiling, account_equity)
+            config.set_effective_capital(effective)
+            logger.info(
+                "Effective capital set | config_cap=%.0f account_equity=%.0f "
+                "(cash=%.0f + deployed=%.0f) effective=%.0f",
+                config_ceiling, account_equity, _kite_cash,
+                risk.capital_deployed, effective,
             )
 
     # Dashboard (read-only UI)

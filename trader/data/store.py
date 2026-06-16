@@ -179,6 +179,17 @@ class Store:
                 (key, value),
             )
 
+    def read_state(self) -> list[dict]:
+        """Return all rows from the state table as {key, value} dicts."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key, value FROM state ORDER BY key").fetchall()
+        return [{"key": r[0], "value": float(r[1])} for r in rows]
+
+    def delete_state(self, key: str) -> None:
+        """Delete a single key from the state table."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM state WHERE key = ?", (key,))
+
     def clear_backtest_data(self):
         """Delete all data from all tables."""
         with self._conn() as conn:

@@ -18,12 +18,9 @@ log = logging.getLogger("werkzeug")
 log.setLevel(logging.ERROR)
 
 
-def start_dashboard(bot_state, risk, store, config) -> threading.Thread:
-    """
-    Start the read-only dashboard in a daemon thread. Returns immediately.
-    If the thread crashes, the bot is unaffected — daemon threads are silently reaped.
-    """
-    port = config.ui_port
+def build_app(bot_state, risk, store, config) -> Flask:
+    """Construct the dashboard Flask app (routes wired to the live objects).
+    Separated from start_dashboard so it can be exercised with a test client."""
     app = Flask(__name__)
     app.logger.setLevel(logging.ERROR)
 
@@ -51,9 +48,49 @@ def start_dashboard(bot_state, risk, store, config) -> threading.Thread:
                 store.set_state(f"{instrument}.paused", 0.0)
         return redirect("/", code=303)  # 303 → browser re-GETs "/" (no resubmit on refresh)
 
+    @app.route("/reset_pnl", methods=["POST"])
+    def reset_pnl():
+        # Operator override for a corrupted lifetime P&L. Updates the live risk object
+        # AND persists, atomically, so the next close doesn't clobber it.
+        raw = (request.form.get("value") or "0").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            return redirect("/", code=303)
+        risk.reset_cumulative_pnl(value)
+        store.set_state("cumulative_pnl", value)
+        return redirect("/", code=303)
+
+    @app.route("/clear_stale_state", methods=["POST"])
+    def clear_stale_state():
+        # Drop position-linked state (peak_close / max_gain_pct) for instruments that
+        # are not currently open — stale trailing cruft (closed / delisted / wrong-exchange).
+        open_now = set(risk._open_positions.keys())
+        removed = 0
+        for row in store.read_state():
+            key = row["key"]
+            if key.endswith((".peak_close", ".max_gain_pct")):
+                instrument = key.rsplit(".", 1)[0]
+                if instrument not in open_now:
+                    store.delete_state(key)
+                    removed += 1
+        log.info("Cleared %d stale state row(s)", removed)
+        return redirect("/", code=303)
+
     @app.route("/healthz")
     def healthz():
         return "ok"
+
+    return app
+
+
+def start_dashboard(bot_state, risk, store, config) -> threading.Thread:
+    """
+    Start the read-only dashboard in a daemon thread. Returns immediately.
+    If the thread crashes, the bot is unaffected — daemon threads are silently reaped.
+    """
+    port = config.ui_port
+    app = build_app(bot_state, risk, store, config)
 
     def _run():
         # host="127.0.0.1": loopback only — not reachable from outside EC2.

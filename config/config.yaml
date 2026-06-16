@@ -12,7 +12,7 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 20.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
+  max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
@@ -153,7 +153,7 @@ strategies:
     # Trained on the primary's historical firings via triple-barrier outcome labels.
     # Off by default (parity-preserving). See meta_labeling_plan.md.
     meta_label:
-      enabled: true                   # FINALIZED deploy candidate (meta@0.55 + cap20 + per-stock). NOTE: needs prod cadence/frozen-artifact work before live (t2.micro warm-up cost).
+      enabled: false                   # FINALIZED deploy candidate (meta@0.55 + cap20 + per-stock). NOTE: needs prod cadence/frozen-artifact work before live (t2.micro warm-up cost).
       meta_threshold: 0.55            # min P(win) to allow the entry
       sizing:                         # Phase 2: confidence sizing — qty scaled by P(win)
         enabled: false                # when off, the gate is binary (full size)

@@ -826,6 +826,75 @@ def render_page(bot_state, risk, store, config) -> str:
     else:
         equity_section = ""
 
+    # ── persistent state panel (day-to-day continuity) ────────────────────────
+    _cum_pnl = risk.cumulative_pnl
+    _eff_cap = config.total_capital          # runtime effective (post-cap)
+    _open_now = {p["instrument"] for p in positions}
+    _state_rows = store.read_state()
+
+    _pos_rows, _ctrl_rows, _stale = [], [], 0
+    for _r in _state_rows:
+        _k, _v = _r["key"], _r["value"]
+        if _k == "cumulative_pnl":
+            continue  # shown live from risk, below
+        if _k.endswith((".peak_close", ".max_gain_pct")):
+            _inst = _k.rsplit(".", 1)[0]
+            _is_stale = _inst not in _open_now
+            if _is_stale:
+                _stale += 1
+            _tag = " <span class='dim' style='font-size:10px'>(stale)</span>" if _is_stale else ""
+            _pos_rows.append(
+                f"<tr><td class='dim'>{_k}{_tag}</td><td class='val'>{_v:g}</td></tr>"
+            )
+        elif _k.endswith(".paused"):
+            if _v > 0.5:
+                _ctrl_rows.append(
+                    f"<tr><td class='dim'>{_k.rsplit('.',1)[0]}</td>"
+                    f"<td class='val'>{_badge('PAUSED','orange')}</td></tr>"
+                )
+
+    _pos_body = "".join(_pos_rows) or "<tr><td class='dim' colspan='2'>—</td></tr>"
+    _ctrl_body = "".join(_ctrl_rows) or "<tr><td class='dim' colspan='2'>none paused</td></tr>"
+    _stale_btn = (
+        f"<form method='POST' action='/clear_stale_state' style='display:inline'>"
+        f"<button type='submit' style='font-size:10px;padding:2px 7px;border-radius:3px;"
+        f"border:1px solid #f85149;background:#21262d;color:#f85149;cursor:pointer'>"
+        f"Clear {_stale} stale</button></form>"
+        if _stale else ""
+    )
+    state_section = f"""
+    <div class="card full">
+        <h2>Persistent State (carried day-to-day)</h2>
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+            <div style="min-width:280px">
+                <h3 style="font-size:13px;margin:4px 0">Cumulative (lifetime)</h3>
+                <table>
+                    <tr><td class="dim">cumulative_pnl</td>
+                        <td class="val {_pnl_class(_cum_pnl)}">&#8377; {_cum_pnl:,.2f}</td></tr>
+                    <tr><td class="dim">effective_capital</td><td class="val">&#8377; {_eff_cap:,.0f}</td></tr>
+                    <tr><td class="dim">capital_deployed</td><td class="val">&#8377; {risk.capital_deployed:,.0f}</td></tr>
+                    <tr><td class="dim">capital_available</td><td class="val green">&#8377; {risk.capital_available:,.0f}</td></tr>
+                </table>
+                <form method="POST" action="/reset_pnl" style="margin-top:6px"
+                      onsubmit="return confirm('Override lifetime cumulative_pnl?')">
+                    <input type="number" step="0.01" name="value" value="0"
+                           style="width:110px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:3px;padding:3px">
+                    <button type="submit" style="font-size:11px;padding:3px 9px;border-radius:3px;
+                            border:1px solid #d29922;background:#21262d;color:#d29922;cursor:pointer">
+                        Reset P&amp;L</button>
+                </form>
+            </div>
+            <div style="min-width:300px">
+                <h3 style="font-size:13px;margin:4px 0">Position state {_stale_btn}</h3>
+                <table>{_pos_body}</table>
+            </div>
+            <div style="min-width:180px">
+                <h3 style="font-size:13px;margin:4px 0">Controls</h3>
+                <table>{_ctrl_body}</table>
+            </div>
+        </div>
+    </div>"""
+
     # Open positions
     _lr_cfg = config.strategy_config("lr_extrema") or {}
     _stop_pct = float(_lr_cfg.get("stop_pct", 3.0))
@@ -1295,6 +1364,7 @@ def render_page(bot_state, risk, store, config) -> str:
     {pnl_card}
     {util_section}
     {equity_section}
+    {state_section}
     {pos_section}
     {orders_section}
     {trades_section}

@@ -86,9 +86,25 @@ class MetaFilter:
         profit_pct, stop_pct, max_bars = self._barriers(exit_defaults)
         start = max(primary_pipeline.min_history, self._features.min_history)
 
+        # Perf: both feature pipelines only look back a bounded number of bars
+        # (slopes ~21, volume ~20, depth/macd ~50, meta depth_bars ~50). Passing the
+        # whole prefix candles[:i+1] makes compute() O(i) -> the scan is O(n^2). A
+        # bounded tail window gives BYTE-IDENTICAL features (tail >= every feature's
+        # lookback) at O(n*win). Derived from the pipelines (incl. depth lookbacks)
+        # plus a 64-bar margin so it stays correct if those configs change.
+        win = max(
+            primary_pipeline.min_history,
+            self._features.min_history,
+            getattr(primary_pipeline, "_depth_lookback", 0),
+            getattr(primary_pipeline, "_macd_slow", 0) + getattr(primary_pipeline, "_macd_signal", 0)
+            + getattr(primary_pipeline, "_macd_hist_lookback", 0),
+            getattr(self._features, "_depth_bars", 0),
+        ) + 64
+
         rows, labels = [], []
         for i in range(start, len(candles)):
-            x = primary_pipeline.compute(candles[: i + 1])
+            lo = max(0, i + 1 - win)
+            x = primary_pipeline.compute(candles[lo: i + 1])
             if x is None:
                 continue
             p_min, p_max = primary_predict(x)
@@ -104,7 +120,7 @@ class MetaFilter:
             )
             if label is None:  # incomplete barrier window — drop (leakage guard)
                 continue
-            x_meta = self._features.compute(candles[: i + 1], p_min=p_min, p_max=p_max, threshold=threshold)
+            x_meta = self._features.compute(candles[lo: i + 1], p_min=p_min, p_max=p_max, threshold=threshold)
             if x_meta is None:
                 continue
             rows.append(x_meta)
