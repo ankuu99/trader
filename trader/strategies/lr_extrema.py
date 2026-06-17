@@ -157,10 +157,6 @@ class LRExtremaStrategy(Strategy):
         close = candle["close"]
         self.last_filter_block = None  # reset each candle
 
-        # --- Pending fill guard (entry order sent, awaiting fill) ---
-        if self._pos.entry_price is not None and self.is_flat():
-            return None
-
         # --- Hold-bars counter (always increment while in position) ---
         if not self.is_flat():
             self._pos.held_bars += 1
@@ -170,9 +166,19 @@ class LRExtremaStrategy(Strategy):
             return None
 
         # --- Periodic retraining ---
+        # Must run BEFORE the pending-fill guard below. A phantom warm-up entry
+        # leaves _entry_price set with no fill; if the guard returned first it would
+        # short-circuit every subsequent candle and freeze the model at its early,
+        # undertrained fit (the 2026-06-17 RMDRIP P(min)=1.000 bug). Retraining must
+        # never be gated by position state.
         if not self._model.is_trained or self._candles_since_train >= self._retrain_every:
             self._train()
             self._candles_since_train = 0
+
+        # --- Pending fill guard (entry order sent, awaiting fill) ---
+        if self._pos.entry_price is not None and self.is_flat():
+            self._candles_since_train += 1  # keep retrain cadence advancing
+            return None
 
         # --- Trading window gate (all signals, entry and exit) ---
         # The position survives outside the window; the SL / hold_bars exit will fire
