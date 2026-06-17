@@ -13,7 +13,7 @@ risk:
   default_sl_pct: 3
   risk_reward: 2.5
   max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
-  trading_start: "09:30"      # no ENTRY signals accepted before this time (IST)
+  trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
 - 
@@ -36,17 +36,17 @@ watchlist:
   - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
   - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
-  - NSE:RECLTD         # +₹1.3k, 18t — power finance
+  # - NSE:RECLTD       # removed 2026-06-18: DOWNTREND + REC-into-PFC merger event risk
   # - NSE:MCX            # +₹390,  26t — commodity exchange
   # --- Borderline (few trades, positive — keep for live monitoring) ---
   # - NSE:DIXON          # +₹236,   4t — electronics manufacturing
 
   # --- New additions (screened Jun 2026) ---
-  - NSE:AQYLON         # +₹30.2k, 97t — calibrated
-  - NSE:RMDRIP         # +₹13.9k, 104t
+  # - NSE:AQYLON       # removed 2026-06-18: FALLING_KNIFE −83%; rebranded story-stock (ex-Sri Adhikari Bros TV)
+  # - NSE:RMDRIP       # removed 2026-06-18: FALLING_KNIFE −73% secular decline
   - NSE:SKYGOLD        # +₹16.9k, 119t
   - NSE:DIACABS        # +₹18.7k, 112t — calibrated
-  - NSE:TARAPUR        # +₹20.6k, 170t — calibrated
+  # - NSE:TARAPUR      # removed 2026-06-18: FALLING_KNIFE −60%; thin/illiquid microcap
 
 
 
