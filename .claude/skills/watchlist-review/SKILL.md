@@ -1,5 +1,5 @@
 ---
-description: Monthly/quarterly watchlist review — runs fresh backtest, searches recent news for each stock, and produces a Keep/Watch/Calibrate/Remove recommendation report saved to reviews/. Pass a single NSE:SYMBOL to instead run a deep-dive review of just that one stock.
+description: Monthly/quarterly watchlist review — runs a fresh backtest, a deterministic falling-knife trend guard, and (where warranted) the qualitative `qualify` gate for each stock, then produces a Keep/Watch/Calibrate/Remove recommendation report saved to reviews/. Pass a single NSE:SYMBOL to instead run a deep-dive review of just that one stock.
 argument-hint: [NSE:SYMBOL] [--skip-refresh]
 ---
 
@@ -41,11 +41,21 @@ This emits JSON for the one stock with richer breakdowns than a watchlist row:
 
 If the JSON has an `error` key, report it (bad symbol / no candles) and stop.
 
-## SD-2 — News search
+## SD-2 — Qualification gate (structural + qualitative)
 
-Search recent news for this one stock: `NSE [SYMBOL] stock news outlook 2025 2026`.
-Look for earnings surprises, guidance cuts, SEBI/regulatory actions, promoter
-pledging, sector tail/headwinds, and management/governance changes.
+Run the `qualify` skill on this stock instead of a bare news search. It pairs the
+deterministic falling-knife trend guard (`scripts/trend_guard.py`) with diverse qualitative
+sources (exchange filings, credit-rating actions, promoter pledge, event window,
+governance/sector) and returns a **FIT / WATCH / AVOID** verdict:
+
+```
+Skill("qualify", "<NSE:SYMBOL>")
+```
+
+Fold its verdict into the deep-dive: an **AVOID** here overrides a healthy-looking backtest —
+backtests are regime-blind, so a stock that traded well can be in a secular decline now (the
+RMDRIP lesson: every dip in a one-way drop looks like a local minimum). Cite the decisive
+reason in the report's "News & context" section.
 
 ## SD-3 — Replay diagnostics (optional but recommended)
 
@@ -134,19 +144,44 @@ Using the JSON data, classify each stock:
 | **WATCH** | trend=declining but recent.pnl still positive, OR sparse full.trades (< 10) |
 | **KEEP** | full.pnl > 0, trend=stable or improving, adequate trade count |
 
-## Step 3 — News search for each stock
+## Step 3 — Structural + qualitative gate
 
-For every stock in the watchlist, search for recent news:
+Don't blindly run a full multi-source qualitative search for every name — that's wasteful.
+Gate it: a cheap deterministic check for all, the deep `qualify` gate only where warranted.
 
-Query format: `NSE [SYMBOL] stock news outlook 2025 2026`
+### 3a — Trend guard for every stock (cheap, deterministic)
 
-Look for:
-- Earnings surprises, profit warnings, or guidance cuts
-- Regulatory issues, SEBI actions, promoter pledging
-- Sector tailwinds/headwinds (policy changes, commodity moves, competition)
-- Management changes or corporate governance concerns
+Run the falling-knife guard on each watchlist symbol and record its `structural_verdict`:
 
-Upgrade or downgrade the classification if news materially changes the picture (e.g. good quant but active SEBI investigation → WATCH).
+```bash
+python scripts/trend_guard.py --symbol <NSE:SYMBOL> --fetch --json 2>/dev/null
+```
+
+A `FALLING_KNIFE` or `DOWNTREND` verdict is an immediate escalation toward **REMOVE**,
+regardless of backtest P&L — it's exactly the regime mismatch the backtest can't see.
+
+### 3b — Full qualitative gate only for stocks that need it
+
+Invoke the `qualify` skill (filings, rating actions, pledge, events, governance) **only** for
+stocks that are not already clean — i.e. any of:
+- trend guard = `FALLING_KNIFE` / `DOWNTREND` / `WATCH_RECOVERING`, OR
+- Step-2 class = `REMOVE` / `CALIBRATE` / `WATCH`, OR
+- trend guard `confidence` = `low`.
+
+```
+Skill("qualify", "<NSE:SYMBOL>")
+```
+
+For stocks clean on both (Step-2 `KEEP` **and** trend guard `RANGE_BOUND` with adequate
+confidence), a single light news scan (`NSE <SYMBOL> stock news <CURRENT_YEAR>`) is enough —
+reserve the deep-gate budget for the names actually at risk.
+
+### 3c — Fold the verdicts into the classification
+
+Upgrade/downgrade each stock's Step-2 label using the gate: a `qualify` **AVOID** → `REMOVE`;
+a **WATCH** → at least `WATCH`. Disagreements between quant P&L and the gate are the most
+informative cases (e.g. good backtest but a fresh rating downgrade) — call them out explicitly
+in the report.
 
 ## Step 4 — Write the report
 
@@ -167,20 +202,22 @@ Save a markdown report to `reviews/watchlist_review_YYYYMMDD.md` with this struc
 ## Recommendations
 
 ### ✅ KEEP
-| Stock | Full P&L | Recent P&L | Trend | WR | News |
-|-------|----------|------------|-------|----|------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | News |
+|-------|----------|------------|-------|----|-------|------|------|
 
 ### 👀 WATCH
-| Stock | Full P&L | Recent P&L | Trend | WR | Concern |
-|-------|----------|------------|-------|----|---------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | Concern |
+|-------|----------|------------|-------|----|-------|------|---------|
 
 ### 🔧 CALIBRATE
-| Stock | Full P&L | Recent P&L | Trend | WR | Action |
-|-------|----------|------------|-------|----|--------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | Action |
+|-------|----------|------------|-------|----|-------|------|--------|
 
 ### ❌ REMOVE
-| Stock | Full P&L | Recent P&L | Trend | Reason |
-|-------|----------|------------|-------|--------|
+| Stock | Full P&L | Recent P&L | Trend | Guard | Gate | Reason |
+|-------|----------|------------|-------|-------|------|--------|
+
+(`Guard` = trend_guard structural verdict; `Gate` = `qualify` FIT/WATCH/AVOID where run.)
 
 ## New Candidates
 (Stocks worth screening based on sector research or news)
