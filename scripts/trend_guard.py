@@ -46,6 +46,8 @@ _KNIFE_DRAWDOWN = -40.0     # peak-to-now drawdown below this => deep decline te
 _KNIFE_RECENT_RET = -10.0   # ...and recent return below this => still falling (falling knife)
 _DOWNTREND_RET_6M = -15.0   # structural-window return below this => downtrend
 _UPTREND_RET_6M = 40.0      # structural-window return above this => strong uptrend (weak fit)
+_SPIKE_1M = 40.0            # 1-month return above this => recent parabolic move (pump risk)
+_SPIKE_3M = 60.0            # or 3-month return above this
 
 
 def _daily_closes(df: pd.DataFrame) -> pd.Series:
@@ -94,6 +96,13 @@ def evaluate(symbol: str, daily: pd.Series) -> dict:
         verdict = "DOWNTREND"
         reasons.append(f"{struct_win} return {ret_struct}% <= {_DOWNTREND_RET_6M}% "
                        f"(drawdown {dd_from_peak}%, {above_low}% above period low)")
+    elif (returns.get("1m") is not None and returns["1m"] >= _SPIKE_1M) or \
+         (returns.get("3m") is not None and returns["3m"] >= _SPIKE_3M):
+        # Recent parabolic move. A crash-then-pump round-trip nets to a small structural
+        # return, so without this check it would mislabel as RANGE_BOUND (the ELECTHERM case).
+        verdict = "SPIKE"
+        reasons.append(f"recent parabolic move (1m {returns.get('1m')}%, 3m {returns.get('3m')}%) "
+                       f"— momentum/pump risk, not oscillation")
     elif dd_from_peak <= _KNIFE_DRAWDOWN:
         verdict = "WATCH_RECOVERING"
         reasons.append(f"deep drawdown {dd_from_peak}% from peak but recent return {ret_recent}% — "
