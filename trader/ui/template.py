@@ -10,6 +10,8 @@ import sqlite3
 import time as _time
 from datetime import datetime, timezone, timedelta
 
+from trader.costs import round_trip_cost
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 _LOCAL_UTC_OFFSET_HRS = -_time.timezone / 3600
@@ -656,7 +658,7 @@ def render_page(bot_state, risk, store, config) -> str:
         FROM buy_q b
         JOIN sell_q s ON b.instrument = s.instrument AND b.rn = s.rn
         LEFT JOIN exit_sig e ON b.instrument = e.instrument AND e.rn = s.rn
-        ORDER BY b.entry_time DESC
+        ORDER BY s.exit_time DESC
         LIMIT 30
         """,
     )
@@ -1052,14 +1054,14 @@ def render_page(bot_state, risk, store, config) -> str:
 
     # Closed trade history
     if closed_trades:
-        total_pnl = sum((t.get("gross_pnl") or 0) for t in closed_trades)
-        wins = sum(1 for t in closed_trades if (t.get("gross_pnl") or 0) > 0)
-        losses = sum(1 for t in closed_trades if (t.get("gross_pnl") or 0) < 0)
-        total_sign = "+" if total_pnl >= 0 else ""
+        _product = config.product
         _EXIT_REASON_KIND = {
             "SL": "red", "TRAILING": "orange", "PATTERN_TOP": "orange",
             "STALE": "dim", "STRATEGY": "dim", "OPEN@END": "dim",
         }
+        total_pnl = 0.0   # gross
+        total_cost = 0.0
+        wins = losses = 0
         rows_html = ""
         for t in closed_trades:
             sym = t["instrument"].split(":")[-1]
@@ -1067,7 +1069,16 @@ def render_page(bot_state, risk, store, config) -> str:
             exit_p = t.get("exit_price") or 0.0
             qty = t.get("quantity") or 0
             pnl = t.get("gross_pnl") or 0.0
+            cost = round_trip_cost(_product, qty, entry_p, exit_p) if (entry_p and exit_p and qty) else 0.0
+            net = pnl - cost
+            total_pnl += pnl
+            total_cost += cost
+            if net > 0:
+                wins += 1
+            elif net < 0:
+                losses += 1
             pnl_sign = "+" if pnl >= 0 else ""
+            net_sign = "+" if net >= 0 else ""
             pct_pnl = (exit_p - entry_p) / entry_p * 100 if entry_p else 0.0
             pct_sign = "+" if pct_pnl >= 0 else ""
             entry_fmt = _fmt_ist(datetime.fromisoformat(t["entry_time"])) if t.get("entry_time") else "—"
@@ -1086,23 +1097,31 @@ def render_page(bot_state, risk, store, config) -> str:
                 f"<td>&#8377; {exit_p:.2f}</td>"
                 f"<td class='dim'>{qty}</td>"
                 f"<td class='{_pnl_class(pnl)}'>{pnl_sign}&#8377; {pnl:,.2f} ({pct_sign}{pct_pnl:.2f}%)</td>"
+                f"<td class='dim'>&#8377; {cost:,.2f}</td>"
+                f"<td class='{_pnl_class(net)}'>{net_sign}&#8377; {net:,.2f}</td>"
                 f"<td class='dim'>{dur}</td>"
                 f"<td>{reason_badge}</td>"
                 f"<td class='dim'>{exit_fmt}</td>"
                 f"</tr>"
             )
+        total_net = total_pnl - total_cost
+        total_sign = "+" if total_pnl >= 0 else ""
+        net_total_sign = "+" if total_net >= 0 else ""
         trades_section = f"""
         <div class="card full">
             <h2>Trade History — {len(closed_trades)} closed trades
                 &nbsp;<span class="dim" style="font-weight:normal;text-transform:none">
-                {wins}W / {losses}L &nbsp;·&nbsp; gross P&L
+                {wins}W / {losses}L &nbsp;·&nbsp; gross
                 <span class="{_pnl_class(total_pnl)}">{total_sign}&#8377; {total_pnl:,.2f}</span>
-                <span style="font-size:10px">(before costs)</span>
+                &nbsp;&minus;&nbsp; costs &#8377; {total_cost:,.2f}
+                &nbsp;=&nbsp; net
+                <span class="{_pnl_class(total_net)}">{net_total_sign}&#8377; {total_net:,.2f}</span>
                 </span>
             </h2>
             <table>
                 <tr><th>Entry time</th><th>Symbol</th><th>Entry &#8377;</th><th>Exit &#8377;</th>
-                    <th>Qty</th><th>Gross P&amp;L</th><th>Hold</th><th>Exit reason</th><th>Exit time</th></tr>
+                    <th>Qty</th><th>Gross P&amp;L</th><th>Cost</th><th>Net P&amp;L</th>
+                    <th>Hold</th><th>Exit reason</th><th>Exit time</th></tr>
                 {rows_html}
             </table>
         </div>"""
