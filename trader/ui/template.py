@@ -834,7 +834,7 @@ def render_page(bot_state, risk, store, config) -> str:
     _open_now = {p["instrument"] for p in positions}
     _state_rows = store.read_state()
 
-    _pos_rows, _ctrl_rows, _stale = [], [], 0
+    _pos_rows, _ctrl_rows = [], []
     for _r in _state_rows:
         _k, _v = _r["key"], _r["value"]
         if _k == "cumulative_pnl":
@@ -842,8 +842,6 @@ def render_page(bot_state, risk, store, config) -> str:
         if _k.endswith((".peak_close", ".max_gain_pct")):
             _inst = _k.rsplit(".", 1)[0]
             _is_stale = _inst not in _open_now
-            if _is_stale:
-                _stale += 1
             _tag = " <span class='dim' style='font-size:10px'>(stale)</span>" if _is_stale else ""
             _pos_rows.append(
                 f"<tr><td class='dim'>{_k}{_tag}</td><td class='val'>{_v:g}</td></tr>"
@@ -857,13 +855,6 @@ def render_page(bot_state, risk, store, config) -> str:
 
     _pos_body = "".join(_pos_rows) or "<tr><td class='dim' colspan='2'>—</td></tr>"
     _ctrl_body = "".join(_ctrl_rows) or "<tr><td class='dim' colspan='2'>none paused</td></tr>"
-    _stale_btn = (
-        f"<form method='POST' action='/clear_stale_state' style='display:inline'>"
-        f"<button type='submit' style='font-size:10px;padding:2px 7px;border-radius:3px;"
-        f"border:1px solid #f85149;background:#21262d;color:#f85149;cursor:pointer'>"
-        f"Clear {_stale} stale</button></form>"
-        if _stale else ""
-    )
     state_section = f"""
     <div class="card full">
         <h2>Persistent State (carried day-to-day)</h2>
@@ -887,7 +878,7 @@ def render_page(bot_state, risk, store, config) -> str:
                 </form>
             </div>
             <div style="min-width:300px">
-                <h3 style="font-size:13px;margin:4px 0">Position state {_stale_btn}</h3>
+                <h3 style="font-size:13px;margin:4px 0">Position state</h3>
                 <table>{_pos_body}</table>
             </div>
             <div style="min-width:180px">

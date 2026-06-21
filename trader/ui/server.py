@@ -61,22 +61,6 @@ def build_app(bot_state, risk, store, config) -> Flask:
         store.set_state("cumulative_pnl", value)
         return redirect("/", code=303)
 
-    @app.route("/clear_stale_state", methods=["POST"])
-    def clear_stale_state():
-        # Drop position-linked state (peak_close / max_gain_pct) for instruments that
-        # are not currently open — stale trailing cruft (closed / delisted / wrong-exchange).
-        open_now = set(risk._open_positions.keys())
-        removed = 0
-        for row in store.read_state():
-            key = row["key"]
-            if key.endswith((".peak_close", ".max_gain_pct")):
-                instrument = key.rsplit(".", 1)[0]
-                if instrument not in open_now:
-                    store.delete_state(key)
-                    removed += 1
-        log.info("Cleared %d stale state row(s)", removed)
-        return redirect("/", code=303)
-
     @app.route("/healthz")
     def healthz():
         return "ok"
