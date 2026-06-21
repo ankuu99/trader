@@ -159,18 +159,21 @@ class LiveFeed:
     # ------------------------------------------------------------------ #
 
     def _process_tick(self, tick: dict):
-        # Dispatch raw tick to all tick handlers
-        for handler in self._tick_handlers:
-            try:
-                handler(tick)
-            except Exception:
-                logger.exception("Error in tick handler")
-
         token = tick.get("instrument_token")
         ltp = tick.get("last_price")
         logger.debug("Tick | token=%s ltp=%s", token, ltp)
         volume = tick.get("volume_traded", 0)
-        ts_raw: datetime = tick.get("timestamp") or datetime.now()
+
+        # KiteTicker exposes the trade time as exchange_timestamp / last_trade_time —
+        # there is no "timestamp" key on a raw tick. Normalise to a canonical IST
+        # "timestamp" here so every downstream consumer (on_tick window gate, exit
+        # policy force-close, candle bucketing, signal logging) reads one field, and
+        # it matches the key the backtest engine feeds.
+        ts_raw: datetime = (
+            tick.get("exchange_timestamp")
+            or tick.get("last_trade_time")
+            or datetime.now()
+        )
         if ts_raw.tzinfo is not None:
             # Aware datetime — convert to IST, strip tzinfo
             ts = ts_raw.astimezone(timezone(_IST_OFFSET)).replace(tzinfo=None)
@@ -180,6 +183,14 @@ class LiveFeed:
         else:
             # Naive datetime on a local (IST) machine — use as-is
             ts = ts_raw
+        tick["timestamp"] = ts
+
+        # Dispatch the normalised tick to all tick handlers
+        for handler in self._tick_handlers:
+            try:
+                handler(tick)
+            except Exception:
+                logger.exception("Error in tick handler")
 
         if token is None or ltp is None:
             return
