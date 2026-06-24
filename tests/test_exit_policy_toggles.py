@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from trader.core.config import flatten_strategy_params
 from trader.policy.extrema_exit import ExtremaExitPolicy
+from trader.risk.manager import RiskManager
+from trader.strategies.base import Direction, Signal, SignalType
 
 
 def _policy(**trailing_pattern):
@@ -61,3 +63,36 @@ def test_confidence_sized_trail_interpolation():
     assert abs(pol._effective_trail_pct(SimpleNamespace(_last_p_max=0.70)) - 4.0) < 1e-9
     # missing attribute is safe (treated as 0 -> loose end)
     assert pol._effective_trail_pct(SimpleNamespace()) == 6
+
+
+# --- Step 2: scale-out / partial exit ---
+
+def test_flatten_resolves_scale_out():
+    p = flatten_strategy_params({
+        "exits": {"pattern_top": {"scale_out": {"enabled": True, "fraction": 0.7}}}
+    })
+    assert p["pattern_top_scale_out_enabled"] is True
+    assert p["pattern_top_scale_out_fraction"] == 0.7
+
+
+def test_validate_exit_partial_quantity():
+    risk = RiskManager()
+    risk.on_order_filled("NSE:TEST", 100.0, 100)
+    sig = Signal(instrument="NSE:TEST", direction=Direction.BUY, signal_type=SignalType.EXIT,
+                 price_hint=110.0, strategy="t", exit_fraction=0.7)
+    order = risk.validate(sig)
+    assert order is not None and order.quantity == 70
+    # full position still tracked until the fill is processed
+    assert risk._open_positions["NSE:TEST"] == 100
+
+
+def test_reduce_position_keeps_remainder():
+    risk = RiskManager()
+    risk.on_order_filled("NSE:TEST", 100.0, 100)
+    risk.reduce_position("NSE:TEST", 70, 110.0)
+    assert risk._open_positions["NSE:TEST"] == 30          # remainder open
+    assert abs(risk._position_values["NSE:TEST"] - 3000.0) < 1e-6  # 30 @ entry 100
+    assert abs(risk.cumulative_pnl - 700.0) < 1e-6         # (110-100)*70
+    # reducing the rest closes it out
+    risk.reduce_position("NSE:TEST", 30, 110.0)
+    assert "NSE:TEST" not in risk._open_positions

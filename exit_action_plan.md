@@ -172,10 +172,34 @@ already failing on clean HEAD before this work (stale golden, unrelated).
       profit_pct=10` (+29% P&L, Calmar 1.13→1.62). Tested on 2025-01→2026-06.
 - [x] **Step 1 — confidence-sized trailing** — NEGATIVE (₹61k < ₹74k static). Shipped
       behind `confidence_sizing` toggle, default OFF.
-- [ ] Step 2 — partial / scaled exit ← in progress.
-- [ ] Step 3 — confidence-gated full exit (optional).
+- [x] **Step 2 — partial / scaled exit** — WIN, adopted. scale-out 0.7 @0.85 + tight
+      trail (2) + profit 10 → ₹109.8k (+91% vs original baseline), Calmar 1.13→2.63,
+      win 50%→67%, DD 13.3%→10.7%. Shipped behind `exits.pattern_top.scale_out`.
+- [ ] Step 3 — confidence-gated full exit (optional, not pursued — Step 2 wins).
+- [x] Validate Step 2 on rolling windows — walk-forward 83% consistency, PF 1.38 (2025-26).
+- [x] **Overnight-trailing — INVESTIGATED, REJECTED.** Prize evaporated once scale-out
+      landed (same-day ₹109.8k ≥ overnight ₹99.5k at trail 2; overnight only ties at
+      trail 1.5, within noise). Not worth the persistence + gap risk. See below.
+- [ ] Paper-trade Step 2 before live (recommended final check).
 
 ### Overnight-trailing future workstream (from user discussion)
-Overnight hold beats same-day on P&L+Calmar but needs trailing-state persistence
-(`trailing_active`/`peak_close`/`max_gain_pct`) + restart bootstrap before it is safe in
-live. Toggle already exists (`force_close_time: null`). Not implemented — documented only.
+Overnight hold beat same-day **before scale-out existed** (₹80.5k vs ₹57.4k, the
+trailing-only era). **RE-MEASURED on the adopted scale-out config (2026-06-24): the prize
+is gone.** Scale-out already banks 70% at the top intraday, so overnight only rides the
+30% tail — and that loses vs same-day:
+
+| config (adopted base) | P&L | Calmar | MaxDD% |
+|---|---|---|---|
+| same-day (adopted) | ₹109.8k | 2.625 | 10.66 |
+| overnight, trail 2 | ₹99.5k | 2.432 | 10.47 |
+| overnight, trail 1.5 | ₹111.4k | 2.900 | 9.78 |
+| overnight, trail 3 | ₹83.4k | 1.757 | 12.25 |
+
+Only `overnight + trail 1.5` edges same-day (+1.4% P&L, Calmar 2.62→2.90) — within noise,
+and the backtest *over*-models overnight (assumes next-morning gap-adjusted fills; real
+gaps/halts are worse). **Decision: do NOT implement overnight trailing.** The persistence +
+restart-bootstrap engineering and overnight gap risk are not justified by a ~1.4% edge.
+Scale-out captures the swing upside intraday — strictly better risk profile. Toggle
+(`force_close_time: null`) remains available if revisited. Persistence infra status: peak_close/
+max_gain_pct persisted+restored; trailing_active/pattern_top_trailing persisted but NOT
+restored; partial_taken not persisted — would all need wiring if ever revived.

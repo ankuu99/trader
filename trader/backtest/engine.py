@@ -117,27 +117,40 @@ def run_backtest(
         quantity = update["quantity"]
 
         if direction == "SELL" and instrument in open_positions:
-            pos = open_positions.pop(instrument)
+            pos = open_positions[instrument]
+            # Partial (scale-out) fill: sold qty is less than the open qty — record the
+            # sold portion as a trade, shrink the position, and keep it open. The
+            # remainder exits later via trailing/hold/stale/hard-stop.
+            is_partial = 0 < quantity < pos["qty"]
+            sold_qty = quantity if is_partial else pos["qty"]
             net, cost, product = _net_pnl(
-                pos["entry"], fill_price, pos["qty"], pos["entry_date"], current_ts[0]
+                pos["entry"], fill_price, sold_qty, pos["entry_date"], current_ts[0]
             )
+            _reason = pending_exit_reasons.pop(instrument, "STRATEGY")
             trades.append({
                 "instrument": instrument,
                 "entry": pos["entry"],
                 "exit": fill_price,
-                "qty": pos["qty"],
+                "qty": sold_qty,
                 "pnl": net,
                 "cost": cost,
                 "product": product,
-                "reason": pending_exit_reasons.pop(instrument, "STRATEGY"),
+                "reason": _reason,
                 "entry_date": pos["entry_date"],
                 "exit_date": current_ts[0],
                 "held_candles": pos.get("candle_count", 0),
             })
-            risk.close_position(instrument, fill_price)
             s = strategy_map.get(instrument)
-            if s:
-                s.on_order_update(update)
+            if is_partial:
+                pos["qty"] -= sold_qty
+                risk.reduce_position(instrument, sold_qty, fill_price)
+                if s:
+                    s.on_order_update({**update, "partial": True})
+            else:
+                open_positions.pop(instrument)
+                risk.close_position(instrument, fill_price)
+                if s:
+                    s.on_order_update(update)
             return
 
         # BUY fill — open new position

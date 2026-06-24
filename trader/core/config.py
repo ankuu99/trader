@@ -70,6 +70,12 @@ def flatten_strategy_params(params: dict) -> dict:
         _set(p, "sell_threshold", pattern_top, "sell_threshold")
         _set(p, "min_hold_before_exit", pattern_top, "min_hold_before_exit")
         _set(p, "pattern_top_direct_exit", pattern_top, "direct_exit")
+        # Scale-out (Step 2): on a pattern-top, sell `fraction` and trail the rest.
+        # Presence = enabled.
+        if "scale_out" in pattern_top:
+            so = pattern_top["scale_out"] or {}
+            p["pattern_top_scale_out_enabled"] = bool(so.get("enabled", True))
+            _set(p, "pattern_top_scale_out_fraction", so, "fraction")
 
         if "stale" in exits:
             p["stale_exit_enabled"] = True

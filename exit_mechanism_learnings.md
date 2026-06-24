@@ -244,3 +244,42 @@ Best variant ₹61.3k vs the static `(3,10,200)` ₹74.0k — **every CS variant
 static loosening**. Tightening on high `P(max)` reintroduces the early-exit problem.
 Shipped behind `exits.trailing.confidence_sizing` (default OFF); left off. The lever is
 "let winners run" (static), not "smart trailing."
+
+## Step 2 — pattern-top scale-out (WIN, adopted)
+
+On a pattern-top, sell a fraction and **trail the remainder tightly**. Combines banking
+profit at the detected top (high win rate) with letting a slice run (upside). Config:
+`exits.pattern_top.scale_out: { enabled, fraction }`. Implemented across Signal /
+ExitDecision / PositionState (`partial_taken`) / `RiskManager.reduce_position` /
+`OrderManager` (qty encodes partial) / engine (`fill_qty < pos_qty` ⇒ partial) /
+`base.on_order_update` (partial fill keeps position open).
+
+Sweep on 2025-01→2026-06 (base already has Step 0). The optimum is broad (not a spike):
+
+| config | P&L | Win% | Sharpe | Calmar | MaxDD% |
+|---|---|---|---|---|---|
+| original baseline (2,5) | ₹57.4k | 50.3 | 0.085 | 1.134 | 13.3 |
+| Step 0 adopted (3,10) | ₹74.0k | 49.8 | 0.103 | 1.617 | 11.9 |
+| **scale-out 0.7 @0.85, trail=2, profit=10** | **₹109.8k** | **66.8** | **0.141** | **2.625** | **10.7** |
+
+vs the original baseline: **+91% P&L, Calmar 1.13→2.63, win 50%→67%, drawdown 13.3%→
+10.7%** — better on every axis. Note: with scale-out the optimal trail *tightens back to
+2* (protect the small remainder). Reason mix confirms mechanics: 296 `PATTERN_TOP_PARTIAL`
+(+₹237k) + remainders via `TRAILING`/`TRAILING_EOD_CLOSE` (+₹107k); `STALE` losses
+unchanged. **Adopted in `config.yaml`.**
+
+### Caveat / next
+Tuned on a single 18-month window (2025-26, the tougher non-bull regime per request).
+Before live: validate on rolling windows (`backtest_rolling.py`) and live-paper. The
+overnight-trailing workstream (persistence + restart bootstrap) remains a separate,
+larger opportunity (beats same-day on P&L+Calmar) — see plan.
+
+## Summary of net effect (2025-01 → 2026-06, honest same-day engine)
+
+| stage | P&L | Calmar | note |
+|---|---|---|---|
+| pre-fix baseline (inflated) | ₹80.5k | 1.98 | trailing rode overnight (bug) |
+| honest baseline (EOD fix) | ₹57.4k | 1.13 | true number |
+| + Step 0 (loosen trailing) | ₹74.0k | 1.62 | trailing was too tight |
+| + Step 1 (confidence trail) | — | — | rejected (negative) |
+| **+ Step 2 (scale-out 0.7)** | **₹109.8k** | **2.63** | **adopted** |

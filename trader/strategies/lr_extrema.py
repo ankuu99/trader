@@ -322,6 +322,7 @@ class LRExtremaStrategy(Strategy):
             strategy=self.name,
             exit_reason=decision.exit_reason,
             timestamp=decision.timestamp,
+            exit_fraction=getattr(decision, "exit_fraction", None),
         )
 
     def on_tick(self, tick: dict) -> Signal | None:
@@ -375,7 +376,10 @@ class LRExtremaStrategy(Strategy):
                 held_bars = order.get("_held_bars")
                 self._pos.held_bars = int(held_bars) if held_bars is not None else 0
             elif signal_type == SignalType.EXIT:
-                self._pos.reset()
+                # Partial (scale-out) fill: position stays open with the remainder —
+                # keep entry/trailing state intact (partial_taken already set).
+                if not order.get("partial"):
+                    self._pos.reset()
         elif status in ("REJECTED", "CANCELLED"):
             if signal_type == SignalType.ENTRY:
                 logger.warning(

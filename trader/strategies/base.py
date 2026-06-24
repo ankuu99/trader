@@ -33,6 +33,7 @@ class Signal:
     exit_reason: str | None = None        # EXIT only: reason code passed to backtest trade record (e.g. "PATTERN_TOP")
     timestamp: object | None = None       # candle/tick timestamp; used by RiskManager for trading-window gate
     size_weight: float | None = None      # ENTRY only: confidence multiplier (meta-labeling sizing); scales risk-based qty. None = full size
+    exit_fraction: float | None = None     # EXIT only: fraction of position to sell (scale-out). None/1.0 = full close
 
 
 class Strategy(ABC):
@@ -92,7 +93,8 @@ class Strategy(ABC):
             signal_type = order.get("signal_type")
             if signal_type == SignalType.ENTRY:
                 self.position = Direction(direction)
-            elif signal_type == SignalType.EXIT:
+            elif signal_type == SignalType.EXIT and not order.get("partial"):
+                # Partial (scale-out) fills leave the position open with the remainder.
                 self.position = None
         elif status in ("REJECTED", "CANCELLED"):
             # Order didn't go through — leave position state unchanged

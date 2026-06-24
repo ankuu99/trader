@@ -54,6 +54,9 @@ class ExtremaExitPolicy:
         self._trail_tight: float = float(params.get("trail_tight", self._trail_pct))
         self._trail_conf_p_lo: float = float(params.get("trail_conf_p_lo", 0.5))
         self._trail_conf_p_hi: float = float(params.get("trail_conf_p_hi", 0.9))
+        # Scale-out (Step 2): on a pattern-top, sell a fraction and trail the rest.
+        self._scale_out_enabled: bool = bool(params.get("pattern_top_scale_out_enabled", False))
+        self._scale_out_fraction: float = float(params.get("pattern_top_scale_out_fraction", 0.5))
 
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
@@ -179,6 +182,24 @@ class ExtremaExitPolicy:
                         "p_max": p_max,
                         "type": "PATTERN_TOP",
                     })
+                    # Scale-out mode: sell a fraction now, arm trailing on the rest.
+                    # Fires once per position (partial_taken guard).
+                    if self._scale_out_enabled and not pos.partial_taken:
+                        # Arm trailing so the remainder rides with downside protection.
+                        if self._trailing_enabled and not pos.trailing_active:
+                            pos.trailing_active = True
+                            if pos.peak_close is None:
+                                pos.peak_close = close
+                        pos.pattern_top_trailing = True
+                        pos.partial_taken = True
+                        logger.info(
+                            "LR-Extrema EXIT (pattern-top scale-out %.0f%%) | %s | P(max)=%.3f >= %.3f | "
+                            "gain=%.2f%% | held=%d | close=%.2f | candle=%s",
+                            self._scale_out_fraction * 100, strat.instrument, p_max,
+                            self._sell_threshold, _pct_gain, pos.held_bars, close, ts,
+                        )
+                        return ExitDecision(price_hint=close, exit_reason="PATTERN_TOP_PARTIAL",
+                                            timestamp=ts, exit_fraction=self._scale_out_fraction)
                     # Direct-exit mode: exit at this candle close, no trailing.
                     if self._pattern_top_direct_exit:
                         logger.info(

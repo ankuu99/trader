@@ -238,12 +238,20 @@ class RiskManager:
         )
 
     def _validate_exit(self, signal: Signal) -> Order | None:
-        """Return a SELL order to close an open position."""
+        """Return a SELL order to close an open position (or a fraction of it)."""
         quantity = self._open_positions.get(signal.instrument, 0)
         if quantity <= 0:
             logger.warning("Exit signal for instrument not in positions | %s", signal.instrument)
             return None
-        logger.info("Exit approved | %s x%d @ ~%.2f", signal.instrument, quantity, signal.price_hint)
+        # Scale-out: sell only a fraction, leaving the remainder open. Never round to 0
+        # (min 1 share) and never to the full position (leave >=1 so it stays open).
+        frac = signal.exit_fraction
+        if frac is not None and 0 < frac < 1.0 and quantity > 1:
+            quantity = max(1, min(quantity - 1, int(quantity * frac)))
+            logger.info("Partial exit approved | %s x%d (frac=%.2f) @ ~%.2f",
+                        signal.instrument, quantity, frac, signal.price_hint)
+        else:
+            logger.info("Exit approved | %s x%d @ ~%.2f", signal.instrument, quantity, signal.price_hint)
         return Order(
             instrument=signal.instrument,
             direction=Direction.SELL,
@@ -346,6 +354,36 @@ class RiskManager:
                     "Daily loss limit breached | daily_pnl=%.2f limit=%.2f — halting",
                     self._realised_pnl, config.daily_loss_limit,
                 )
+                telegram.notify_halt(self._realised_pnl, config.daily_loss_limit, config.env)
+
+    def reduce_position(self, instrument: str, qty: int, exit_price: float = 0.0):
+        """Partially close a position (scale-out): reduce tracked quantity and
+        deployed capital pro-rata, accumulate realised P&L on the sold portion, and
+        keep the remainder open. No-op if the instrument isn't tracked or qty would
+        close it fully (callers should use close_position for that)."""
+        held = self._open_positions.get(instrument, 0)
+        if held <= 0 or qty <= 0:
+            return
+        qty = min(qty, held)
+        if qty >= held:
+            self.close_position(instrument, exit_price)
+            return
+        deployed = self._position_values.get(instrument, 0.0)
+        entry_price = deployed / held if held else 0.0
+        freed = entry_price * qty
+        self._open_positions[instrument] = held - qty
+        self._position_values[instrument] = deployed - freed
+        self._capital_deployed = max(0.0, self._capital_deployed - freed)
+        if exit_price and entry_price:
+            pnl = (exit_price - entry_price) * qty
+            self._realised_pnl += pnl
+            self._cumulative_pnl += pnl
+            logger.info(
+                "Partial close | %s x%d of %d | entry=%.2f exit=%.2f | trade_pnl=%.2f",
+                instrument, qty, held, entry_price, exit_price, pnl,
+            )
+            if not self._halted and self._realised_pnl <= -config.daily_loss_limit:
+                self._halted = True
                 telegram.notify_halt(self._realised_pnl, config.daily_loss_limit, config.env)
 
     def reset_day(self):

@@ -23,6 +23,7 @@ class PositionState:
     pattern_top_trailing: bool = False
     max_gain_pct: float = 0.0
     breakeven_active: bool = False
+    partial_taken: bool = False  # Step 2: a pattern-top scale-out has already fired
 
     def reset(self) -> None:
         """Clear all position-tracking fields (except fill_price). Matches the
@@ -34,6 +35,7 @@ class PositionState:
         self.pattern_top_trailing = False
         self.max_gain_pct = 0.0
         self.breakeven_active = False
+        self.partial_taken = False
 
 
 @dataclass
@@ -42,3 +44,4 @@ class ExitDecision:
     price_hint: float
     exit_reason: str | None = None
     timestamp: object | None = None
+    exit_fraction: float | None = None  # Step 2: <1.0 = partial (scale-out); None/1.0 = full
