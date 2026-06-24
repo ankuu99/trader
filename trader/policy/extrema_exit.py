@@ -39,6 +39,21 @@ class ExtremaExitPolicy:
         self._sell_threshold: float = params.get("sell_threshold", 0.65)
         self._sell_min_pct: float = params.get("sell_min_pct", 2.0)
         self._min_hold_before_exit: int = params.get("min_hold_before_exit", 3)
+        # Master switch for ALL trailing (fixed-percent activation + pattern-top
+        # trailing). Default True = unchanged behaviour.
+        self._trailing_enabled: bool = bool(params.get("trailing_enabled", True))
+        # When True, a pattern-top fires an immediate EXIT at the candle close
+        # instead of arming trailing — "exit exactly where the model says".
+        self._pattern_top_direct_exit: bool = bool(params.get("pattern_top_direct_exit", False))
+        # Confidence-sized trailing (Step 1): when enabled, the trailing distance is
+        # interpolated from the model's live P(max) — loose (trail_loose) while no top
+        # is suspected, tightening to trail_tight once P(max) >= p_hi. Falls back to the
+        # static trail_pct when disabled.
+        self._trail_conf_enabled: bool = bool(params.get("trail_conf_enabled", False))
+        self._trail_loose: float = float(params.get("trail_loose", self._trail_pct))
+        self._trail_tight: float = float(params.get("trail_tight", self._trail_pct))
+        self._trail_conf_p_lo: float = float(params.get("trail_conf_p_lo", 0.5))
+        self._trail_conf_p_hi: float = float(params.get("trail_conf_p_hi", 0.9))
 
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
@@ -59,6 +74,19 @@ class ExtremaExitPolicy:
 
         _ftic = params.get("force_trailing_close_time")
         self._force_trailing_close = _parse_time(_ftic, time(15, 25)) if _ftic else None
+
+    def _effective_trail_pct(self, strat) -> float:
+        """Trailing distance for the current bar. Static (trail_pct) unless
+        confidence-sizing is enabled, in which case it interpolates between
+        trail_loose (at/below p_lo) and trail_tight (at/above p_hi) using the
+        model's latest P(max) — a firming top tightens the trail to lock gains."""
+        if not self._trail_conf_enabled:
+            return self._trail_pct
+        p_max = getattr(strat, "_last_p_max", 0.0) or 0.0
+        lo, hi = self._trail_conf_p_lo, self._trail_conf_p_hi
+        f = 0.0 if hi <= lo else (p_max - lo) / (hi - lo)
+        f = max(0.0, min(1.0, f))
+        return self._trail_loose - (self._trail_loose - self._trail_tight) * f
 
     # ------------------------------------------------------------------
     # Candle-speed exits
@@ -151,7 +179,17 @@ class ExtremaExitPolicy:
                         "p_max": p_max,
                         "type": "PATTERN_TOP",
                     })
-                    if not pos.pattern_top_trailing:
+                    # Direct-exit mode: exit at this candle close, no trailing.
+                    if self._pattern_top_direct_exit:
+                        logger.info(
+                            "LR-Extrema EXIT (pattern-top direct) | %s | P(max)=%.3f >= %.3f | "
+                            "gain=%.2f%% | held=%d | close=%.2f | candle=%s",
+                            strat.instrument, p_max, self._sell_threshold, _pct_gain,
+                            pos.held_bars, close, ts,
+                        )
+                        pos.reset()
+                        return ExitDecision(price_hint=close, exit_reason="PATTERN_TOP", timestamp=ts)
+                    if self._trailing_enabled and not pos.pattern_top_trailing:
                         if not pos.trailing_active:
                             pos.trailing_active = True
                             if pos.peak_close is None:
@@ -179,7 +217,7 @@ class ExtremaExitPolicy:
 
         # Activate trailing once minimum profit floor is reached
         pct = (last_price - pos.entry_price) / pos.entry_price * 100.0
-        if not pos.trailing_active and pct >= self._profit_pct:
+        if self._trailing_enabled and not pos.trailing_active and pct >= self._profit_pct:
             pos.trailing_active = True
             logger.info(
                 "LR-Extrema TRAILING activated | %s | pct=+%.2f%% >= floor=%.2f%% | peak=%.2f",
@@ -215,8 +253,9 @@ class ExtremaExitPolicy:
             reason = f"stop-loss {pct:.2f}%"
         elif reason is None and pos.trailing_active:
             drawdown = (last_price - pos.peak_close) / pos.peak_close * 100.0
-            if drawdown <= -self._trail_pct:
-                reason = f"trailing stop {drawdown:.2f}% from peak {pos.peak_close:.2f}"
+            trail_dist = self._effective_trail_pct(strat)
+            if drawdown <= -trail_dist:
+                reason = f"trailing stop {drawdown:.2f}% from peak {pos.peak_close:.2f} (dist={trail_dist:.2f}%)"
         # Trailing floor — pattern-top trailing uses sell_min_pct as floor; regular uses profit_pct.
         _use_floor = (not pos.pattern_top_trailing) or self._pattern_top_floor_enabled
         _floor_pct = self._sell_min_pct if pos.pattern_top_trailing else self._profit_pct

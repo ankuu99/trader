@@ -51,14 +51,25 @@ def flatten_strategy_params(params: dict) -> dict:
         _set(p, "stop_pct", hard_stop, "stop_pct")
 
         trailing = exits.get("trailing") or {}
+        _set(p, "trailing_enabled", trailing, "enabled")
         _set(p, "profit_pct", trailing, "profit_pct")
         _set(p, "trail_pct", trailing, "trail_pct")
         _set(p, "force_trailing_close_time", trailing, "force_close_time")
         _set(p, "pattern_top_floor_enabled", trailing, "pattern_top_floor_enabled")
+        # Confidence-sized trailing (Step 1): trail distance scales with P(max) —
+        # loose when no top suspected, tight as a top firms up. Presence = enabled.
+        if "confidence_sizing" in trailing:
+            cs = trailing["confidence_sizing"] or {}
+            p["trail_conf_enabled"] = bool(cs.get("enabled", True))
+            _set(p, "trail_loose", cs, "trail_loose")
+            _set(p, "trail_tight", cs, "trail_tight")
+            _set(p, "trail_conf_p_lo", cs, "p_lo")
+            _set(p, "trail_conf_p_hi", cs, "p_hi")
 
         pattern_top = exits.get("pattern_top") or {}
         _set(p, "sell_threshold", pattern_top, "sell_threshold")
         _set(p, "min_hold_before_exit", pattern_top, "min_hold_before_exit")
+        _set(p, "pattern_top_direct_exit", pattern_top, "direct_exit")
 
         if "stale" in exits:
             p["stale_exit_enabled"] = True

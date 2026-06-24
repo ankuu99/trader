@@ -69,10 +69,13 @@ strategies:
       hard_stop:
         stop_pct: 20              # hard stop-loss % from entry (also the entry SL hint)
       trailing:
-        profit_pct: 5             # min profit % before trailing activates
-        trail_pct: 2              # trailing distance % from peak
+        profit_pct: 10            # min profit % before trailing activates (Step 0: 5→10, +29% P&L, Calmar 1.13→1.62 on 2025-26)
+        trail_pct: 3              # trailing distance % from peak (Step 0: 2→3 — trailing was too tight)
         force_close_time: "15:25" # force-close trailing positions before this time (None=off)
         pattern_top_floor_enabled: false  # if true, exit when gain drops below sell_min_pct
+        # Step 1 (confidence-sized trailing) — OFF: validated worse than static loosening
+        # above (₹61k vs ₹74k). Trail distance would scale with P(max) when enabled.
+        # confidence_sizing: { enabled: true, trail_loose: 6, trail_tight: 2, p_lo: 0.5, p_hi: 0.9 }
       pattern_top:
         sell_threshold: 0.85      # P(local-max) that arms pattern-top trailing
         min_hold_before_exit: 1   # min bars held before pattern-top can fire

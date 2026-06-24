@@ -69,10 +69,19 @@ class LRExtremaStrategy(Strategy):
         # entry stop-loss hint; the exit policy owns the live hard-stop
         self._stop_pct: float = params.get("stop_pct", 3.0)
         self._retrain_every: int = params.get("retrain_every", 50)
+        # When true, _train logs an out-of-sample (temporal-holdout) quality report
+        # for both classes — precision/recall at the operating thresholds plus the
+        # P(max)/P(min) separation. Off by default to keep backtest logs quiet.
+        self._diag_enabled: bool = bool(params.get("training_diagnostics", False))
+        # Pooled OOS (p_max, is_top) pairs across all retrains — used to emit a
+        # precision/recall curve over a sell_threshold grid for recalibration.
+        self._diag_pool_pmax: list[float] = []
+        self._diag_pool_istop: list[int] = []
 
         # --- Pipeline (S1) / model (S2) / policies (S3) / labeler (S4) ---
         self._features = build_feature_pipeline(params.get("features", {}))
-        self._model = build_model(params.get("model"))
+        self._model_cfg = params.get("model")  # kept for the diagnostic eval-model rebuild
+        self._model = build_model(self._model_cfg)
         self._entry_policy = ExtremaEntryPolicy(params)
         self._exit_policy = ExtremaExitPolicy(params)
         self._labeler = build_labeler(instrument, params)
@@ -397,12 +406,13 @@ class LRExtremaStrategy(Strategy):
         if not indices:
             return
 
-        rows, labels = [], []
+        rows, labels, kept_idx = [], [], []
         for idx, cls in zip(indices, classes):
             feat = self._features.compute(candles[: idx + 1])
             if feat is not None:
                 rows.append(feat)
                 labels.append(cls)
+                kept_idx.append(idx)
 
         if len(rows) < MIN_SAMPLES_PER_CLASS * 2:
             return
@@ -417,9 +427,94 @@ class LRExtremaStrategy(Strategy):
             self.instrument, len(rows), labels.count(0), labels.count(1),
         )
 
+        # Out-of-sample quality report (no-op unless training_diagnostics enabled).
+        if self._diag_enabled:
+            self._log_training_diagnostics(kept_idx, rows, labels)
+
         # Retrain the meta-labeling filter on the primary's historical firings.
         # No-op unless meta_label.enabled. Past-only buffer => no look-ahead.
         self._meta.train(
             candles, self._features, self._model.predict_proba,
             self._threshold, self._veto_threshold, self._meta_exit_defaults,
         )
+
+    # ------------------------------------------------------------------
+    # Training diagnostics (#8) — out-of-sample peak/dip detection quality
+    # ------------------------------------------------------------------
+
+    def _log_training_diagnostics(self, kept_idx, rows, labels) -> None:
+        """Temporal-holdout evaluation of detection quality, logged per retrain.
+
+        Splits the labelled samples chronologically (70/30), fits a throwaway model
+        of the same config on the earlier 70%, and scores the held-out 30% at the
+        live operating thresholds. Reports, per class:
+          - precision = TP / (TP + FP)  → high precision means few FALSE POSITIVES
+          - recall    = TP / (TP + FN)  → high recall means few FALSE NEGATIVES
+        plus the mean P(max) on true tops vs non-tops (separation). The deployed
+        model is unaffected — this fits its own eval model on a strict past slice.
+        """
+        order = sorted(range(len(kept_idx)), key=lambda i: kept_idx[i])
+        X_all = np.array([rows[i] for i in order], dtype=float)
+        y_all = np.array([labels[i] for i in order], dtype=int)
+        n = len(y_all)
+        split = int(n * 0.7)
+        X_tr, y_tr = X_all[:split], y_all[:split]
+        X_te, y_te = X_all[split:], y_all[split:]
+
+        # Need both classes in train, and at least one of each in the holdout.
+        if (y_tr.tolist().count(0) < MIN_SAMPLES_PER_CLASS
+                or y_tr.tolist().count(1) < MIN_SAMPLES_PER_CLASS
+                or 0 not in y_te.tolist() or 1 not in y_te.tolist()):
+            logger.debug(
+                "LR-Extrema diag | %s | holdout too small (n=%d) — skipping", self.instrument, n,
+            )
+            return
+
+        eval_model = build_model(self._model_cfg)
+        eval_model.fit(X_tr, y_tr)
+        probs = [eval_model.predict_proba(x) for x in X_te]
+        p_min = np.array([p[0] for p in probs])
+        p_max = np.array([p[1] for p in probs])
+
+        def _pr(pred: np.ndarray, actual: np.ndarray) -> tuple[float, float, int]:
+            tp = int(np.sum(pred & actual))
+            fp = int(np.sum(pred & ~actual))
+            fn = int(np.sum(~pred & actual))
+            prec = tp / (tp + fp) if (tp + fp) else float("nan")
+            rec = tp / (tp + fn) if (tp + fn) else float("nan")
+            return prec, rec, int(np.sum(actual))
+
+        is_top = y_te == 1
+        is_dip = y_te == 0
+        top_prec, top_rec, n_top = _pr(p_max >= self._sell_threshold, is_top)
+        dip_prec, dip_rec, n_dip = _pr(p_min >= self._threshold, is_dip)
+
+        # Opt-in diagnostic — print so it survives backtest's ERROR log level.
+        print(
+            f"DIAG {self.instrument} | holdout n={len(y_te)} (dip={n_dip} top={n_top}) | "
+            f"TOP@{self._sell_threshold:.2f} prec={top_prec:.2f} rec={top_rec:.2f} | "
+            f"DIP@{self._threshold:.2f} prec={dip_prec:.2f} rec={dip_rec:.2f} | "
+            f"P(max): tops={p_max[is_top].mean():.2f} non-tops={p_max[~is_top].mean():.2f} "
+            f"sep={p_max[is_top].mean() - p_max[~is_top].mean():+.2f}"
+        )
+
+        # Pool this holdout into the running PR-curve buffer and re-emit the pooled
+        # sweep. Holdouts overlap across retrains (sliding window), so this is a
+        # relative recalibration aid, not an unbiased OOS estimate. The LAST SWEEP
+        # line printed per symbol carries the full pooled curve.
+        self._diag_pool_pmax.extend(p_max.tolist())
+        self._diag_pool_istop.extend(is_top.astype(int).tolist())
+        pm = np.array(self._diag_pool_pmax)
+        it = np.array(self._diag_pool_istop, dtype=bool)
+        n_pool_top = int(it.sum())
+        if n_pool_top:
+            grid = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+            cells = []
+            for t in grid:
+                pred = pm >= t
+                tp = int(np.sum(pred & it))
+                fp = int(np.sum(pred & ~it))
+                prec = tp / (tp + fp) if (tp + fp) else float("nan")
+                rec = tp / n_pool_top
+                cells.append(f"{t:.2f}:p={prec:.2f},r={rec:.2f}")
+            print(f"SWEEP {self.instrument} | pooled_n={len(pm)} tops={n_pool_top} | " + " ".join(cells))

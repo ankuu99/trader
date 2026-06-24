@@ -367,6 +367,22 @@ def run_backtest(
         time.time() - _main_fetch_start, len(symbol_candles), total_main_candles,
     )
 
+    # Mark the last in-window candle of each trading day per symbol as the EOD bar.
+    # Live force-closes active-trailing positions intraday (force_close_time, ~15:25),
+    # but intraday candle timestamps are start-labelled (last 15m bar is 15:15 < 15:25),
+    # so that force-close never fires from candle ticks. We flag the EOD bar here and
+    # feed an extra tick stamped at trading_end on it (below) so the strategy's own
+    # force-close logic triggers — keeping backtest in sync with live and preventing
+    # trailing positions from riding overnight (which massively inflates P&L).
+    for _clist in symbol_candles.values():
+        _last_by_date: dict = {}
+        for c in _clist:
+            t = c["timestamp"].time()
+            if config.trading_start <= t <= config.trading_end:
+                _last_by_date[c["timestamp"].date()] = c  # chronological → last wins
+        for c in _last_by_date.values():
+            c["_is_eod"] = True
+
     merged_candles = sorted(
         (c for candles in symbol_candles.values() for c in candles),
         key=lambda c: c["timestamp"],
@@ -513,17 +529,31 @@ def run_backtest(
         # Feed candle high first (updates _peak_close), then close (checks trail).
         # Hard SL is already handled intrabar above; if it fired, strategy state
         # is already reset and on_tick returns None safely.
+        #
+        # On the EOD bar, append a third tick stamped at trading_end so the strategy's
+        # force-close (force_close_time, e.g. 15:25) fires — intraday candle stamps top
+        # out at 15:15 (< 15:25) so it never would otherwise, letting trailing positions
+        # ride overnight in backtest only (live force-closes via real ticks). The EOD
+        # tick is a no-op when force_close_time is disabled (None).
+        _ticks = [(candle["high"], candle["timestamp"], False),
+                  (candle["close"], candle["timestamp"], False)]
+        if candle.get("_is_eod"):
+            _eod_ts = datetime.combine(candle["timestamp"].date(), config.trading_end)
+            _ticks.append((candle["close"], _eod_ts, True))
         if symbol in open_positions and _in_window and current_ts[0] != open_positions[symbol]["entry_date"]:
-            for tick_price in (candle["high"], candle["close"]):
+            for tick_price, tick_ts, _is_eod_tick in _ticks:
+                if symbol not in open_positions:
+                    break
                 tick_signal = strategy.on_tick({
                     "last_price": tick_price,
                     "instrument_token": candle.get("instrument_token"),
-                    "timestamp": candle["timestamp"],
+                    "timestamp": tick_ts,
                 })
                 if tick_signal is not None:
                     pos = open_positions.pop(symbol)
-                    # Use tick_price (high or close), gap-adjusted to candle open.
-                    exit_price = min(tick_price, candle["open"])
+                    # Intraday trail exits gap-adjust to the open; the EOD force-close
+                    # fills at the closing price (the last tradeable price of the day).
+                    exit_price = candle["close"] if _is_eod_tick else min(tick_price, candle["open"])
                     tick_reason = getattr(tick_signal, "exit_reason", None) or "TRAILING"
                     net, cost, product = _net_pnl(
                         pos["entry"], exit_price, pos["qty"],
