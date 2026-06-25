@@ -230,6 +230,35 @@ def _render_equity_sparkline(values: list[float], width: int = 300, height: int 
     )
 
 
+def _render_underwater_svg(underwater: list[float], width: int = 300, height: int = 70) -> str:
+    """Filled area chart of the underwater (drawdown) series — all values <= 0,
+    drawn as a red region hanging below a zero baseline at the top."""
+    if len(underwater) < 2:
+        return "<span class='dim'>—</span>"
+    lo = min(min(underwater), 0.0)
+    rng = (0.0 - lo) or 1.0
+    pad = 4
+
+    def sx(i: int) -> float:
+        return pad + (i / (len(underwater) - 1)) * (width - 2 * pad)
+
+    def sy(v: float) -> float:
+        return pad + (-(v) / rng) * (height - 2 * pad)  # 0 at top, lo at bottom
+
+    pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(underwater))
+    zero_y = pad
+    area = f"{sx(0):.1f},{zero_y:.1f} " + pts + f" {sx(len(underwater) - 1):.1f},{zero_y:.1f}"
+    return (
+        f'<svg width="{width}" height="{height}" '
+        f'style="vertical-align:middle;display:inline-block">'
+        f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
+        f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        f'<polygon points="{area}" fill="#f85149" fill-opacity="0.18"/>'
+        f'<polyline points="{pts}" fill="none" stroke="#f85149" stroke-width="1.5"/>'
+        f'</svg>'
+    )
+
+
 def _render_sparkline(closes: list[float], entry_price: float,
                       width: int = 160, height: int = 45) -> str:
     if len(closes) < 2:
@@ -635,7 +664,9 @@ def render_page(bot_state, risk, store, config) -> str:
     # A 7-share entry exited as 4 + 3 must show as two trades (4 and 3) with their
     # own P&L — the old row-number BUY↔SELL join reported the entry qty (7) and
     # dropped the remainder leg. match_trades does proper FIFO lot accounting.
-    from trader.analytics import match_trades, compute_utilisation
+    from trader.analytics import (match_trades, compute_utilisation,
+                                  exit_reason_breakdown, per_stock_scorecard,
+                                  drawdown_stats, position_exit_legs)
 
     _raw_orders = _read_db(
         config.db_path,
@@ -811,6 +842,27 @@ def render_page(bot_state, risk, store, config) -> str:
     else:
         equity_section = ""
 
+    # ── drawdown / underwater panel (#7) ──
+    _dd = drawdown_stats(_matched, config.total_capital)
+    if _dd["underwater"]:
+        _curr_kind = "red" if _dd["current_dd"] > 0 else "green"
+        dd_section = f"""
+    <div class="card">
+        <h2>Drawdown (gross)</h2>
+        <table>
+            <tr><td class="dim">Max DD</td>
+                <td class="val red">&#8377; {_dd['max_dd']:,.0f}
+                <span class="dim">({_dd['max_dd_pct']:.2f}%)</span></td></tr>
+            <tr><td class="dim">Current DD</td>
+                <td class="val {_curr_kind}">&#8377; {_dd['current_dd']:,.0f}
+                <span class="dim">({_dd['current_dd_pct']:.2f}%)</span></td></tr>
+            <tr><td class="dim">Days in DD</td><td class="val">{_dd['days_in_drawdown']}</td></tr>
+        </table>
+        {_render_underwater_svg(_dd['underwater'])}
+    </div>"""
+    else:
+        dd_section = ""
+
     # ── persistent state panel (day-to-day continuity) ────────────────────────
     _cum_pnl = risk.cumulative_pnl
     _eff_cap = config.total_capital          # runtime effective (post-cap)
@@ -876,6 +928,7 @@ def render_page(bot_state, risk, store, config) -> str:
     _stop_pct = float(_lr_cfg.get("stop_pct", 3.0))
     _trail_pct = float(_lr_cfg.get("trail_pct", 1.5))
     _hold_bars_max = int(_lr_cfg.get("hold_bars", 200))
+    _pos_legs = position_exit_legs(_orders_for_match, positions)  # #14 scale-out lifecycle
 
     if positions or pending_orders:
         rows_html = ""
@@ -945,10 +998,24 @@ def render_page(bot_state, risk, store, config) -> str:
                     closes = [r["close"] for r in candle_rows]
                     sparkline_html = _render_sparkline(closes, p["entry_price"])
 
+            # #14 — scale-out lifecycle sub-line (entry → sold legs → holding remainder)
+            legs_html = ""
+            _li = _pos_legs.get(p["instrument"])
+            if _li:
+                _leg_strs = " · ".join(
+                    f"sold {l['qty']} @ &#8377;{l['price']:.2f}"
+                    f"{' (' + l['reason'] + ')' if l['reason'] else ''}"
+                    for l in _li["legs"] if l["price"] is not None
+                )
+                legs_html = (
+                    f"<br><span class='dim' style='font-size:10px'>"
+                    f"entry {_li['original_qty']} → {_leg_strs} · holding {_li['open_qty']}</span>"
+                )
+
             rows_html += (
                 f"<tr>"
                 f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>"
-                f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span></td>"
+                f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}</td>"
                 f"<td>{p['quantity']}</td>"
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
                 f"<td>&#8377; {cur:.2f} <span class='{pct_class}'>({pct_sign}{pct:.2f}%)</span></td>"
@@ -1101,6 +1168,76 @@ def render_page(bot_state, risk, store, config) -> str:
         </div>"""
     else:
         trades_section = ""
+
+    # ── exit-reason breakdown (#3) — counts + P&L + hold, NO win-rate-per-reason ──
+    _reason_rows = exit_reason_breakdown(_matched)
+    if _reason_rows:
+        _rr_kind = {
+            "SL": "red", "TRAILING": "orange", "PATTERN_TOP": "orange",
+            "PATTERN_TOP_PARTIAL": "orange", "TRAILING_EOD_CLOSE": "orange",
+            "STALE": "dim", "STRATEGY": "dim", "MOMENTUM_DECAY": "dim",
+            "MANUAL/EXTERNAL": "dim",
+        }
+        _rr_body = "".join(
+            f"<tr><td>{_badge(r['reason'], _rr_kind.get(r['reason'], 'dim'))}</td>"
+            f"<td class='dim'>{r['count']}</td>"
+            f"<td class='{_pnl_class(r['total_pnl'])}'>&#8377; {r['total_pnl']:+,.0f}</td>"
+            f"<td class='dim'>{r['pnl_share_pct']:+.0f}%</td>"
+            f"<td class='dim'>{r['avg_hold_hours']:.1f}h</td></tr>"
+            if r["avg_hold_hours"] is not None else
+            f"<tr><td>{_badge(r['reason'], _rr_kind.get(r['reason'], 'dim'))}</td>"
+            f"<td class='dim'>{r['count']}</td>"
+            f"<td class='{_pnl_class(r['total_pnl'])}'>&#8377; {r['total_pnl']:+,.0f}</td>"
+            f"<td class='dim'>{r['pnl_share_pct']:+.0f}%</td><td class='dim'>—</td></tr>"
+            for r in _reason_rows
+        )
+        reason_section = f"""
+        <div class="card">
+            <h2>Exit Reasons</h2>
+            <table>
+                <tr><th>Reason</th><th>Trades</th><th>Gross P&amp;L</th><th>% P&amp;L</th><th>Avg hold</th></tr>
+                {_rr_body}
+            </table>
+        </div>"""
+    else:
+        reason_section = ""
+
+    # ── per-stock scorecard (#6) — gross from FIFO trades; net adds round-trip costs ──
+    _scorecard = per_stock_scorecard(_matched, positions)
+    if _scorecard:
+        _sc_product = config.product
+        _cost_by_inst: dict[str, float] = {}
+        for t in _matched:
+            _ep, _xp, _q = t.get("entry_price"), t.get("exit_price"), t.get("quantity")
+            if _ep and _xp and _q:
+                _cost_by_inst[t["instrument"]] = _cost_by_inst.get(t["instrument"], 0.0) + \
+                    round_trip_cost(_sc_product, _q, _ep, _xp)
+        _sc_body = ""
+        for c in _scorecard:
+            sym = c["instrument"].split(":")[-1]
+            net = c["gross_pnl"] - _cost_by_inst.get(c["instrument"], 0.0)
+            hold = f"{c['avg_hold_hours']:.1f}h" if c["avg_hold_hours"] is not None else "—"
+            last_reason = c["last_exit_reason"] or "—"
+            open_badge = f" {_badge('OPEN ' + str(c['open_qty']), 'green')}" if c["open_qty"] else ""
+            _sc_body += (
+                f"<tr><td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{open_badge}</td>"
+                f"<td class='dim'>{c['n_trades']}</td>"
+                f"<td class='{_pnl_class(c['gross_pnl'])}'>&#8377; {c['gross_pnl']:+,.0f}</td>"
+                f"<td class='{_pnl_class(net)}'>&#8377; {net:+,.0f}</td>"
+                f"<td class='dim'>{hold}</td>"
+                f"<td class='dim'>{last_reason}</td></tr>"
+            )
+        scorecard_section = f"""
+        <div class="card full">
+            <h2>Per-Stock Performance (live)</h2>
+            <table>
+                <tr><th>Symbol</th><th>Trades</th><th>Gross P&amp;L</th><th>Net P&amp;L</th>
+                    <th>Avg hold</th><th>Last exit</th></tr>
+                {_sc_body}
+            </table>
+        </div>"""
+    else:
+        scorecard_section = ""
 
     # Recent signals
     if signals:
@@ -1357,10 +1494,13 @@ def render_page(bot_state, risk, store, config) -> str:
     {pnl_card}
     {util_section}
     {equity_section}
+    {dd_section}
     {state_section}
     {pos_section}
+    {scorecard_section}
     {orders_section}
     {trades_section}
+    {reason_section}
     {signals_section}
     {filtered_section}
     {strategy_section}
