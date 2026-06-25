@@ -133,7 +133,8 @@ class OrderManager:
             )
             self._dispatch({**record, "fill_price": fill_price,
                             "signal_type": order.signal_type,
-                            "target_price": order.target_price})
+                            "target_price": order.target_price,
+                            "partial": getattr(order, "partial", False)})
 
     def on_kite_order_update(self, kite_update: dict):
         """
@@ -215,6 +216,9 @@ class OrderManager:
             "mode": "live",
             "strategy": original.strategy if original else "",
             "signal_type": recovered_signal_type,
+            # Scale-out: only an in-app partial SELL carries the flag. GTT/external
+            # SELLs recover the ENTRY order (partial=False) → always full close.
+            "partial": getattr(original, "partial", False) if original else False,
         }
         self._store.upsert_order(record)
         logger.info(

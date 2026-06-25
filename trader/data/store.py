@@ -416,6 +416,15 @@ class Store:
                  int(pattern_top_trailing), instrument),
             )
 
+    def update_position_quantity(self, instrument: str, quantity: int):
+        """Adjust the tracked quantity of an open position after a scale-out
+        (partial SELL), leaving entry_price / entry_time / trailing state intact."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE open_positions SET quantity = ? WHERE instrument = ?",
+                (quantity, instrument),
+            )
+
     def delete_open_position(self, instrument: str):
         with self._conn() as conn:
             conn.execute("DELETE FROM open_positions WHERE instrument = ?", (instrument,))

@@ -631,37 +631,39 @@ def render_page(bot_state, risk, store, config) -> str:
         "ORDER BY placed_at DESC LIMIT 20",
     )
 
-    # ── closed trade history ──────────────────────────────────────────────────
-    closed_trades = _read_db(
+    # ── closed trade history (FIFO-matched so scale-out partials split correctly) ──
+    # A 7-share entry exited as 4 + 3 must show as two trades (4 and 3) with their
+    # own P&L — the old row-number BUY↔SELL join reported the entry qty (7) and
+    # dropped the remainder leg. match_trades does proper FIFO lot accounting.
+    from trader.analytics import match_trades, compute_utilisation
+
+    _raw_orders = _read_db(
         config.db_path,
-        """
-        WITH buy_q AS (
-          SELECT instrument, price AS entry_price, quantity,
-                 placed_at AS entry_time,
-                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
-          FROM orders WHERE direction='BUY' AND status='COMPLETE'
-        ),
-        sell_q AS (
-          SELECT instrument, price AS exit_price,
-                 placed_at AS exit_time,
-                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
-          FROM orders WHERE direction='SELL' AND status='COMPLETE'
-        ),
-        exit_sig AS (
-          SELECT instrument, exit_reason,
-                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY logged_at) rn
-          FROM signals WHERE signal_type = 'EXIT' AND exit_reason IS NOT NULL
-        )
-        SELECT b.instrument, b.entry_price, s.exit_price, b.quantity,
-               (s.exit_price - b.entry_price) * b.quantity AS gross_pnl,
-               b.entry_time, s.exit_time, e.exit_reason
-        FROM buy_q b
-        JOIN sell_q s ON b.instrument = s.instrument AND b.rn = s.rn
-        LEFT JOIN exit_sig e ON b.instrument = e.instrument AND e.rn = s.rn
-        ORDER BY s.exit_time DESC
-        LIMIT 30
-        """,
+        "SELECT instrument, direction, quantity, price, placed_at "
+        "FROM orders WHERE status='COMPLETE' ORDER BY placed_at",
     )
+    _exit_reasons = _read_db(
+        config.db_path,
+        "SELECT instrument, exit_reason FROM signals "
+        "WHERE signal_type='EXIT' AND exit_reason IS NOT NULL ORDER BY logged_at",
+    )
+    # Assign each instrument's exit reasons to its SELL legs in chronological order.
+    from collections import defaultdict, deque
+    _reason_q: dict[str, deque] = defaultdict(deque)
+    for _r in _exit_reasons:
+        _reason_q[_r["instrument"]].append(_r["exit_reason"])
+    _orders_for_match = []
+    for _o in _raw_orders:
+        _rec = {"instrument": _o["instrument"], "direction": _o["direction"],
+                "quantity": _o["quantity"], "price": _o["price"], "ts": _o["placed_at"]}
+        if _o["direction"] == "SELL" and _reason_q[_o["instrument"]]:
+            _rec["exit_reason"] = _reason_q[_o["instrument"]].popleft()
+        _orders_for_match.append(_rec)
+    _matched = match_trades(_orders_for_match)
+
+    closed_trades = sorted(
+        _matched, key=lambda t: str(t.get("exit_time") or ""), reverse=True
+    )[:30]
 
     # ── recent signals ────────────────────────────────────────────────────────
     signals = _read_db(
@@ -677,28 +679,9 @@ def render_page(bot_state, risk, store, config) -> str:
         "ORDER BY id DESC LIMIT 30",
     )
 
-    # ── capital utilisation + equity curve (reconstructed from closed BUY→SELL pairs) ──
-    from trader.analytics import compute_utilisation
-
-    all_closed = _read_db(
-        config.db_path,
-        """
-        WITH buy_q AS (
-          SELECT instrument, price AS entry_price, quantity, placed_at AS entry_time,
-                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
-          FROM orders WHERE direction='BUY' AND status='COMPLETE'
-        ),
-        sell_q AS (
-          SELECT instrument, price AS exit_price, placed_at AS exit_time,
-                 ROW_NUMBER() OVER (PARTITION BY instrument ORDER BY placed_at) rn
-          FROM orders WHERE direction='SELL' AND status='COMPLETE'
-        )
-        SELECT b.instrument, b.entry_price, s.exit_price, b.quantity,
-               (s.exit_price - b.entry_price) * b.quantity AS gross_pnl,
-               b.entry_time, s.exit_time
-        FROM buy_q b JOIN sell_q s ON b.instrument = s.instrument AND b.rn = s.rn
-        ORDER BY b.entry_time ASC
-        """,
+    # ── capital utilisation + equity curve (from the same FIFO-matched trades) ──
+    all_closed = sorted(
+        _matched, key=lambda t: str(t.get("entry_time") or ""),
     )
 
     def _parse_ts(ts):

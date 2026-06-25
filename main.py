@@ -376,6 +376,16 @@ def main():
             risk.on_order_filled(instrument, fill_price, quantity)
             if config.env in ("paper", "live"):
                 store.upsert_open_position(instrument, fill_price, quantity, 0, datetime.now())
+        elif update.get("partial"):
+            # Scale-out: sell part, keep the remainder open. Reduce tracked qty
+            # pro-rata (capital + realised P&L) and leave entry/trailing state
+            # intact so the strategy keeps managing the rest. The strategy's own
+            # on_order_update sees the partial flag and does NOT reset position.
+            risk.reduce_position(instrument, quantity, fill_price)
+            if config.env in ("paper", "live"):
+                store.update_position_quantity(instrument, risk._open_positions.get(instrument, 0))
+            if config.env == "live":
+                store.set_state("cumulative_pnl", risk.cumulative_pnl)
         else:
             risk.close_position(instrument, fill_price)
             if config.env in ("paper", "live"):

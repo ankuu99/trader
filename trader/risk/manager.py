@@ -51,6 +51,7 @@ class Order:
     strategy: str
     mode: str
     signal_type: SignalType = SignalType.ENTRY
+    partial: bool = False  # EXIT only: True = scale-out (remainder stays open)
 
 
 class RiskManager:
@@ -246,8 +247,10 @@ class RiskManager:
         # Scale-out: sell only a fraction, leaving the remainder open. Never round to 0
         # (min 1 share) and never to the full position (leave >=1 so it stays open).
         frac = signal.exit_fraction
+        is_partial = False
         if frac is not None and 0 < frac < 1.0 and quantity > 1:
             quantity = max(1, min(quantity - 1, int(quantity * frac)))
+            is_partial = True
             logger.info("Partial exit approved | %s x%d (frac=%.2f) @ ~%.2f",
                         signal.instrument, quantity, frac, signal.price_hint)
         else:
@@ -262,6 +265,7 @@ class RiskManager:
             strategy=signal.strategy,
             mode=config.env,
             signal_type=signal.signal_type,
+            partial=is_partial,
         )
 
     def on_order_cancelled(self, instrument: str):
