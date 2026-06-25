@@ -108,7 +108,7 @@ class ExtremaExitPolicy:
                 strat.instrument, pos.held_bars, pos.entry_price or 0, close, ts,
             )
             pos.reset()
-            return ExitDecision(price_hint=close, timestamp=ts)
+            return ExitDecision(price_hint=close, exit_reason="STRATEGY", timestamp=ts)
 
         # --- Progress gate: track best gain, exit if stale ---
         _pct_gain = (
@@ -265,23 +265,30 @@ class ExtremaExitPolicy:
                 strat.instrument, pct, self._breakeven_trigger_pct, self._breakeven_buffer_pct,
             )
 
+        # `reason` is the human-readable log string; `reason_code` is the exit
+        # reason recorded on the signal (and shown in the UI). Both set together.
         reason: str | None = None
+        reason_code: str | None = None
         if self._breakeven_stop_enabled and pos.breakeven_active:
             be_floor = pos.entry_price * (1.0 + self._breakeven_buffer_pct / 100.0)
             if last_price <= be_floor:
                 reason = f"breakeven stop price={last_price:.2f} <= floor={be_floor:.2f}"
+                reason_code = "BREAKEVEN"
         if reason is None and pct <= -self._stop_pct:
             reason = f"stop-loss {pct:.2f}%"
+            reason_code = "SL"
         elif reason is None and pos.trailing_active:
             drawdown = (last_price - pos.peak_close) / pos.peak_close * 100.0
             trail_dist = self._effective_trail_pct(strat)
             if drawdown <= -trail_dist:
                 reason = f"trailing stop {drawdown:.2f}% from peak {pos.peak_close:.2f} (dist={trail_dist:.2f}%)"
+                reason_code = "TRAILING"
         # Trailing floor — pattern-top trailing uses sell_min_pct as floor; regular uses profit_pct.
         _use_floor = (not pos.pattern_top_trailing) or self._pattern_top_floor_enabled
         _floor_pct = self._sell_min_pct if pos.pattern_top_trailing else self._profit_pct
         if reason is None and pos.trailing_active and _use_floor and pct < _floor_pct:
             reason = f"trailing floor pct={pct:.2f}% < {_floor_pct:.2f}%"
+            reason_code = "TRAILING"
 
         if reason:
             logger.info(
@@ -289,6 +296,7 @@ class ExtremaExitPolicy:
                 strat.instrument, reason, pos.entry_price, last_price,
             )
             pos.reset()
-            return ExitDecision(price_hint=last_price, timestamp=tick.get("timestamp"))
+            return ExitDecision(price_hint=last_price, exit_reason=reason_code,
+                                timestamp=tick.get("timestamp"))
 
         return None
