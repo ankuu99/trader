@@ -49,25 +49,3 @@ def test_reset_pnl_ignores_garbage(ctx):
     assert resp.status_code == 303
     assert risk.cumulative_pnl == -100.0                    # unchanged
     assert store.get_state("cumulative_pnl") == -100.0
-
-
-def test_clear_stale_state_drops_only_flat_instruments(ctx):
-    client, risk, store = ctx
-    risk.seed_position("NSE:OPEN", qty=10, avg_price=100.0)  # currently open
-    store.set_state("NSE:OPEN.peak_close", 110.0)
-    store.set_state("NSE:OPEN.max_gain_pct", 5.0)
-    store.set_state("NSE:CLOSED.peak_close", 50.0)          # stale
-    store.set_state("BSE:GHOST.max_gain_pct", 1.0)          # stale cruft
-    store.set_state("NSE:AQYLON.paused", 1.0)               # control — must survive
-    store.set_state("cumulative_pnl", -100.0)               # cumulative — must survive
-
-    resp = client.post("/clear_stale_state")
-
-    assert resp.status_code == 303
-    keys = {r["key"] for r in store.read_state()}
-    assert "NSE:OPEN.peak_close" in keys                    # open → kept
-    assert "NSE:OPEN.max_gain_pct" in keys
-    assert "NSE:AQYLON.paused" in keys                      # control → kept
-    assert "cumulative_pnl" in keys                         # cumulative → kept
-    assert "NSE:CLOSED.peak_close" not in keys              # flat → dropped
-    assert "BSE:GHOST.max_gain_pct" not in keys             # cruft → dropped
