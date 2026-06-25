@@ -28,6 +28,8 @@ body {
 h1 { font-size: 15px; color: #58a6ff; margin-bottom: 4px; }
 .meta { color: #8b949e; font-size: 12px; margin-bottom: 16px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.toprow { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.toprow > * { flex: 1; min-width: 240px; }
 .card {
     background: #161b22; border: 1px solid #30363d;
     border-radius: 6px; padding: 12px;
@@ -802,7 +804,7 @@ def render_page(bot_state, risk, store, config) -> str:
 
     # ── capital utilisation panel (over time) ──
     _o = util["overall"]
-    _u_rows = util["monthly"][-20:]   # last ~20 trading days
+    _u_rows = util["monthly"][-10:]   # last 10 trading days
     if _u_rows:
         _util_body = "".join(
             f"<tr><td class='dim'>{r['month']}</td>"
@@ -828,40 +830,43 @@ def render_page(bot_state, risk, store, config) -> str:
     else:
         util_section = ""
 
-    # ── cumulative equity curve panel ──
+    # ── cumulative P&L + drawdown panel (merged, #7) ──
+    _dd = drawdown_stats(_matched, config.total_capital)
+    _eq_left = ""
     if equity_vals:
         _eq_sign = "+" if equity_total >= 0 else ""
+        _eq_left = f"""
+            <h3 style="font-size:13px;margin:4px 0">Cumulative P&amp;L</h3>
+            <div class="val {_pnl_class(equity_total)}" style="font-size:18px">
+                &#8377; {_eq_sign}{equity_total:,.0f}</div>
+            <div class="dim" style="font-size:11px;margin-bottom:6px">{len(equity_vals)} closed trades</div>
+            {_render_equity_sparkline(equity_vals)}"""
+    _dd_right = ""
+    if _dd["underwater"]:
+        _curr_kind = "red" if _dd["current_dd"] > 0 else "green"
+        _dd_right = f"""
+            <h3 style="font-size:13px;margin:4px 0">Drawdown</h3>
+            <table>
+                <tr><td class="dim">Max DD</td>
+                    <td class="val red">&#8377; {_dd['max_dd']:,.0f}
+                    <span class="dim">({_dd['max_dd_pct']:.2f}%)</span></td></tr>
+                <tr><td class="dim">Current DD</td>
+                    <td class="val {_curr_kind}">&#8377; {_dd['current_dd']:,.0f}
+                    <span class="dim">({_dd['current_dd_pct']:.2f}%)</span></td></tr>
+                <tr><td class="dim">Days in DD</td><td class="val">{_dd['days_in_drawdown']}</td></tr>
+            </table>
+            {_render_underwater_svg(_dd['underwater'])}"""
+    if _eq_left or _dd_right:
         equity_section = f"""
-    <div class="card">
-        <h2>Cumulative P&amp;L (gross)</h2>
-        <div class="val {_pnl_class(equity_total)}" style="font-size:18px">
-            &#8377; {_eq_sign}{equity_total:,.0f}</div>
-        <div class="dim" style="font-size:11px;margin-bottom:6px">{len(equity_vals)} closed trades</div>
-        {_render_equity_sparkline(equity_vals)}
+    <div class="card full">
+        <h2>Cumulative P&amp;L &amp; Drawdown (gross)</h2>
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+            <div style="flex:1;min-width:280px">{_eq_left}</div>
+            <div style="flex:1;min-width:280px">{_dd_right}</div>
+        </div>
     </div>"""
     else:
         equity_section = ""
-
-    # ── drawdown / underwater panel (#7) ──
-    _dd = drawdown_stats(_matched, config.total_capital)
-    if _dd["underwater"]:
-        _curr_kind = "red" if _dd["current_dd"] > 0 else "green"
-        dd_section = f"""
-    <div class="card">
-        <h2>Drawdown (gross)</h2>
-        <table>
-            <tr><td class="dim">Max DD</td>
-                <td class="val red">&#8377; {_dd['max_dd']:,.0f}
-                <span class="dim">({_dd['max_dd_pct']:.2f}%)</span></td></tr>
-            <tr><td class="dim">Current DD</td>
-                <td class="val {_curr_kind}">&#8377; {_dd['current_dd']:,.0f}
-                <span class="dim">({_dd['current_dd_pct']:.2f}%)</span></td></tr>
-            <tr><td class="dim">Days in DD</td><td class="val">{_dd['days_in_drawdown']}</td></tr>
-        </table>
-        {_render_underwater_svg(_dd['underwater'])}
-    </div>"""
-    else:
-        dd_section = ""
 
     # ── persistent state panel (day-to-day continuity) ────────────────────────
     _cum_pnl = risk.cumulative_pnl
@@ -1489,22 +1494,23 @@ def render_page(bot_state, risk, store, config) -> str:
 </head>
 <body>
 {header}
-<div class="grid">
+<div class="toprow">
     {capital_card}
     {pnl_card}
+    {reason_section}
+</div>
+<div class="grid">
     {util_section}
     {equity_section}
-    {dd_section}
-    {state_section}
     {pos_section}
     {scorecard_section}
     {orders_section}
     {trades_section}
-    {reason_section}
     {signals_section}
     {filtered_section}
     {strategy_section}
     {watchlist_section}
+    {state_section}
 </div>
 </body>
 </html>"""
