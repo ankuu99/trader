@@ -868,6 +868,14 @@ def render_page(bot_state, risk, store, config) -> str:
     else:
         equity_section = ""
 
+    # ── graph row: capital utilisation + merged P&L/drawdown side by side ──
+    _graph_panes = ""
+    if util_section:
+        _graph_panes += f'<div style="flex:1;min-width:280px">{util_section}</div>'
+    if equity_section:
+        _graph_panes += f'<div style="flex:1.6;min-width:380px">{equity_section}</div>'
+    graph_row = f'<div class="toprow">{_graph_panes}</div>' if _graph_panes else ""
+
     # ── persistent state panel (day-to-day continuity) ────────────────────────
     _cum_pnl = risk.cumulative_pnl
     _eff_cap = config.total_capital          # runtime effective (post-cap)
@@ -1499,9 +1507,8 @@ def render_page(bot_state, risk, store, config) -> str:
     {pnl_card}
     {reason_section}
 </div>
+{graph_row}
 <div class="grid">
-    {util_section}
-    {equity_section}
     {pos_section}
     {scorecard_section}
     {orders_section}
