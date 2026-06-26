@@ -137,6 +137,14 @@ class Store:
                     key   TEXT PRIMARY KEY,
                     value REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS model_scores (
+                    instrument TEXT NOT NULL,
+                    timestamp  TEXT NOT NULL,
+                    p_min      REAL NOT NULL,
+                    p_max      REAL NOT NULL,
+                    PRIMARY KEY (instrument, timestamp)
+                );
             """)
             # Migration: add new columns to open_positions for existing DBs
             for col, defn in [
@@ -195,6 +203,47 @@ class Store:
         with self._conn() as conn:
             conn.executescript("DELETE FROM candles; DELETE FROM orders; DELETE FROM trades; DELETE FROM signals;")
         logger.info("Backtest DB cleared (candles, orders, trades, signals)")
+
+    # ------------------------------------------------------------------ #
+    # Model scores (UI conviction trajectory)                            #
+    # ------------------------------------------------------------------ #
+
+    def write_model_score(self, instrument: str, timestamp, p_min: float,
+                          p_max: float, keep: int = 500) -> None:
+        """Record the model's (p_min, p_max) for one candle so the UI can draw a
+        conviction trajectory. Keyed on (instrument, timestamp) — re-scoring the
+        same candle overwrites. Trims to the most recent `keep` rows per
+        instrument so the table stays bounded under live operation."""
+        ts = timestamp
+        if isinstance(ts, datetime):
+            ts = self._to_naive(ts).isoformat()
+        ts = str(ts)
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO model_scores (instrument, timestamp, p_min, p_max) "
+                "VALUES (?, ?, ?, ?)",
+                (instrument, ts, float(p_min), float(p_max)),
+            )
+            conn.execute(
+                "DELETE FROM model_scores WHERE instrument = ? AND timestamp NOT IN "
+                "(SELECT timestamp FROM model_scores WHERE instrument = ? "
+                " ORDER BY timestamp DESC LIMIT ?)",
+                (instrument, instrument, keep),
+            )
+
+    def get_model_scores(self, instrument: str, limit: int = 80) -> list[dict]:
+        """Most recent `limit` model scores for an instrument, oldest-first
+        (chronological) so the caller can plot left-to-right."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT timestamp, p_min, p_max FROM model_scores WHERE instrument = ? "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (instrument, limit),
+            ).fetchall()
+        return [
+            {"timestamp": r[0], "p_min": float(r[1]), "p_max": float(r[2])}
+            for r in reversed(rows)
+        ]
 
     # ------------------------------------------------------------------ #
     # Candles                                                              #

@@ -503,11 +503,25 @@ def main():
                 strategy.last_feature_drivers()
                 if hasattr(strategy, "last_feature_drivers") else []
             )
+            _p_min = getattr(strategy, "_last_p_min", 0.0)
+            _p_max = getattr(strategy, "_last_p_max", 0.0)
             bot_state.model_scores[strategy.instrument] = {
-                "p_min": getattr(strategy, "_last_p_min", 0.0),
-                "p_max": getattr(strategy, "_last_p_max", 0.0),
+                "p_min": _p_min,
+                "p_max": _p_max,
                 "drivers": _drivers,
             }
+            # Persist the conviction trajectory (UI sparkline). Only once the model
+            # is trained — a 0/0 pre-warmup score isn't a real reading. Cosmetic
+            # only: a persistence failure must never disturb the trading path.
+            _strat_model = getattr(strategy, "_model", None)
+            if _strat_model is not None and getattr(_strat_model, "is_trained", False):
+                try:
+                    store.write_model_score(
+                        strategy.instrument, candle.get("timestamp"), _p_min, _p_max
+                    )
+                except Exception as e:
+                    logger.debug("model_score persist skipped | %s | %s",
+                                 strategy.instrument, e)
             held = getattr(strategy, "_held_bars", 0)
             if not strategy.is_flat() and strategy.instrument in risk._open_positions:
                 _entry = getattr(strategy, "_entry_price", None) or 0.0

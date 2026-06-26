@@ -212,6 +212,18 @@ def _read_db(db_path, query: str, params: tuple = ()) -> list[dict]:
         return []
 
 
+def _read_model_scores(db_path, instrument: str, limit: int = 80) -> list[dict]:
+    """Recent persisted (p_min, p_max) scores for an instrument, oldest-first.
+    Returns [] when the table is absent (old DBs) — caller renders a dash."""
+    rows = _read_db(
+        db_path,
+        "SELECT timestamp, p_min, p_max FROM model_scores WHERE instrument = ? "
+        "ORDER BY timestamp DESC LIMIT ?",
+        (instrument, limit),
+    )
+    return list(reversed(rows))
+
+
 def _hold_duration(entry_time_str: str, exit_time_str: str) -> str:
     try:
         entry_dt = datetime.fromisoformat(entry_time_str)
@@ -300,6 +312,48 @@ def _render_watchlist_sparkline(
             )
     parts.append(f'<circle cx="{sx(n - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>')
     parts.append('</svg>')
+    return "".join(parts)
+
+
+def _render_prob_sparkline(
+    scores: list[dict],
+    threshold: float,
+    veto_threshold: float,
+    width: int = 180,
+    height: int = 50,
+) -> str:
+    """Conviction trajectory — P(buy)=green and P(sell)=red over recent candles on
+    a FIXED 0..1 axis (so a line pinned at the top reads as model saturation, not a
+    strong signal). Dotted guides mark the entry threshold (green) and veto (red)."""
+    if len(scores) < 2:
+        return "<span class='dim'>—</span>"
+    n = len(scores)
+    pad = 4
+
+    def sx(i: int) -> float:
+        return pad + (i / (n - 1)) * (width - 2 * pad)
+
+    def sy(p: float) -> float:
+        p = 0.0 if p < 0 else (1.0 if p > 1 else p)
+        return pad + (1 - p) * (height - 2 * pad)
+
+    buy = " ".join(f"{sx(i):.1f},{sy(s['p_min']):.1f}" for i, s in enumerate(scores))
+    sell = " ".join(f"{sx(i):.1f},{sy(s['p_max']):.1f}" for i, s in enumerate(scores))
+    last = scores[-1]
+
+    parts = [
+        f'<svg width="{width}" height="{height}" '
+        f'style="vertical-align:middle;display:inline-block;background:#161b22;border-radius:3px">',
+        # threshold / veto guides
+        f'<line x1="{pad}" y1="{sy(threshold):.1f}" x2="{width - pad}" y2="{sy(threshold):.1f}" '
+        f'stroke="#3fb950" stroke-width="0.7" stroke-dasharray="2,2" opacity="0.4"/>',
+        f'<line x1="{pad}" y1="{sy(veto_threshold):.1f}" x2="{width - pad}" y2="{sy(veto_threshold):.1f}" '
+        f'stroke="#f85149" stroke-width="0.7" stroke-dasharray="2,2" opacity="0.4"/>',
+        f'<polyline points="{sell}" fill="none" stroke="#f85149" stroke-width="1.0" opacity="0.85"/>',
+        f'<polyline points="{buy}" fill="none" stroke="#3fb950" stroke-width="1.2"/>',
+        f'<circle cx="{sx(n - 1):.1f}" cy="{sy(last["p_min"]):.1f}" r="2" fill="#3fb950"/>',
+        '</svg>',
+    ]
     return "".join(parts)
 
 
@@ -1627,6 +1681,10 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             ws_closes, ws_buys, ws_sells, open_entry=open_entry_for_sym
         )
 
+        # Conviction trajectory — recent P(buy)/P(sell) history (persisted per candle).
+        _prob_hist = _read_model_scores(config.db_path, sym, limit=80)
+        conviction_html = _render_prob_sparkline(_prob_hist, _threshold, _veto_threshold)
+
         # ── per-stock decision status (priority order) ──
         if risk.is_paused(sym):
             status_html = _badge("PAUSED", "red")
@@ -1668,6 +1726,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             f"<td class='dim'>{vol_html}</td>"
             f"{_p_min_cell}"
             f"<td>{p_max_html}</td>"
+            f"<td>{conviction_html}</td>"
             f"<td>{status_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
             f"<td class='dim'>{candles} candles</td>"
@@ -1683,6 +1742,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 <th>Volume</th>
                 <th>P(buy) <span class="dim" style="font-weight:normal">thr={int(_threshold*100)}%</span></th>
                 <th>P(sell) <span class="dim" style="font-weight:normal">veto={int(_veto_threshold*100)}%</span></th>
+                <th>Conviction <span class="dim" style="font-weight:normal">buy/sell</span></th>
                 <th>Status</th>
                 <th>Warm-up</th><th>Candles</th><th>Trend (last 80)</th><th>Action</th></tr>
             {ws_rows}
