@@ -33,3 +33,15 @@ class ExtremaModel(ABC):
     @abstractmethod
     def is_trained(self) -> bool:
         """True once the model has been successfully fit at least once."""
+
+    def feature_contributions(
+        self, x: np.ndarray, feature_names: "list[str] | None" = None
+    ) -> "list[tuple[str, float]] | None":
+        """Per-feature signed contribution toward the BUY (local-min / class 0)
+        prediction for a single feature vector. Positive pushes toward BUY.
+
+        Returns None when the model cannot attribute its output linearly (e.g.
+        MLP) — callers fall back to showing raw feature values. The default is
+        None; linear models override.
+        """
+        return None

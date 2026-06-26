@@ -110,6 +110,8 @@ class LRExtremaStrategy(Strategy):
         # Latest model scores — updated every candle once trained; exposed to UI
         self._last_p_min: float = 0.0
         self._last_p_max: float = 0.0
+        # Latest feature vector fed to the model — retained for UI explainability
+        self._last_features = None
 
     # ------------------------------------------------------------------
     # Backward-compatible position-state accessors
@@ -214,7 +216,7 @@ class LRExtremaStrategy(Strategy):
         if self._model.is_trained and self.is_flat() and self._pos.entry_price is None:
             x = self._features.compute(self._candles)
             if x is not None:
-                p_min, p_max = self._model.predict_proba(x)
+                p_min, p_max = self._predict_proba(x)
                 self._last_p_min = p_min
                 self._last_p_max = p_max
                 if p_min >= self._threshold:
@@ -287,7 +289,7 @@ class LRExtremaStrategy(Strategy):
         if not self.is_flat() and self._model.is_trained:
             x = self._features.compute(self._candles)
             if x is not None:
-                _p_min, _p_max = self._model.predict_proba(x)
+                _p_min, _p_max = self._predict_proba(x)
                 self._last_p_min = _p_min
                 self._last_p_max = _p_max
                 if _p_min >= self._threshold and _p_max < self._veto_threshold:
@@ -307,10 +309,43 @@ class LRExtremaStrategy(Strategy):
         if self._model.is_trained:
             x = self._features.compute(self._candles)
             if x is not None:
-                self._last_p_min, self._last_p_max = self._model.predict_proba(x)
+                self._last_p_min, self._last_p_max = self._predict_proba(x)
 
         self._candles_since_train += 1
         return None
+
+    def _predict_proba(self, x) -> tuple[float, float]:
+        """Run the model and retain the feature vector so the UI can explain the
+        most recent prediction. Side-effect only; output is identical to the
+        model's own predict_proba (parity-golden safe)."""
+        self._last_features = x
+        return self._model.predict_proba(x)
+
+    @property
+    def feature_names(self) -> list[str]:
+        """Column names for the active feature pipeline (UI explainability)."""
+        return list(self._features.feature_names)
+
+    def last_feature_drivers(self, top_n: int = 4) -> list[dict]:
+        """Top drivers of the most recent prediction, largest magnitude first.
+
+        Each item: {name, value, kind} where kind='contrib' is a signed push
+        toward BUY (positive = bullish) and kind='raw' is the plain feature value
+        used as a fallback when the model can't attribute linearly (e.g. MLP).
+        Empty when nothing has been scored yet.
+        """
+        if self._last_features is None or not self._model.is_trained:
+            return []
+        contribs = self._model.feature_contributions(self._last_features, self.feature_names)
+        if contribs:
+            items = [{"name": n, "value": v, "kind": "contrib"} for n, v in contribs]
+        else:
+            items = [
+                {"name": n, "value": float(v), "kind": "raw"}
+                for n, v in zip(self.feature_names, self._last_features)
+            ]
+        items.sort(key=lambda it: abs(it["value"]), reverse=True)
+        return items[:top_n]
 
     def _exit_signal(self, decision) -> Signal:
         """Build an EXIT Signal from an ExitDecision returned by the exit policy."""

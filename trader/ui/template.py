@@ -6,11 +6,18 @@ render_chart_page() returns a full-page SVG chart for a single instrument.
 SQLite is queried directly (read-only connection) so the Store write path is untouched.
 """
 
+import html as _html
 import sqlite3
 import time as _time
 from datetime import datetime, timezone, timedelta
 
 from trader.costs import round_trip_cost
+
+
+def _html_attr(text: str) -> str:
+    """Escape a string for safe use inside a double-quoted HTML attribute."""
+    return _html.escape(str(text), quote=True)
+
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -1575,6 +1582,23 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             p_min_html = "<span class='dim'>—</span>"
             p_max_html = "<span class='dim'>—</span>"
 
+        # Explainability tooltip — top drivers of the latest prediction. For a
+        # linear model (kind='contrib') the arrow shows the push direction:
+        # ▲ toward BUY, ▼ against. MLP falls back to raw feature values (kind='raw').
+        _drivers = scores.get("drivers", []) if scores else []
+        if _drivers:
+            _parts = []
+            for d in _drivers:
+                if d.get("kind") == "contrib":
+                    _arrow = "▲" if d["value"] >= 0 else "▼"
+                    _parts.append(f"{_arrow} {d['name']} {d['value']:+.2f}")
+                else:
+                    _parts.append(f"{d['name']} {d['value']:.2f}")
+            _drv_title = "why P(buy): " + "  ·  ".join(_parts)
+            _p_min_cell = f'<td title="{_html_attr(_drv_title)}" style="cursor:help">{p_min_html}</td>'
+        else:
+            _p_min_cell = f"<td>{p_min_html}</td>"
+
         # Mini sparkline with trade markers (last 80 candles)
         ws_candles = _read_db(
             config.db_path,
@@ -1642,7 +1666,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"
-            f"<td>{p_min_html}</td>"
+            f"{_p_min_cell}"
             f"<td>{p_max_html}</td>"
             f"<td>{status_html}</td>"
             f"<td>{_badge(st, kind)}</td>"

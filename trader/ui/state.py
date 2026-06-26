@@ -18,4 +18,5 @@ class BotState:
     warmup_status: dict = field(default_factory=dict)
     # warmup_status shape: { "NSE:SYMBOL": {"status": "TRAINED"|"WARMING_UP"|"N/A", "candles": int} }
     model_scores: dict = field(default_factory=dict)
-    # model_scores shape: { "NSE:SYMBOL": {"p_min": float, "p_max": float} }
+    # model_scores shape: { "NSE:SYMBOL": {"p_min": float, "p_max": float,
+    #   "drivers": [ {"name": str, "value": float, "kind": "contrib"|"raw"}, ... ] } }

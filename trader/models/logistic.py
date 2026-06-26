@@ -44,3 +44,19 @@ class LogisticModel(ExtremaModel):
         p_min = proba[classes.index(0)] if 0 in classes else 0.0
         p_max = proba[classes.index(1)] if 1 in classes else 0.0
         return float(p_min), float(p_max)
+
+    def feature_contributions(
+        self, x: np.ndarray, feature_names: "list[str] | None" = None
+    ) -> "list[tuple[str, float]] | None":
+        # Binary LogisticRegression stores one coef row oriented toward the higher
+        # class (1 = local-max / sell). The signed contribution to that log-odds is
+        # coef[j] * x_scaled[j]; negating it gives the push toward BUY (class 0).
+        if self._model is None or self._scaler is None:
+            return None
+        if len(getattr(self._model, "classes_", [])) < 2:
+            return None
+        x_scaled = self._scaler.transform(x.reshape(1, -1))[0]
+        coef = self._model.coef_[0]
+        contribs = [-float(c) * float(xs) for c, xs in zip(coef, x_scaled)]
+        names = feature_names or [f"f{i}" for i in range(len(contribs))]
+        return list(zip(names, contribs))

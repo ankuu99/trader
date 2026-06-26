@@ -499,9 +499,14 @@ def main():
                     "PATTERN_TOP" if getattr(strategy, "_pattern_top_trailing", False) else "PROFIT_PCT",
                     config.env,
                 )
+            _drivers = (
+                strategy.last_feature_drivers()
+                if hasattr(strategy, "last_feature_drivers") else []
+            )
             bot_state.model_scores[strategy.instrument] = {
                 "p_min": getattr(strategy, "_last_p_min", 0.0),
                 "p_max": getattr(strategy, "_last_p_max", 0.0),
+                "drivers": _drivers,
             }
             held = getattr(strategy, "_held_bars", 0)
             if not strategy.is_flat() and strategy.instrument in risk._open_positions:
