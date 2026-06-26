@@ -119,15 +119,37 @@ def main():
     # NOTE: reconciliation must come AFTER warm-up so warm-up candles don't
     # override the reconciled position state (R3-2).
     warmup_from = datetime.now() - timedelta(days=config.historical_cache_days)
+    # Only the trailing window of warm-up scores is worth persisting — the
+    # dashboard conviction sparkline shows the last _CONVICTION_BACKFILL candles.
+    _CONVICTION_BACKFILL = 80
     for symbol in valid_watchlist:
         df = store.read_candles(symbol, config.candle_timeframe, warmup_from, datetime.now())
         strats_for_symbol = [s for s in strategies if s.instrument == symbol]
-        for _, row in df.iterrows():
+        _n = len(df)
+        _persist_from = _n - _CONVICTION_BACKFILL
+        for _i, (_, row) in enumerate(df.iterrows()):
             candle = row.to_dict()
             candle["_symbol"] = symbol
             candle["instrument_token"] = symbol_to_token.get(symbol)
             for strat in strats_for_symbol:
                 strat.on_candle(candle)  # warm-up only — signals discarded
+                # Backfill the conviction trajectory (trailing window only) so the
+                # dashboard sparkline is populated immediately on startup instead of
+                # growing in over the first ~80 live candles. The model retrains
+                # progressively through warm-up, so each candle's score mirrors what
+                # live would have recorded at that point — no seam with the live
+                # points that follow. Cosmetic only and guarded; never blocks warm-up.
+                _wm = getattr(strat, "_model", None)
+                if _i >= _persist_from and _wm is not None and getattr(_wm, "is_trained", False):
+                    try:
+                        store.write_model_score(
+                            strat.instrument, candle.get("timestamp"),
+                            getattr(strat, "_last_p_min", 0.0),
+                            getattr(strat, "_last_p_max", 0.0),
+                        )
+                    except Exception as e:
+                        logger.debug("warm-up model_score persist skipped | %s | %s",
+                                     strat.instrument, e)
     logger.info("Strategy warm-up complete")
     for strat in strategies:
         candle_count = len(getattr(strat, "_candles", []))

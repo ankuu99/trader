@@ -50,7 +50,7 @@ trader/
     ├── data/
     │   ├── historical.py          # get_candles(), warm_up() via Kite REST
     │   ├── live.py                # LiveFeed — KiteTicker WebSocket → candle assembly
-    │   └── store.py               # SQLite via Store class (candles, orders, signals, state tables)
+    │   └── store.py               # SQLite via Store class (candles, orders, signals, state, model_scores tables)
     ├── notifications/telegram.py  # Telegram bot alerts (order fill, P&L, halt, error, token reminder)
     ├── orders/manager.py          # OrderManager — paper fill simulation + live Kite orders + GTT
     ├── portfolio/tracker.py       # PortfolioTracker — paper position tracking / live Kite fetch
@@ -420,6 +420,19 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 
 ---
 
+## Live dashboard (`trader/ui/`)
+
+Read-only Flask dashboard served in a daemon thread, bound to `127.0.0.1` only (loopback); reached via SSH tunnel. Auto-refreshes every 30s (`<meta http-equiv="refresh">`). `template.py` renders the whole page as a Python f-string (CSS inlined); it queries SQLite directly via `_read_db()` (never the passed `store` object) and reads live runtime data from `bot_state`. `server.py` wires the routes.
+
+- **Date-range filter** — a top-right control (`?range=1w|1m|1q|1y|all` or `?from=&to=`) filters every historical dataset (orders, closed trades, equity/drawdown/utilisation graphs, exit-reason breakdown, per-stock scorecard, signals). Lives in the URL query string so it survives the 30s meta-refresh; POST actions redirect to `request.referrer` to preserve it. FIFO `match_trades()` runs on the **full** order set first, then trades are filtered by exit time. Equity curve rebaselines to 0 at window start. Live cards (Capital, P&L Today, open positions, persistent state) stay "now" snapshots, unfiltered.
+- **Watchlist — what the model is saying:**
+  - **P(buy) / P(sell)** — the model's *instantaneous* `(p_min, p_max)` for the latest candle, with threshold/veto markers and a decision badge (ENTRY-READY / VETOED / WAITING / WARMING / IN POSITION / PENDING / PAUSED).
+  - **Conviction** column — dual-line sparkline of recent `P(buy)` (green) / `P(sell)` (red) over the last 80 persisted candles, on a **fixed 0..1 axis** with dotted threshold/veto guides. A flat line pinned at the ceiling reads as model saturation (the stale-model failure mode), not a strong signal. Data from the `model_scores` table (see Known design decisions — warm-up backfills the trailing 80 candles, then live candles append).
+  - **P(buy) explainability tooltip** — hovering the P(buy) cell shows the top feature drivers of the latest prediction. For the linear `LogisticModel` these are signed pushes toward BUY (`feature_contributions()` = `-coef × scaled_value`); ▲ = toward BUY, ▼ = against. Non-linear models (MLP) fall back to raw feature values. Sourced from `strategy.last_feature_drivers()`, published into `bot_state.model_scores[sym]["drivers"]` by `main.py` each candle.
+- **`render_page()` must never import from `trader.backtest`** — the live/UI path stays independent of the backtest engine; shared analytics live in `trader/analytics.py` (`match_trades`, `compute_utilisation`, `drawdown_stats`, `exit_reason_breakdown`, `per_stock_scorecard`).
+
+---
+
 ## Known design decisions
 
 - **Product is always CNC** (delivery) — hardcoded in `Config.product`. No intraday/MIS support.
@@ -435,7 +448,8 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - **Backtest engine is backtest-only** — `trader/backtest/engine.py` is never imported in live trading paths.
 - **Effective capital in live mode** — on startup, `main.py` fetches `kite.margins(segment="equity")` and applies `effective_capital = min(config.total_capital, kite_available_cash)` via `config.set_effective_capital()`. This ensures the bot never tries to deploy more money than is actually in the account while still respecting the config ceiling. All derived values (`daily_loss_limit`, `max_risk_per_trade`, `max_capital_per_stock`) update automatically since they derive from `config.total_capital`. Paper mode is unaffected — it always uses the config value as-is. If the margins call fails, the system falls back to config capital and logs a warning.
 - **Cumulative P&L persistence** — `RiskManager._cumulative_pnl` is persisted to the SQLite `state` table (key `cumulative_pnl`) in live mode via `store.set_state()` on each close. On startup, `main.py` restores it via `risk.seed_cumulative_pnl(store.get_state("cumulative_pnl"))`. This ensures `capital_available` is correct across restarts (deployed capital freed + lifetime P&L tracked). Paper mode does not persist — resets to 0 on restart.
-- **`state` table in SQLite** — `store.get_state(key, default=0.0)` and `store.set_state(key, value)` provide a simple key/float persistence layer. Currently used only for `cumulative_pnl`.
+- **`state` table in SQLite** — `store.get_state(key, default=0.0)` and `store.set_state(key, value)` provide a simple key/float persistence layer. Used for `cumulative_pnl` and per-stock pause flags (`<instrument>.paused`).
+- **`model_scores` table in SQLite** — persists the model's `(p_min, p_max)` per candle for the dashboard's conviction-trajectory sparkline. Written in `main.py`'s `handle_candle` once the model is trained, via `store.write_model_score(instrument, timestamp, p_min, p_max)` (keyed on `(instrument, timestamp)`, trimmed to the last 500 rows per instrument). Read by the UI via `store.get_model_scores(instrument, limit)`. **Warm-up backfills the trailing 80 candles** (`_CONVICTION_BACKFILL` in `main.py`) so the sparkline is populated immediately on startup rather than growing in over the first ~80 live candles; because the model retrains progressively through warm-up, each backfilled score mirrors what live would have recorded at that point (no seam with the live points that follow). Only the trailing window is persisted — the sparkline shows 80, and writing all ~1,200 warm-up candles per symbol would be wasteful. The write is wrapped in try/except — purely cosmetic, a persistence failure never disturbs warm-up or the trading path. Backtest never writes it (consistent with "engine is backtest-only").
 
 ---
 
