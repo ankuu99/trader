@@ -26,7 +26,8 @@ def build_app(bot_state, risk, store, config) -> Flask:
 
     @app.route("/")
     def index():
-        html = render_page(bot_state, risk, store, config)
+        html = render_page(bot_state, risk, store, config,
+                           range_params=request.args.to_dict())
         return Response(html, mimetype="text/html")
 
     @app.route("/chart/<symbol>")
@@ -46,7 +47,8 @@ def build_app(bot_state, risk, store, config) -> Flask:
             elif action == "resume":
                 risk.unpause(instrument)
                 store.set_state(f"{instrument}.paused", 0.0)
-        return redirect("/", code=303)  # 303 → browser re-GETs "/" (no resubmit on refresh)
+        # Back to the referring view so the active date range survives the action.
+        return redirect(request.referrer or "/", code=303)
 
     @app.route("/reset_pnl", methods=["POST"])
     def reset_pnl():
@@ -59,7 +61,7 @@ def build_app(bot_state, risk, store, config) -> Flask:
             return redirect("/", code=303)
         risk.reset_cumulative_pnl(value)
         store.set_state("cumulative_pnl", value)
-        return redirect("/", code=303)
+        return redirect(request.referrer or "/", code=303)
 
     @app.route("/healthz")
     def healthz():

@@ -62,6 +62,19 @@ tr:last-child td { border-bottom: none; }
 .bar-fill.danger { background: #f85149; }
 a.chart-link { color: #58a6ff; text-decoration: none; font-size: 11px; }
 a.chart-link:hover { text-decoration: underline; }
+.rangebar { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rbtn {
+    display: inline-block; padding: 2px 8px; border-radius: 3px;
+    border: 1px solid #30363d; background: #21262d; color: #c9d1d9;
+    font-size: 11px; text-decoration: none; cursor: pointer;
+    font-family: inherit;
+}
+.rbtn:hover { border-color: #1f6feb; }
+.rbtn.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.rangebar input[type=date] {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 3px; padding: 2px 4px; font-size: 11px; font-family: inherit;
+}
 """
 
 
@@ -77,6 +90,88 @@ def _fmt_ist(dt: datetime | None) -> str:
     else:
         dt = dt.astimezone(_IST)
     return dt.strftime("%d %b %H:%M:%S")
+
+
+def _parse_ist_naive(ts) -> datetime | None:
+    """Parse a stored timestamp (naive process-local, per store.py) into an
+    IST-naive datetime — the same space _fmt_ist renders in. Date-range filtering
+    is done in IST so the window the user picks lines up with the displayed dates."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        dt = ts
+    else:
+        try:
+            dt = datetime.fromisoformat(str(ts))
+        except (ValueError, TypeError):
+            return None
+    if dt.tzinfo is None:
+        return dt + _NAIVE_TO_IST_DELTA
+    return dt.astimezone(_IST).replace(tzinfo=None)
+
+
+_RANGE_DELTAS = {
+    "1w": timedelta(days=7), "1m": timedelta(days=30),
+    "1q": timedelta(days=90), "1y": timedelta(days=365),
+}
+_RANGE_LABELS = {
+    "1w": "Last week", "1m": "Last month", "1q": "Last quarter",
+    "1y": "Last year", "all": "All time",
+}
+
+
+def _resolve_range(params: dict | None):
+    """Resolve URL params (range / from / to) into an IST-naive (lo, hi) window
+    plus a human label and the active key. lo/hi are None for all-time. Explicit
+    from/to dates take precedence over a quick-filter range key. Bad input falls
+    back to all-time."""
+    params = params or {}
+    now = _now_ist().replace(tzinfo=None)
+    hi_today = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    frm = (params.get("from") or "").strip()
+    to = (params.get("to") or "").strip()
+
+    def _day(s: str, end: bool = False):
+        try:
+            d = datetime.fromisoformat(s)
+        except (ValueError, TypeError):
+            return None
+        return (d.replace(hour=23, minute=59, second=59, microsecond=0) if end
+                else d.replace(hour=0, minute=0, second=0, microsecond=0))
+
+    if frm or to:
+        lo = _day(frm)
+        hi = _day(to, end=True) or hi_today
+        if lo or _day(to, end=True):  # at least one valid bound
+            lbl = f"{lo:%d %b %Y}" if lo else "start"
+            return lo, hi, f"{lbl} – {hi:%d %b %Y}", "custom"
+
+    key = (params.get("range") or "").strip().lower()
+    if key in _RANGE_DELTAS:
+        lo = (now - _RANGE_DELTAS[key]).replace(hour=0, minute=0, second=0, microsecond=0)
+        return lo, hi_today, _RANGE_LABELS[key], key
+    return None, None, _RANGE_LABELS["all"], "all"
+
+
+def _filter_trades(trades: list[dict], lo, hi) -> list[dict]:
+    """Keep matched trades whose exit (IST) falls within [lo, hi]. Trades with no
+    recorded exit are dropped from windowed views. lo/hi None ⇒ no filtering.
+    NOTE: always run this AFTER FIFO match_trades on the full order set — never
+    filter raw orders before matching, or BUY↔SELL pairing across the window
+    boundary breaks."""
+    if lo is None and hi is None:
+        return trades
+    out = []
+    for t in trades:
+        x = _parse_ist_naive(t.get("exit_time"))
+        if x is None:
+            continue
+        if lo and x < lo:
+            continue
+        if hi and x > hi:
+            continue
+        out.append(t)
+    return out
 
 
 def _market_status(now: datetime) -> str:
@@ -645,9 +740,15 @@ body {{ max-width: 1160px; margin: 0 auto; }}
 </html>"""
 
 
-def render_page(bot_state, risk, store, config) -> str:
+def render_page(bot_state, risk, store, config, range_params=None) -> str:
     now = _now_ist()
     market = _market_status(now)
+
+    # ── date range (URL params; persists across the meta-refresh for free) ─────
+    _lo, _hi, _range_label, _range_key = _resolve_range(range_params)
+    # SQL queries hit naive process-local timestamps; convert the IST window back.
+    _lo_local = (_lo - _NAIVE_TO_IST_DELTA) if _lo else None
+    _hi_local = (_hi - _NAIVE_TO_IST_DELTA) if _hi else None
 
     # ── heartbeat staleness ──────────────────────────────────────────────────
     last_tick = bot_state.last_candle_at
@@ -696,14 +797,21 @@ def render_page(bot_state, risk, store, config) -> str:
     )
     pending_orders = list(risk._pending_orders.keys())
 
-    # ── today's orders ────────────────────────────────────────────────────────
-    orders = _read_db(
-        config.db_path,
-        "SELECT instrument, direction, quantity, price, status, placed_at "
-        "FROM orders "
-        "WHERE date(placed_at) = date('now', 'localtime') "
-        "ORDER BY placed_at DESC LIMIT 20",
-    )
+    # ── orders in range (defaults to most-recent 20 when all-time) ─────────────
+    if _lo_local or _hi_local:
+        orders = _read_db(
+            config.db_path,
+            "SELECT instrument, direction, quantity, price, status, placed_at "
+            "FROM orders WHERE placed_at >= ? AND placed_at <= ? "
+            "ORDER BY placed_at DESC LIMIT 100",
+            ((_lo_local or datetime.min).isoformat(), (_hi_local or datetime.max).isoformat()),
+        )
+    else:
+        orders = _read_db(
+            config.db_path,
+            "SELECT instrument, direction, quantity, price, status, placed_at "
+            "FROM orders ORDER BY placed_at DESC LIMIT 20",
+        )
 
     # ── closed trade history (FIFO-matched so scale-out partials split correctly) ──
     # A 7-share entry exited as 4 + 3 must show as two trades (4 and 3) with their
@@ -736,39 +844,43 @@ def render_page(bot_state, risk, store, config) -> str:
             _rec["exit_reason"] = _reason_q[_o["instrument"]].popleft()
         _orders_for_match.append(_rec)
     _matched = match_trades(_orders_for_match)
+    # FIFO matched on the FULL order set above; NOW restrict to the date window.
+    # Everything below derived from closed trades uses the windowed set; only
+    # capital utilisation keeps the full set (overlap handled inside its from/to).
+    _windowed = _filter_trades(_matched, _lo, _hi)
 
     closed_trades = sorted(
-        _matched, key=lambda t: str(t.get("exit_time") or ""), reverse=True
+        _windowed, key=lambda t: str(t.get("exit_time") or ""), reverse=True
     )[:30]
 
-    # ── recent signals ────────────────────────────────────────────────────────
+    # ── recent signals (date-bounded server-side; logged_at is process-local) ──
+    _sig_clause, _sig_args = "", ()
+    if _lo_local or _hi_local:
+        _sig_clause = " AND logged_at >= ? AND logged_at <= ?"
+        _sig_args = ((_lo_local or datetime.min).isoformat(), (_hi_local or datetime.max).isoformat())
     signals = _read_db(
         config.db_path,
         "SELECT logged_at, instrument, direction, signal_type, price_hint, accepted, reject_reason, exit_reason "
-        "FROM signals WHERE reject_reason IS NULL OR reject_reason NOT LIKE 'FILTER:%' "
-        "ORDER BY id DESC LIMIT 20",
+        "FROM signals WHERE (reject_reason IS NULL OR reject_reason NOT LIKE 'FILTER:%')"
+        + _sig_clause + " ORDER BY id DESC LIMIT 20",
+        _sig_args,
     )
     filtered_signals = _read_db(
         config.db_path,
         "SELECT logged_at, instrument, direction, signal_type, price_hint, reject_reason "
-        "FROM signals WHERE reject_reason LIKE 'FILTER:%' "
-        "ORDER BY id DESC LIMIT 30",
+        "FROM signals WHERE reject_reason LIKE 'FILTER:%'"
+        + _sig_clause + " ORDER BY id DESC LIMIT 30",
+        _sig_args,
     )
 
-    # ── capital utilisation + equity curve (from the same FIFO-matched trades) ──
-    all_closed = sorted(
-        _matched, key=lambda t: str(t.get("entry_time") or ""),
-    )
-
-    def _parse_ts(ts):
-        try:
-            return datetime.fromisoformat(str(ts))
-        except Exception:
-            return None
-
+    # ── capital utilisation (over time) ──────────────────────────────────────
+    # Built from the FULL matched set + open positions; the window is applied
+    # *inside* compute_utilisation (from/to) so a position opened before the
+    # window but still open during it correctly counts as deployed capital.
+    _all_for_util = sorted(_matched, key=lambda t: str(t.get("entry_time") or ""))
     util_trades = []
-    for t in all_closed:
-        ed, xd = _parse_ts(t["entry_time"]), _parse_ts(t["exit_time"])
+    for t in _all_for_util:
+        ed, xd = _parse_ist_naive(t["entry_time"]), _parse_ist_naive(t["exit_time"])
         # Skip rows with a NULL fill price / qty — some completed orders carry no
         # recorded price; None * qty would crash compute_utilisation.
         if ed and xd and t["entry_price"] is not None and t["quantity"] is not None:
@@ -777,20 +889,22 @@ def render_page(bot_state, risk, store, config) -> str:
                 "pnl": t["gross_pnl"] or 0.0, "entry_date": ed, "exit_date": xd,
             })
     # Currently-open positions still tie up capital → count as deployed through "now".
-    _now_naive = datetime.now()
+    _now_naive = _now_ist().replace(tzinfo=None)
     for p in positions:
-        ed = _parse_ts(p["entry_time"])
+        ed = _parse_ist_naive(p["entry_time"])
         if ed and p["entry_price"] is not None and p["quantity"] is not None:
             util_trades.append({
                 "entry": p["entry_price"], "exit": p["entry_price"], "qty": p["quantity"],
                 "pnl": 0.0, "entry_date": ed, "exit_date": _now_naive,
             })
-    util = compute_utilisation(util_trades, total, bucket="day")
+    util = compute_utilisation(util_trades, total, from_dt=_lo, to_dt=_hi, bucket="day")
 
-    # Equity curve: cumulative gross P&L over closed trades, ordered by exit time.
+    # Equity curve: cumulative gross P&L over the WINDOWED closed trades, ordered
+    # by exit time. Baseline resets to 0 at the window start — this is "P&L in
+    # range", distinct from the lifetime cumulative_pnl on the Persistent State card.
     _closed_sorted = sorted(
-        (t for t in all_closed if _parse_ts(t["exit_time"])),
-        key=lambda t: _parse_ts(t["exit_time"]),
+        (t for t in _windowed if _parse_ist_naive(t["exit_time"])),
+        key=lambda t: _parse_ist_naive(t["exit_time"]),
     )
     equity_vals, _cum = [], 0.0
     for t in _closed_sorted:
@@ -803,6 +917,25 @@ def render_page(bot_state, risk, store, config) -> str:
 
     # ── build sections ────────────────────────────────────────────────────────
 
+    # ── date-range control (quick filters + custom picker) ─────────────────────
+    _from_val = _lo.strftime("%Y-%m-%d") if _lo else ""
+    _to_val = (_hi or now.replace(tzinfo=None)).strftime("%Y-%m-%d")
+
+    def _rbtn(key, label):
+        cls = "rbtn active" if key == _range_key else "rbtn"
+        return f'<a href="/?range={key}" class="{cls}">{label}</a>'
+
+    range_controls = f"""
+        <span class="rangebar">
+            <span class="dim" style="font-size:11px">Range:</span>
+            {_rbtn("1w", "1W")}{_rbtn("1m", "1M")}{_rbtn("1q", "1Q")}{_rbtn("1y", "1Y")}{_rbtn("all", "All")}
+            <form method="GET" action="/" style="display:inline-flex;gap:4px;margin-left:6px;align-items:center">
+                <input type="date" name="from" value="{_from_val}">
+                <input type="date" name="to" value="{_to_val}">
+                <button type="submit" class="rbtn{' active' if _range_key == 'custom' else ''}">Apply</button>
+            </form>
+        </span>"""
+
     header = f"""
     <h1>Trader Dashboard</h1>
     <div class="meta">
@@ -811,6 +944,11 @@ def render_page(bot_state, risk, store, config) -> str:
         &nbsp;·&nbsp; uptime {uptime_str}
         &nbsp;·&nbsp; last tick: {'<span class="red">'+tick_str+'</span>' if tick_stale else tick_str}
         <span style="float:right;font-size:11px">auto-refresh 30s</span>
+    </div>
+    <div class="meta" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="font-size:11px">Showing <span class="val">{len(_windowed)}</span> closed trades
+            &nbsp;·&nbsp; <span class="orange">{_range_label}</span></span>
+        {range_controls}
     </div>"""
 
     capital_card = f"""
@@ -867,7 +1005,7 @@ def render_page(bot_state, risk, store, config) -> str:
         util_section = ""
 
     # ── cumulative P&L + drawdown panel (merged, #7) ──
-    _dd = drawdown_stats(_matched, config.total_capital)
+    _dd = drawdown_stats(_windowed, config.total_capital)
     _eq_left = ""
     if equity_vals:
         _eq_sign = "+" if equity_total >= 0 else ""
@@ -1129,17 +1267,17 @@ def render_page(bot_state, risk, store, config) -> str:
             )
         orders_section = f"""
         <div class="card full">
-            <h2>Today's Orders ({len(orders)})</h2>
+            <h2>Orders ({len(orders)}) <span class="dim" style="font-weight:normal;text-transform:none">· {_range_label}</span></h2>
             <table>
                 <tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Price</th><th>Status</th></tr>
                 {rows_html}
             </table>
         </div>"""
     else:
-        orders_section = """
+        orders_section = f"""
         <div class="card full">
-            <h2>Today's Orders</h2>
-            <span class="dim">No orders today</span>
+            <h2>Orders <span class="dim" style="font-weight:normal;text-transform:none">· {_range_label}</span></h2>
+            <span class="dim">No orders in range</span>
         </div>"""
 
     # Closed trade history
@@ -1219,7 +1357,7 @@ def render_page(bot_state, risk, store, config) -> str:
         trades_section = ""
 
     # ── exit-reason breakdown (#3) — counts + P&L + hold, NO win-rate-per-reason ──
-    _reason_rows = exit_reason_breakdown(_matched)
+    _reason_rows = exit_reason_breakdown(_windowed)
     if _reason_rows:
         _rr_kind = {
             "SL": "red", "TRAILING": "orange", "PATTERN_TOP": "orange",
@@ -1252,11 +1390,11 @@ def render_page(bot_state, risk, store, config) -> str:
         reason_section = ""
 
     # ── per-stock scorecard (#6) — gross from FIFO trades; net adds round-trip costs ──
-    _scorecard = per_stock_scorecard(_matched, positions)
+    _scorecard = per_stock_scorecard(_windowed, positions)
     if _scorecard:
         _sc_product = config.product
         _cost_by_inst: dict[str, float] = {}
-        for t in _matched:
+        for t in _windowed:
             _ep, _xp, _q = t.get("entry_price"), t.get("exit_price"), t.get("quantity")
             if _ep and _xp and _q:
                 _cost_by_inst[t["instrument"]] = _cost_by_inst.get(t["instrument"], 0.0) + \
