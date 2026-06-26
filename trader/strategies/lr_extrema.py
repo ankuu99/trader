@@ -321,6 +321,24 @@ class LRExtremaStrategy(Strategy):
         self._last_features = x
         return self._model.predict_proba(x)
 
+    def score_current(self) -> tuple[float, float] | None:
+        """Model (p_min, p_max) for the current candle buffer, computed directly
+        and independent of position / pending-fill state. Returns None when the
+        model is untrained or there isn't enough history.
+
+        Used by the warm-up conviction backfill: reading the cached _last_p_min
+        there is unreliable because a discarded phantom warm-up entry sets
+        _pos.entry_price with no fill, after which on_candle's pending-fill guard
+        returns early every candle and freezes _last_p_min at the entry-trigger
+        value. This recomputes from the trained model so each candle gets its true
+        score. Pure — no side effects on _last_p_min / _last_features."""
+        if not self._model.is_trained:
+            return None
+        x = self._features.compute(self._candles)
+        if x is None:
+            return None
+        return self._model.predict_proba(x)
+
     @property
     def feature_names(self) -> list[str]:
         """Column names for the active feature pipeline (UI explainability)."""

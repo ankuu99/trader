@@ -139,14 +139,19 @@ def main():
                 # progressively through warm-up, so each candle's score mirrors what
                 # live would have recorded at that point — no seam with the live
                 # points that follow. Cosmetic only and guarded; never blocks warm-up.
-                _wm = getattr(strat, "_model", None)
-                if _i >= _persist_from and _wm is not None and getattr(_wm, "is_trained", False):
+                #
+                # Must use score_current() (a direct model eval), NOT the cached
+                # _last_p_min: a discarded phantom warm-up entry sets _pos.entry_price
+                # with no fill, after which on_candle's pending-fill guard returns
+                # early every candle and freezes _last_p_min — which would write the
+                # same value 80 times (flat sparkline).
+                if _i >= _persist_from and hasattr(strat, "score_current"):
                     try:
-                        store.write_model_score(
-                            strat.instrument, candle.get("timestamp"),
-                            getattr(strat, "_last_p_min", 0.0),
-                            getattr(strat, "_last_p_max", 0.0),
-                        )
+                        _sc = strat.score_current()
+                        if _sc is not None:
+                            store.write_model_score(
+                                strat.instrument, candle.get("timestamp"), _sc[0], _sc[1]
+                            )
                     except Exception as e:
                         logger.debug("warm-up model_score persist skipped | %s | %s",
                                      strat.instrument, e)

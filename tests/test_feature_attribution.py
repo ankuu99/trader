@@ -64,3 +64,40 @@ def test_strategy_drivers_empty_before_any_prediction():
 
     strat = LRExtremaStrategy("NSE:TEST", {"warmup_bars": 5})
     assert strat.last_feature_drivers() == []
+
+
+def test_score_current_none_until_trained():
+    from trader.strategies.lr_extrema import LRExtremaStrategy
+
+    strat = LRExtremaStrategy("NSE:TEST", {"warmup_bars": 5})
+    assert strat.score_current() is None
+
+
+def test_score_current_ignores_pending_entry_freeze():
+    """score_current must reflect the model on the current buffer regardless of a
+    stuck phantom-entry state (the warm-up freeze that flatlined the sparkline)."""
+    import numpy as np
+    from trader.strategies.lr_extrema import LRExtremaStrategy
+
+    strat = LRExtremaStrategy("NSE:TEST", {"warmup_bars": 5})
+    strat._model = _trained_model()
+
+    captured = {}
+
+    class _Pipe:
+        feature_names = ["f0", "f1"]
+        def compute(self, candles):
+            return captured["x"]
+
+    strat._features = _Pipe()
+    # Simulate the frozen phantom-entry state that breaks _last_p_min.
+    strat._pos.entry_price = 100.0
+    strat._last_p_min = 0.97  # stale frozen cache
+
+    captured["x"] = np.array([0.1, 0.1])   # low f0 -> buy-ish
+    low = strat.score_current()
+    captured["x"] = np.array([0.95, 0.1])  # high f0 -> sell-ish
+    high = strat.score_current()
+
+    assert low is not None and high is not None
+    assert low[0] != high[0]               # tracks features, not the frozen cache
