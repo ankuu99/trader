@@ -261,6 +261,42 @@ def _render_underwater_svg(underwater: list[float], width: int = 300, height: in
     )
 
 
+def _render_utilisation_svg(rows: list[dict], width: int = 300, height: int = 70) -> str:
+    """Dual-line chart of capital utilisation over trading days: utilisation %
+    (blue, left scale) and gross deployed capital ₹ (gold, right scale). Each
+    series is normalised to its own range so both shapes are visible."""
+    if len(rows) < 2:
+        return "<span class='dim'>—</span>"
+    util_vals = [r["avg_util_pct"] for r in rows]
+    dep_vals = [r["avg_deployed"] for r in rows]
+    pad = 4
+    n = len(rows)
+
+    def sx(i: int) -> float:
+        return pad + (i / (n - 1)) * (width - 2 * pad)
+
+    u_hi = max(max(util_vals), 1.0)
+    d_hi = max(max(dep_vals), 1.0)
+
+    def syu(v: float) -> float:
+        return pad + (1 - v / u_hi) * (height - 2 * pad)
+
+    def syd(v: float) -> float:
+        return pad + (1 - v / d_hi) * (height - 2 * pad)
+
+    upts = " ".join(f"{sx(i):.1f},{syu(v):.1f}" for i, v in enumerate(util_vals))
+    dpts = " ".join(f"{sx(i):.1f},{syd(v):.1f}" for i, v in enumerate(dep_vals))
+    return (
+        f'<svg width="{width}" height="{height}" '
+        f'style="vertical-align:middle;display:inline-block">'
+        f'<polyline points="{dpts}" fill="none" stroke="#d29922" stroke-width="1.5"/>'
+        f'<polyline points="{upts}" fill="none" stroke="#58a6ff" stroke-width="1.5"/>'
+        f'<circle cx="{sx(n - 1):.1f}" cy="{syd(dep_vals[-1]):.1f}" r="2" fill="#d29922"/>'
+        f'<circle cx="{sx(n - 1):.1f}" cy="{syu(util_vals[-1]):.1f}" r="2" fill="#58a6ff"/>'
+        f'</svg>'
+    )
+
+
 def _render_sparkline(closes: list[float], entry_price: float,
                       width: int = 160, height: int = 45) -> str:
     if len(closes) < 2:
@@ -804,16 +840,8 @@ def render_page(bot_state, risk, store, config) -> str:
 
     # ── capital utilisation panel (over time) ──
     _o = util["overall"]
-    _u_rows = util["monthly"][-10:]   # last 10 trading days
-    if _u_rows:
-        _util_body = "".join(
-            f"<tr><td class='dim'>{r['month']}</td>"
-            f"<td class='val'>{r['avg_util_pct']:.0f}%</td>"
-            f"<td class='val'>{r['peak_util_pct']:.0f}%</td>"
-            f"<td class='val'>{r['avg_positions']:.1f}</td>"
-            f"<td class='val'>{r['peak_positions']}</td></tr>"
-            for r in _u_rows
-        )
+    _u_rows = util["monthly"]   # full daily series for the chart
+    if len(_u_rows) >= 2:
         util_section = f"""
     <div class="card">
         <h2>Capital Utilisation (gross, daily)</h2>
@@ -822,10 +850,11 @@ def render_page(bot_state, risk, store, config) -> str:
             &nbsp;·&nbsp; peak deployed &#8377;{_o['peak_deployed']:,.0f}
             &nbsp;·&nbsp; peak pos {_o['peak_positions']}/{config.max_open_positions}
         </div>
-        <table>
-            <tr><th>day</th><th>avgUtil</th><th>peakUtil</th><th>avgPos</th><th>peakPos</th></tr>
-            {_util_body}
-        </table>
+        {_render_utilisation_svg(_u_rows)}
+        <div class="dim" style="font-size:11px;margin-top:4px">
+            <span style="color:#58a6ff">&#9632;</span> utilisation %
+            &nbsp;·&nbsp; <span style="color:#d29922">&#9632;</span> deployed &#8377;
+        </div>
     </div>"""
     else:
         util_section = ""
