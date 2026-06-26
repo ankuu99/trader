@@ -1246,6 +1246,27 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                     closes = [r["close"] for r in candle_rows]
                     sparkline_html = _render_sparkline(closes, p["entry_price"])
 
+            # Conviction sparkline over the SAME window (entry → now). Reuses the
+            # persisted model_scores; per-stock thresholds drive the guide lines.
+            # Coverage degrades gracefully — if the position predates the recorded
+            # scores the line just starts later (or shows a dash under 2 points).
+            conviction_html = "<span class='dim'>—</span>"
+            if p.get("entry_time"):
+                _pscores = _read_db(
+                    config.db_path,
+                    "SELECT timestamp, p_min, p_max FROM model_scores "
+                    "WHERE instrument = ? AND timestamp >= ? ORDER BY timestamp ASC",
+                    (p["instrument"], p["entry_time"]),
+                )
+                if len(_pscores) >= 2:
+                    _pcfg = config.get_strategy_params(p["instrument"], "lr_extrema") or {}
+                    conviction_html = _render_prob_sparkline(
+                        _pscores,
+                        float(_pcfg.get("threshold", 0.70)),
+                        float(_pcfg.get("veto_threshold", 0.50)),
+                        width=160, height=45,
+                    )
+
             # #14 — scale-out lifecycle sub-line (entry → sold legs → holding remainder)
             legs_html = ""
             _li = _pos_legs.get(p["instrument"])
@@ -1275,6 +1296,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 f"<td>{hold_cell}</td>"
                 f"<td>{_badge('OPEN', 'green')}{trailing_badge}</td>"
                 f"<td>{sparkline_html}</td>"
+                f"<td>{conviction_html}</td>"
                 f"</tr>"
             )
         for inst in pending_orders:
@@ -1283,7 +1305,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 f"<tr>"
                 f"<td>{sym}</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
                 f"<td>—</td><td>—</td><td>—</td><td>—</td>"
-                f"<td>{_badge('PENDING', 'orange')}</td><td></td>"
+                f"<td>{_badge('PENDING', 'orange')}</td><td></td><td></td>"
                 f"</tr>"
             )
         pos_section = f"""
@@ -1294,7 +1316,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                     <th>Symbol / Entry time</th><th>Qty</th><th>Entry</th>
                     <th>Current (chg%)</th><th>Unreal. P&amp;L</th>
                     <th>Peak &#9650;</th><th>Low &#9660;</th><th>SL / Trail trigger</th>
-                    <th>Held</th><th>Status</th><th>Since entry</th>
+                    <th>Held</th><th>Status</th><th>Price (since entry)</th>
+                    <th>Model (since entry)</th>
                 </tr>
                 {rows_html}
             </table>
