@@ -261,10 +261,15 @@ def _render_underwater_svg(underwater: list[float], width: int = 300, height: in
     )
 
 
-def _render_utilisation_svg(rows: list[dict], width: int = 300, height: int = 70) -> str:
-    """Dual-line chart of capital utilisation over trading days: utilisation %
-    (blue, left scale) and gross deployed capital ₹ (gold, right scale). Each
-    series is normalised to its own range so both shapes are visible."""
+def _render_utilisation_svg(rows: list[dict], capital: float,
+                            width: int = 300, height: int = 70) -> str:
+    """Capital utilisation over trading days. Blue line = utilisation %
+    (vs the compounding available capital, scaled to its own peak). Gold line =
+    gross deployed ₹ scaled against *total capital* (0 = idle, top = fully
+    deployed), with a dashed ceiling at the capital limit. Scaling deployed ₹ on
+    the absolute capital axis — rather than its own range — keeps it from
+    collapsing onto the utilisation line; the gap between the two shows the
+    effect of compounding realised P&L on available capital."""
     if len(rows) < 2:
         return "<span class='dim'>—</span>"
     util_vals = [r["avg_util_pct"] for r in rows]
@@ -276,19 +281,21 @@ def _render_utilisation_svg(rows: list[dict], width: int = 300, height: int = 70
         return pad + (i / (n - 1)) * (width - 2 * pad)
 
     u_hi = max(max(util_vals), 1.0)
-    d_hi = max(max(dep_vals), 1.0)
+    cap = capital or max(max(dep_vals), 1.0)
 
     def syu(v: float) -> float:
         return pad + (1 - v / u_hi) * (height - 2 * pad)
 
     def syd(v: float) -> float:
-        return pad + (1 - v / d_hi) * (height - 2 * pad)
+        return pad + (1 - min(v / cap, 1.0)) * (height - 2 * pad)
 
     upts = " ".join(f"{sx(i):.1f},{syu(v):.1f}" for i, v in enumerate(util_vals))
     dpts = " ".join(f"{sx(i):.1f},{syd(v):.1f}" for i, v in enumerate(dep_vals))
     return (
         f'<svg width="{width}" height="{height}" '
         f'style="vertical-align:middle;display:inline-block">'
+        f'<line x1="{pad}" y1="{pad}" x2="{width - pad}" y2="{pad}" '
+        f'stroke="#d29922" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.4"/>'
         f'<polyline points="{dpts}" fill="none" stroke="#d29922" stroke-width="1.5"/>'
         f'<polyline points="{upts}" fill="none" stroke="#58a6ff" stroke-width="1.5"/>'
         f'<circle cx="{sx(n - 1):.1f}" cy="{syd(dep_vals[-1]):.1f}" r="2" fill="#d29922"/>'
@@ -850,10 +857,10 @@ def render_page(bot_state, risk, store, config) -> str:
             &nbsp;·&nbsp; peak deployed &#8377;{_o['peak_deployed']:,.0f}
             &nbsp;·&nbsp; peak pos {_o['peak_positions']}/{config.max_open_positions}
         </div>
-        {_render_utilisation_svg(_u_rows)}
+        {_render_utilisation_svg(_u_rows, total)}
         <div class="dim" style="font-size:11px;margin-top:4px">
             <span style="color:#58a6ff">&#9632;</span> utilisation %
-            &nbsp;·&nbsp; <span style="color:#d29922">&#9632;</span> deployed &#8377;
+            &nbsp;·&nbsp; <span style="color:#d29922">&#9632;</span> deployed &#8377; (vs &#8377;{total:,.0f} cap)
         </div>
     </div>"""
     else:
