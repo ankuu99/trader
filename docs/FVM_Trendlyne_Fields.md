@@ -1,0 +1,253 @@
+### quarter (60 fields)
+- Admin Plus Selling Expenses Qtr
+- Bank Provisions Made Qtr
+- Basic EPS After ExtraOrdinary Qtr
+- Basic EPS Qtr
+- Capital Adequacy BaseII Qtr %
+- Depreciation Qtr
+- Diluted EPS After ExtraOrdinary Qtr
+- Diluted EPS Qtr
+- EBITDA Qtr
+- EBITDA Qtr growth YoY %
+- Earning Per Share Adjusted latest Qtr
+- Employee Expenses Qtr
+- Encumbered Number of Shares Qtr
+- Equity Capital Qtr
+- Exceptional Items Qtr
+- Excise Qtr
+- Expenses Capitalised Qtr
+- ExtraOrdinary Items Qtr
+- Face Value Qtr
+- Gross NPA Qtr
+- Gross NPA ratio Qtr %
+- Income From Investment Qtr
+- Int On Balances With RBI Qtr
+- IntOrDiscOnAdvOrBills Qtr
+- Interest Qtr
+- Minority Interest Qtr
+- Net NPA Qtr
+- Net NPA ratio % Qtr
+- Net PL After MI Associates Qtr
+- Net Profit 2Yr QoQ Growth %
+- Net Profit Margin Qtr %
+- Net Profit QoQ Growth %
+- Net Profit Qtr
+- Number Of Shares Qtr End
+- Operating Expenses Qtr
+- Operating Income Qtr
+- Operating Profit Growth Qtr YoY %
+- Operating Profit Margin Qtr %
+- Operating Profit Qtr
+- Operating Revenues Qtr
+- Other Expenses Qtr
+- Other Income Qtr
+- Other Interest Earned Qtr
+- Other Operating Income Qtr
+- Power Plus Fuel Qtr
+- Prior Year Adj Qtr
+- Profit Before Tax Qtr
+- Purchase Of Traded Goods Qtr
+- Raw Material Consumed Qtr
+- Reported PAT Qtr
+- Reserves Plus Surplus Qtr
+- Revenue Growth Qtr YoY %
+- Revenue QoQ Growth %
+- Revenue Qtr 2Yr QoQ Growth %
+- RnD Expenses Qtr
+- RoA Qtr %
+- Share Of PL From Associates Qtr
+- Stock Adjustments Qtr
+- Tax Qtr
+- Total Revenue Qtr
+
+### annual (189 fields)
+- Adjustments On Amalgamation Merger Demerger Others
+- Aircraft Fuel Expenses Annual
+- Aircraft Lease Rentals Annual
+- Asset Turnover Annual %
+- Basic EPS Annual
+- Bonus Equity Share Capital Annual
+- Book Value Inc Reval Reserve Annual
+- CIF Value Of Capital Goods Annual
+- CIF Value Of Other Goods Annual
+- CIF Value Of Raw Materials Annual
+- CIF Value Of StoresSparesAndLooseTools Annual
+- Capital Work In Progress Annual
+- Cash Accruals Annual
+- Cash EPS 1Yr Growth %
+- Cash EPS 3Yr Growth %
+- Cash EPS 5Yr Growth %
+- Cash EPS Annual
+- Cash Earning Retention Annual %
+- Cash Flow Return on Assets Annual
+- Cash Plus Cash Equivalent Begin Of Year Annual
+- Cash Plus Cash Equivalent End Of Year Annual
+- Cash Plus Cash Equivalents Annual
+- Cash Return on Capital Invested
+- Cash Turnover Annual
+- Cash from Financing Annual Activity
+- Cash from Investing Activity Annual
+- Cash from Operating Activity Annual
+- Contingent Liabilities plus Commitments Annual
+- Cost Of Fuel Annual
+- Cost Of Materials Consumed Annual
+- Cost Of Power Purchased Annual
+- Current Investments Annual
+- Current Investments Quoted MarketValue Annual
+- Current Investments Unquoted BookValue Annual
+- Current Ratio Annual
+- Current Tax Annual
+- Deferred Tax Annual
+- Deferred Tax Assets Annual
+- Deferred Tax Liabilities Annual
+- Depreciation
+- Diluted EPS Annual
+- Dividend Payout to NP Annual
+- Dividend Per Share Annual
+- Dividend Remittance In Forex Annual
+- EBIT Annual Margin %
+- EBIT Annual Per Share
+- EBITDA Annual
+- EBITDA Annual Margin %
+- EBITDA Annual Per Share
+- EPS Annual
+- ESOPs Annual
+- EV Per EBITDA Annual
+- EV Per Net Sales Annual
+- Earning Retention Annual %
+- Earnings Yield Annual
+- Employee Expenses Annual
+- EnterpriseValue Annual
+- Equity Share Application Money Annual
+- Equity Share Capital Annual
+- Exceptional Items Annual
+- Excise Service Tax Other Levies Annual
+- Extraordinary Items Annual
+- Fixed Assets Annual
+- Foreign Exchange FOB Annual
+- Foreign Exchange Other Earnings Annual
+- Forex Expenses Annual
+- Forex Gains Losses Annual
+- Goodwill On Consolidation Annual
+- Government Other Grants Annual
+- Hybrid Debt Other Securities Annual
+- Imported Raw Materials Annual
+- Imported Stores Plus Spares Annual
+- Indigenous Raw Materials Annual
+- Indigenous Stores Plus Spares Annual
+- Intangible Assets Annual
+- Intangible Assets Under Development Annual
+- Interest Annual
+- Interest Coverage Post Tax Annual %
+- Interest Coverage Ratio Annual
+- Interest Expenses from Earning Assets Annual %
+- Interest Income from Earning Assets Annual %
+- Inventories Annual
+- Inventories Changes Of FGWIP Plus Stock In Trade Annual
+- Inventory Turnover Ratio Annual
+- Less Amounts Transfer To Capital Accounts Annual
+- Less Inter Unit Segment Division Transfer Annual
+- Less Share Of Loss From Partnership Firm Annual
+- Less Transfer To From Investment Fixed Assets Others Annual
+- LessMATCredit_A
+- Long Term Debt Annual
+- Long Term Debt To Equity Annual
+- Long Term Loans Plus Advances Annual
+- Long Term Provisions Annual
+- Market Cap Per Sales Annual
+- Minority Interest Assets Annual
+- Minority Interest Income Annual
+- Minority Interest Liability Annual
+- Misc Expended written Off Annual
+- Money Against Share Warrants Annual
+- NIM Annual %
+- Net Cash Flow Annual
+- Net Increase In Cash Plus Cash Equivalents Annual
+- Net Profit 3Yr Growth %
+- Net Profit 5Yr Growth %
+- Net Profit After MI Margin Annual %
+- Net Profit After MI Per Share Annual
+- Net Profit Annual
+- Net Profit From Discontinuing Operations Annual
+- Net Profit Margin Annual %
+- Net Profit Per Share Annual
+- Non Current Investments Annual
+- Non Current Investments Quoted MarketValue Annual
+- Non Current Investments Unquoted BookValue Annual
+- Operating Cash Flow 3Yr Growth %
+- Operating Cash Flow 5Yr Growth %
+- Operating Expenses Annual
+- Operating Expenses from Earning Assets Annual %
+- Operating Plus Direct Expenses Annual
+- Operating Profit Annual
+- Operating Profit Margin Annual %
+- Operating Revenue Per Share Annual
+- Operating Revenues Annual
+- Other Assets Annual
+- Other Current Assets Annual
+- Other Current Liabilities Annual
+- Other Direct Taxes Annual
+- Other Expenses Annual
+- Other Income Annual
+- Other LongTerm Liabilities Annual
+- Other Non Current Assets Annual
+- Other Operating Revenues Annual
+- PAT Before ExtraOrdinary Items Annual
+- PBT Annual Margin %
+- PBT Annual Per Share
+- Policy Holders Funds Annual
+- Preference Capital Annual
+- Preference Share Application Money Annual
+- Preference Share Dividend Annual
+- Price To Sales Annual
+- Price to Book Value Adjusted
+- Prior Period Items Annual
+- Profit Before Tax Annual
+- Profit For The Period Annual
+- Profit From Continuing Operations Annual
+- Profit From Discontinuing Operations Annual
+- ProfitLoss After MI Plus Associates Annual
+- ProfitLoss Before Exceptional ExtraOrdinary Items And Tax Annual
+- Provisions Plus Contingencies Annual
+- Purchase Of Stock In Trade Annual
+- Quick Ratio Annual
+- ROCE Annual %
+- ROE Annual %
+- ROIC Annual %
+- Reserves Plus Surplus Annual
+- Retention Ratio Annual %
+- Revaluation Reserves Annual
+- Revenue Annual 2Yr Growth %
+- Revenue Annual 3Yr Growth %
+- Revenue Annual 5Yr Growth %
+- Revenue Gross From Operations Annual
+- Revenue Growth Annual YoY %
+- Revenue Net From Operations Annual
+- RoA Annual %
+- Share Of Profit Loss From Associate Annual
+- Short Term Debt Annual
+- Short Term Loans Plus Advances Annual
+- Short Term Provisions Annual
+- Sloan Ratio
+- Tangible Assets Annual
+- Tax Annual
+- Tax For Earlier Years Annual
+- Tax On Dividend Annual
+- Tax on Discontinuing Operations Annual
+- Total Assets Annual
+- Total Capital Plus Liabilities Annual
+- Total Current Assets Annual
+- Total Current Liabilities Annual
+- Total Debt to Total Equity Annual
+- Total Expenses Annual
+- Total Non Current Assets Annual
+- Total Non Current Liabilities Annual
+- Total Reserves Plus Surplus Annual
+- Total Revenue Annual
+- Total Share Capital Annual
+- Total ShareHolders Funds Annual
+- Trade Payables Annual
+- Trade Receivables Annual
+- Working Capital Annual
+- Working Capital Turnover Annual
+
