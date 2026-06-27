@@ -283,3 +283,105 @@ larger opportunity (beats same-day on P&L+Calmar) — see plan.
 | + Step 0 (loosen trailing) | ₹74.0k | 1.62 | trailing was too tight |
 | + Step 1 (confidence trail) | — | — | rejected (negative) |
 | **+ Step 2 (scale-out 0.7)** | **₹109.8k** | **2.63** | **adopted** |
+
+---
+
+## STALE bleed investigation (2026-06-25)
+
+Note: a non-cache-only run wiped the candle cache between sessions; re-fetched via
+`kite_totp_refresh.py` + a live fetch. The fresh pull shifted absolute numbers (~16%;
+Kite revised historical candles), so figures below are on the fresh cache (adopted
+baseline = ₹91.9k, not ₹109.8k). Relative conclusions unaffected.
+
+STALE is the biggest single drag: ~278 trades, **−₹205k**, 4% win. Profile: ~217 are
+tier-1 (bar 20, never +0.5%), ~64 tier-2 (bar 100, still <−2%). These are losing
+*entries* (model false bottoms) being cut.
+
+**Exit-side (stale param sweep) — already optimal, NOT a bleed to "fix":**
+- Disabling stale entirely *halves* P&L (₹91.9k → ₹44.7k). The −₹205k is necessary
+  loss-limitation; without it dead positions ride to hold_bars, deepen, and tie up capital.
+- Cutting earlier (10–15 bars) or later (30–40) both hurt. Bar 20 / +0.5% is the sweet spot.
+- Tier-2 floor −2→−3 gives +3.4% (within the ~16% data-revision noise — not adopted).
+
+**Entry-side (meta-labeling filter) — DEGENERATE on this data, does NOT help:**
+Enabled the existing xgboost meta filter (default OFF). Knife-edge behaviour:
+@0.50 vetoes ~nothing (917 of 924 trades — no-op); @0.55 vetoes ~93% (924→68 trades,
+P&L collapses ₹92k→₹13k). No threshold selectively removes stale losers. This means the
+meta's P(win) outputs are clustered just above 0.5 — **no discriminative power** on the
+current 2025-26 data (both +3% and +10% barriers nuke identically at 0.55). Does NOT
+reproduce the prior validated win in [[project_meta_labeling]] (different regime/config).
+
+**Conclusion:** the STALE bleed is **structural** — the genuine cost of the entry model's
+false bottoms. Neither exit logic nor the existing meta filter reclaims it cheaply.
+Next attempt: simple deterministic entry gates (RSI / trend / MACD) — see below.
+
+## Entry-gate experiment (#3) — NEGATIVE
+
+Tested deterministic entry gates (presence-enabled in `entry_gates`) on the adopted
+config, 2025-26:
+
+| gate | P&L | Calmar | Trades | STALE n | STALE pnl |
+|---|---|---|---|---|---|
+| baseline (no gates) | ₹91.9k | 1.97 | 924 | 278 | −205k |
+| trend 100/−12 | ₹92.7k | 2.04 | 928 | 278 | −205k (noise; blocks ~nothing) |
+| prior_decline | ₹87.9k | 1.62 | 881 | 255 | −198k |
+| rsi<40 | ₹61.7k | 1.30 | 832 | 251 | −183k |
+| stoch_rsi<30 | ₹20.5k | 0.39 | 677 | 218 | −156k |
+| macd conv | ₹3.5k | 0.12 | 291 | 86 | −73k |
+| norm_price>0.5 | −₹2.9k | −0.28 | 84 | 30 | −20k |
+
+Gates **do** cut STALE count, but cut **winners more** — e.g. `rsi<40` saves ~₹22k of
+stale loss but drops total P&L ₹30k. Aggressive gates (macd/norm_price) block 70–90% of
+all entries and collapse P&L.
+
+## Literature-grounded label experiments (2026-06-25, autonomous)
+
+Tried the "better labels, not better filters" lever (de Prado: "a model is only as good as
+its labels"):
+
+**Trend-scanning labeler (de Prado, `labels.type: trend_scan`) — FAIL + impractical.**
+Labels a bottom only if a statistically significant forward uptrend follows. At the current
+entry threshold (0.9) it collapses trade volume (924 → 5–25 trades) — its probability
+distribution differs from the extrema labeler so almost nothing crosses 0.9. The few trades
+are cleaner (t2.5 15-80: 25 trades, 6 stale, Calmar 2.08) but far too sparse. Recalibrating
+the entry threshold requires per-stock co-tuning, and the labeler is **impractically slow**
+(fits ~70 forward regressions × 1200 candles per retrain × every retrain × 15 symbols — runs
+for hours; could never run on the t2.micro EC2 cadence). Dead end.
+
+**Forward-label / fixed-horizon outcome labeling (`forward_label`) — FAIL.** Cheap label-level
+filter: keep a minimum only if price actually rose ≥X% over the next N bars. `fl 4.0/150`
+cut STALE by 100 trades (−₹77k of stale loss) but **halved total P&L** (₹91.9k→₹45.8k) — it
+removes winners along with losers. Even the mildest setting is below baseline.
+
+**Why "better labels" fails too (the key insight):** forward_label filters by *actual forward
+outcome* — it KNOWS which training minima were false bottoms — yet training on only the clean
+bottoms doesn't help, because at INFERENCE the model meets new dips whose features are
+identical whether they bounce or not. The information to separate them isn't in the features.
+
+## DECISIVE CONCLUSION — the STALE bleed is an INFORMATION LIMIT (5 approaches confirm)
+
+Five independent approaches all fail the same way:
+1. Exit tuning — stale already optimal; disabling halves P&L.
+2. ML meta filter — degenerate (no-op @0.50, strategy-killer @0.55).
+3. Deterministic entry gates (RSI/MACD/trend/stoch-RSI/norm-price) — cut winners ≥ losers.
+4. Better labels, expensive (trend-scan) — collapses volume; impractically slow for t2.micro.
+5. Better labels, cheap (forward_label, outcome-filtered) — cut winners ≥ losers.
+
+**At inference, the model's false bottoms are indistinguishable from its true bottoms on the
+available features (volume / norm_price / 3-5-10-20-bar return slopes).** Even outcome-based
+label filtering (which *knows* the training false bottoms) doesn't transfer, because new dips
+look identical. No filter (ML or rule) and no relabeling removes the −₹205k without removing
+the winners. **It is a feature/information ceiling**, and `meta_labeling_learnings.md` already
+showed enriching the features (shape/curvature/MLP) doesn't break it either.
+
+**Recommendation: ACCEPT the bleed.** The strategy is net-profitable *because* the winners
+outweigh the structural false-bottom losses — that is the equilibrium, not a defect to fix.
+Stop chasing it via exit/filter/label tuning. The only thing left that *could* move it is a
+genuinely new information source (a different feature family, alternative data, or a
+mean-reversion *regime* switch e.g. Hurst/variance-ratio) — but expected value is low given
+five negatives and the prior feature-enrichment failure, and it needs new code. Not pursued.
+
+### Autonomous-session housekeeping (2026-06-25)
+Reached this conclusion under the user's "find something in the literature" mandate. No code
+or config changed (all experiments via param overrides in throwaway `/tmp/*_test.py`). Nothing
+committed, per instruction. The 3:30 AM recovery nudge is cancelled (research concluded).
