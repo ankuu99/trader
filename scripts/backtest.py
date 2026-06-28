@@ -276,18 +276,22 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         reason_stats[r]["held"] += t.get("held_candles", 0)
         if t["pnl"] > 0:
             reason_stats[r]["wins"] += 1
+    ordered = _ordered_reasons(reason_stats)
+    # Column width fits the longest reason name present so rows stay aligned
+    # even for long reasons like TRAILING_EOD_CLOSE / PATTERN_TOP_PARTIAL.
+    name_w = max([len(r) for r in ordered] + [len("TOTAL")]) if ordered else len("TOTAL")
     print(f"  {'─'*W}")
-    print(f"  Exit reasons:                              avg_bars")
+    print(f"  Exit reasons:{' ' * (name_w + 31)}avg_bars")
     max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
     shown = 0
-    for reason in _ordered_reasons(reason_stats):
+    for reason in ordered:
         s = reason_stats[reason]
         bar = "█" * int(s["count"] / max_count * 20)
         wr = s["wins"] / s["count"] * 100
         avg_bars = s["held"] / s["count"]
         shown += s["count"]
-        print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
-    print(f"    {'TOTAL':<12} {shown:>3}t")
+        print(f"    {reason:<{name_w}} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
+    print(f"    {'TOTAL':<{name_w}} {shown:>3}t")
 
     # Per-stock exit breakdown — one line per instrument
     _REASON_ABBREV = {
@@ -302,12 +306,12 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         "TRAILING":          "\033[93m",   # yellow
         "TRAILING_EOD_CLOSE":"\033[92m",   # green
         "PATTERN_TOP":       "\033[96m",   # cyan
+        "PATTERN_TOP_PARTIAL":"\033[36m",  # dark cyan
         "MODEL_EXIT":        "\033[94m",   # blue
         "TARGET":            "\033[92m",   # green
-        "PATTERN_TOP_PARTIAL":"\033[96m",  # cyan
         "MOMENTUM_DECAY":    "\033[35m",   # magenta
-        "MEAN_REVERT":       "\033[94m",   # blue
-        "CHANNEL_EXIT":      "\033[94m",   # blue
+        "MEAN_REVERT":       "\033[34m",   # dark blue
+        "CHANNEL_EXIT":      "\033[95m",   # bright magenta
         "TIME":              "\033[90m",   # grey
         "STAGNATION":        "\033[33m",   # dark yellow
         "STALE":             "\033[33m",   # dark yellow
@@ -344,9 +348,11 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             filled += width
         return "".join(segments)
 
+    present = set().union(*[set(r) for r in per_stock.values()]) if per_stock else set()
     print(f"  {'─'*W}")
     print(f"  Per-stock exits:")
-    legend_parts = [f"{_REASON_COLOUR.get(r, '')}{_REASON_ABBREV.get(r, r[:3])}{'█'}{_RESET}" for r in _REASON_ORDER]
+    legend_parts = [f"{_REASON_COLOUR.get(r, '')}{_REASON_ABBREV.get(r, r[:3])}{'█'}{_RESET}"
+                    for r in _ordered_reasons(present)]
     print(f"    {'  '.join(legend_parts)}")
     print()
     for sym, reasons in sorted(per_stock.items()):
