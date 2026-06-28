@@ -13,9 +13,9 @@ session. Companion docs:
 exits → engine → labels → price layer). **72 pytests pass.** The whole FVM logic is implemented
 under `trader/fvm/`, fully isolated, nothing in the existing system touched.
 
-**BLOCKER for Milestone A (the real backtest):** needs DATA we couldn't get overnight —
-(1) a refreshed **Kite token** (expired ~midnight IST) for price; (2) **full-universe fundamentals**
-ingest (Trendlyne 50/day quota → ~8–16 days, or batch). See the **Runbook** below.
+**BLOCKER for Milestone A (the real backtest):** the remaining gap is **fundamentals coverage** —
+39/399 names ingested (Trendlyne 50/day quota → ~14 more days, or batch). **Price data is DONE:**
+daily candles 2018→today cached for all 39 scored names (`scripts/fvm_prices.py`). See the **Runbook**.
 
 **Gate ahead:** Milestone A (rules-only backtest must beat naive momentum) before any live build (Phase 5).
 
@@ -90,7 +90,7 @@ ingest (Trendlyne 50/day quota → ~8–16 days, or batch). See the **Runbook** 
 | `data/screener.py` | historical shareholding (HTML parse) | ✅ |
 | `data/nse.py` | membership + momentum benchmark + ASM/GSM | ✅ |
 | `data/universe.py` | eligible universe (PIT members ∩ non-financial ∩ liquidity hook) | ✅ |
-| `data/prices.py` | Kite daily → engine price_data + PIT price_provider | ✅(pure) |
+| `data/prices.py` | Kite daily → engine price_data + PIT price_provider | ✅ + data loaded (39 names, 2018→) |
 | `fields.py` | factor → Trendlyne field-name map | — |
 | `factors.py` | Pillars 1–4 factors + floored-YoY acceleration | ✅ |
 | `scoring.py` | winsorize→pctile/z→sector-relative→pillar→composite + Pillar-5 tailwind | ✅ |
@@ -108,7 +108,10 @@ ingest (Trendlyne 50/day quota → ~8–16 days, or batch). See the **Runbook** 
    `universe.eligible_universe(...)`. Budget ~25 stocks/day → full ~399-name universe over ~8–16 days
    (or accept a smaller universe to start). `nse.ingest_current_membership` + `universe.ingest_sectors`
    are one-shot.
-3. **Load prices**: `prices.load_universe_prices(kite, store, symbols, from, to)` → `{sym: daily_df}`.
+3. **Load prices** — ✅ DONE for the 39 scored names: `python scripts/fvm_prices.py --from 2018-01-01`
+   caches daily candles in `market.db` (reused via `historical.get_candles`; resumable; cache-only
+   re-runs). At backtest time `prices.load_universe_prices(None, candle_store, symbols, from, to)` →
+   `{sym: daily_df}`. Re-run after each fundamentals batch to cover newly-scoreable names.
 4. **Run**: `engine.run_backtest(fvm_store, price_data, sectors, sleeve_capital, score_fn=..., price provider, regime_fn)`.
    Compare to the naive-momentum benchmark (`nse.fetch_momentum_index` / cached CSV) per §12b.
 5. **Decision (§12c):** beats naive momentum + profitable in majority of walk-forward folds + maxDD
@@ -119,6 +122,18 @@ report, and (only if Gate A passes) Phase 5 live integration.
 
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
+
+### 2026-06-28 (prices)
+- **Price ingestion DONE.** Added `scripts/fvm_prices.py` — fetches & caches daily candles
+  (2018→today) for the scored universe into the shared `market.db` (reused via
+  `historical.get_candles`; `get_candles` chunks day data at 2000-bar windows so multi-year
+  pulls work; resumable + cache-only re-runs). Ran it: **39/39 scored names resolved, 230–2101
+  bars each** (low end = recent IPOs). Validated end-to-end into the technical layer: weekly
+  resample (443w for full-history names), `trend_score`/`timing_score`/`extension_vetoed` all
+  consume the cached frames correctly. Sanity-checked LT (trend 0.726, uptrend) vs RELIANCE
+  (0.000 — genuinely 7% below a falling 40w MA, Stage-4, not a bug).
+- **Next:** keep ingesting fundamentals (39/399; ~14 days at quota), re-run `fvm_prices.py`
+  after each batch, then wire the Milestone-A walk-forward harness around `engine.run_backtest`.
 
 ### 2026-06-28 (overnight, autonomous)
 - **Built Phases 1→4 to completion** (rules-only): scoring, vetoes, Pillar 2/5, technical layer,
