@@ -1,0 +1,57 @@
+# FVM — Forward Plan (next steps, persists across sessions)
+
+**Read this first on resume.** Companion to `FVM_Progress.md` (status log). This file is the
+ordered to-do; `FVM_Progress.md` is what's already done. Last updated 2026-06-28.
+
+## Where we are
+- Strategy + harness fully BUILT & tested (76 pytests). Phases 0–4 + Milestone-A walk-forward.
+- **Milestone A: GATE FAIL (near-miss)** on a thin 39-name / 2024-05→2026-05 window — beats
+  benchmark 3/6, profitable 4/6, mean edge +0.7pp (both strategies ~flat). Defensive-overlay
+  character (wins down/choppy folds, lags rallies). Result is **dominated by data limits**, not
+  strategy quality — so the next steps are all about DATA, not tuning.
+- Two hard data limits: breadth (39/399 names) and Trendlyne quarterly depth stops at 2023-03.
+
+## The plan (ordered — top of the list is the critical path)
+
+### 1. Re-order the ingest to prioritise MID-CAPS  ← DO THIS FIRST (tomorrow)
+The store is skewed to large-caps (hand-ingested), the *worst* universe for a fundamental
+overlay. Mid-caps are where quality/momentum divergence — and the edge, if real — is largest.
+Change the ingest ordering in `scripts/fvm_ingest.py` so the daily quota fills mid-caps first
+(e.g. sort the eligible universe by an inverse-size / index-rank proxy, or seed from a mid-cap
+index membership). Cheap change, high leverage on what the next ~14 days of quota buy.
+
+### 2. Run the daily fundamentals ingest until the universe fills
+- `python scripts/fvm_ingest.py` after each Trendlyne quota reset (~25 stocks/day, resumable).
+- Needs a fresh `TRENDLYNE_COOKIE` in `config/.env` if financials 403.
+- ~14 days to the full ~399-name universe.
+
+### 3. Re-run the price cache after each batch
+- `python scripts/fvm_prices.py` (cache-only is cheap; only fetches newly-scoreable names).
+
+### 4. Re-run the Milestone-A gate as coverage grows
+- `python scripts/fvm_milestone_a.py` at ~150 names and again at full universe.
+- Watch whether the defensive edge holds/strengthens with breadth.
+- **NO parameter tuning** until the universe is broad — 6 overlapping folds is overfit territory.
+
+### 5. Decide on the quarterly-depth limit (when we reach the gate)
+Quarterly fincsv stops at 2023-03 → backtest can't extend before ~2024. Either (a) accept a
+short-but-broad 2024→ window as the verdict (preferred — breadth > depth for power here), or
+(b) source deeper quarterly history (Screener / BSE archives).
+
+### 6. Manual-investing shortlist CLI  (NEW — see below; independent of the gate)
+Build a thin `scripts/fvm_shortlist.py` that runs scoring + vetoes + technical as-of today over
+the ingested universe and prints a ranked candidate list (composite score, pillar breakdown,
+veto status, trend/timing). This is a *research/screening aid* for manual investing — usable
+before Milestone A passes, with the caveat that the strategy edge is not yet validated.
+
+### 7. (Gated on Milestone A passing) Phase 5 — live integration
+Two-sleeve capital model, wire FVM signals into the live loop. Only after the gate passes on a
+broad universe.
+
+### 8. (Deferred) Phase 6 — ML challenger
+Stays deferred; treat skeptically (see the meta-labeling lesson — it *worsened* outcomes before).
+
+## Standing reminders
+- Update `FVM_Progress.md` (session log) and this file at the end of each working session.
+- Do not tune to flip the 6-fold gate (overfit risk). Breadth first.
+- Keep everything isolated under `trader/fvm/`; never touch the LRExtrema live path.
