@@ -119,7 +119,7 @@ mega-caps); (b) deeper quarterly history if obtainable; re-run the harness as co
 | `engine.py` | positional weekly-rebalance backtest | ✅ |
 | `labels.py` | triple-barrier labels | ✅ |
 | `walkforward.py` | Milestone-A harness: naive-momentum benchmark + rolling folds + gate | ✅ |
-| `ui/data.py` | Cockpit data layer (framework-agnostic): `build_board` + `load_stock`, calls scoring/vetoes/technical/handoff cache-only | ✅ smoke |
+| `ui/data.py` | Cockpit data layer (framework-agnostic): `build_board` + `load_stock` + `coverage`, calls scoring/vetoes/technical/handoff cache-only | ✅ smoke |
 
 ## Runbook — to run the real backtest (Milestone A)
 1. **Refresh Kite token** (expires midnight IST): `python scripts/login.py` (or wait for the 08:15 cron).
@@ -143,21 +143,26 @@ report, and (only if Gate A passes) Phase 5 live integration.
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
 
-### 2026-06-28 (FVM Cockpit UI — U0+U1)
+### 2026-06-28 (FVM Cockpit UI — U0+U1+U2)
 - **Built the cockpit shell + manual-investing core.** `trader/fvm/ui/data.py` (framework-agnostic
   data layer: `build_board` scores the whole ingested universe as-of a date, `load_stock` assembles
-  one name's full read — both call only the tested scoring/vetoes/technical/handoff functions,
-  cache-only) + `scripts/fvm_ui.py` (Streamlit + Plotly, `streamlit run scripts/fvm_ui.py`).
+  one name's full read, `coverage` aggregates ingest/price coverage — all call only the tested
+  scoring/vetoes/technical/handoff functions, cache-only) + `scripts/fvm_ui.py` (Streamlit + Plotly,
+  `streamlit run scripts/fvm_ui.py`).
 - **Page 1 Today's Shortlist:** FVM candidates table + full board with decision tags
   (CANDIDATE/NO_TIMING/NO_TREND/WEAK_FUND/VETOED), filter by decision/sector + symbol search,
   as-of date picker, click-through to detail. **Page 2 Stock Detail:** composite + decision badge,
   5-pillar bars, colour-graded factor table (normalized/raw), veto + parabolic-ext panel, weekly
   (40w/10w MA) + daily (50d MA + catastrophe stop + volume) Plotly charts, PIT fundamentals history,
-  shareholding trend.
-- `st.cache_data` wraps the heavy scoring sweep. No matplotlib dep (hand-rolled red→green gradient).
-  Verified: data layer smoke-tested headless (39/39 priced, decisions {WEAK_FUND 22, NO_TIMING 6,
-  NO_TREND 6, VETOED 5}), Streamlit boots clean (no tracebacks). Forward-plan §6b U0+U1 done.
-- **Next:** U2 Universe & Coverage page (steer the daily ingest), then U3 Milestone-A viewer.
+  shareholding trend. **Page 3 Universe & Coverage:** ingested/target→399 progress, per-name
+  quarter/annual depth + shareholding + price coverage with gap flags, missing-names list (CSV
+  export to feed the daily ingest), per-sector coverage.
+- `st.cache_data` wraps the heavy sweeps. **Added streamlit/plotly/matplotlib to requirements.txt**
+  (were unpinned; matplotlib enables the `background_gradient` factor heatmap).
+- Verified: data layer smoke-tested headless (39/39 priced, decisions {WEAK_FUND 22, NO_TIMING 6,
+  NO_TREND 6, VETOED 5}; coverage 39/399 ingested, all priced, q-depth 8–13), Streamlit boots clean
+  (no tracebacks). Forward-plan §6b U0+U1+U2 done.
+- **Next:** U3 Milestone-A viewer (per-fold table + FVM-vs-benchmark equity curves + gate verdict).
 
 ### 2026-06-28 (shortlist CLI)
 - **Built `scripts/fvm_shortlist.py`** — ranks the scored universe as-of a date: FVM CANDIDATES

@@ -54,6 +54,11 @@ def stock(symbol: str, asof: str) -> dict:
     return fvm_data.load_stock(DB, MARKET_DB, symbol, asof)
 
 
+@st.cache_data(show_spinner="Reading coverage…")
+def coverage(asof: str) -> dict:
+    return fvm_data.coverage(DB, MARKET_DB, asof)
+
+
 # ------------------------------------------------------------------ #
 # Helpers                                                            #
 # ------------------------------------------------------------------ #
@@ -64,18 +69,6 @@ def _sma(series: pd.Series, window: int) -> pd.Series:
 def _decision_badge(dec: str) -> str:
     color = DECISION_COLORS.get(dec, "#888")
     return f"<span style='background:{color};color:#fff;padding:2px 10px;border-radius:10px;font-weight:600'>{dec}</span>"
-
-
-def _grad(v) -> str:
-    """Red→yellow→green background for a 0..1 score (no matplotlib dependency)."""
-    try:
-        x = max(0.0, min(1.0, float(v)))
-    except (TypeError, ValueError):
-        return ""
-    red, yellow, green = (215, 48, 39), (254, 221, 132), (26, 168, 72)
-    lo, hi, t = (red, yellow, x * 2) if x < 0.5 else (yellow, green, (x - 0.5) * 2)
-    r, g, b = (int(a + (c - a) * t) for a, c in zip(lo, hi))
-    return f"background-color:rgb({r},{g},{b});color:#222"
 
 
 # ------------------------------------------------------------------ #
@@ -238,7 +231,8 @@ def page_detail(asof: str):
     t1, t2, t3 = st.tabs(["Factor table", "Fundamentals history", "Shareholding"])
     with t1:
         fdf = s["factors"]
-        st.dataframe(fdf.style.map(_grad, subset=["normalized"]),
+        st.dataframe(fdf.style.background_gradient(subset=["normalized"], cmap="RdYlGn",
+                                                   vmin=0, vmax=1),
                      use_container_width=True, hide_index=True, height=560)
         st.caption("normalized = cross-sectional score (0–1, higher better after direction). "
                    "raw = underlying value before normalization.")
@@ -259,6 +253,58 @@ def page_detail(asof: str):
 
 
 # ------------------------------------------------------------------ #
+# Page: Universe & Coverage (ops — steer the daily ingest)           #
+# ------------------------------------------------------------------ #
+def page_coverage(asof: str):
+    st.header("Universe & Coverage")
+    c = coverage(asof)
+    st.caption(f"NIFTY500 non-financial universe as of **{asof}** · "
+               f"last fundamentals ingest {c['last_ingest'][:10] or '—'}")
+
+    m = st.columns(4)
+    pct = 100 * c["ingested"] / c["target"] if c["target"] else 0
+    m[0].metric("Ingested / target", f"{c['ingested']} / {c['target']}", f"{pct:.0f}%")
+    m[1].metric("Priced", f"{c['priced']} / {c['ingested']}")
+    m[2].metric("Missing (to ingest)", len(c["missing"]))
+    m[3].metric("Quarter depth", f"{c['min_q_depth']}–{c['max_q_depth']}")
+    st.progress(min(1.0, c["ingested"] / c["target"] if c["target"] else 0),
+                text=f"{c['ingested']} of {c['target']} names ingested "
+                     f"({c['target'] - c['ingested']} to go)")
+
+    df = c["df"]
+    t1, t2, t3 = st.tabs([f"Ingested ({c['ingested']})",
+                          f"Missing ({len(c['missing'])})", "By sector"])
+    with t1:
+        ing = df[df["ingested"]].copy()
+        flag = ing[(ing["price_bars"] == 0) | (~ing["shareholding"]) | (ing["q_depth"] < 8)]
+        if not flag.empty:
+            st.warning(f"{len(flag)} ingested name(s) have gaps (no price / no shareholding / "
+                       f"shallow quarters): {', '.join(flag['symbol'])}")
+        cols = ["symbol", "sector", "q_depth", "a_depth", "last_q", "shareholding",
+                "price_bars", "price_last", "last_ingest"]
+        st.dataframe(ing[cols].sort_values("symbol"),
+                     use_container_width=True, hide_index=True, height=480)
+        st.caption("q_depth = distinct quarterly periods (drives min-scoreability; "
+                   "Trendlyne caps ~13). shallow / no-price rows weaken scoring for that name.")
+    with t2:
+        miss = df[~df["ingested"]][["symbol", "sector"]].sort_values(["sector", "symbol"])
+        st.caption("Targets not yet ingested — feed these to the daily `fvm_ingest` quota "
+                   "(mid-caps first, per the forward plan).")
+        st.dataframe(miss, use_container_width=True, hide_index=True, height=480)
+        st.download_button("Download missing symbols (CSV)",
+                           miss.to_csv(index=False), "fvm_missing_symbols.csv", "text/csv")
+    with t3:
+        by_sec = df.groupby("sector").agg(
+            target=("symbol", "size"),
+            ingested=("ingested", "sum")).reset_index()
+        by_sec["pct"] = (100 * by_sec["ingested"] / by_sec["target"]).round(0)
+        by_sec = by_sec.sort_values("target", ascending=False)
+        st.dataframe(by_sec, use_container_width=True, hide_index=True, height=480)
+        st.caption("Coverage per sector — spot lopsided ingest (a fundamental overlay needs "
+                   "breadth within each sector for the sector-relative valuation factors).")
+
+
+# ------------------------------------------------------------------ #
 # Shell                                                              #
 # ------------------------------------------------------------------ #
 def main():
@@ -266,7 +312,7 @@ def main():
     asof = st.sidebar.date_input("As of", value=datetime.date.today(),
                                  max_value=datetime.date.today()).isoformat()
 
-    pages = ["Today's Shortlist", "Stock Detail"]
+    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage"]
     nav = st.session_state.get("nav", pages[0])
     nav = st.sidebar.radio("Page", pages, index=pages.index(nav) if nav in pages else 0)
     st.session_state["nav"] = nav
@@ -276,13 +322,15 @@ def main():
         st.cache_data.clear()
         st.rerun()
     st.sidebar.caption("Cache-only. Run fvm_ingest + fvm_prices to refresh data.\n\n"
-                       "Coverage · Milestone-A · Scoring Lab · Portfolio — coming next "
+                       "Milestone-A · Scoring Lab · Portfolio — coming next "
                        "(docs/FVM_Forward_Plan.md §6b).")
 
     if nav == "Today's Shortlist":
         page_shortlist(asof)
-    else:
+    elif nav == "Stock Detail":
         page_detail(asof)
+    else:
+        page_coverage(asof)
 
 
 if __name__ == "__main__":

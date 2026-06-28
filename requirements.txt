@@ -11,5 +11,10 @@ xgboost>=1.7,<2.0
 Flask==3.1.3
 pyotp==2.9.0
 
+# UI (scripts/ui.py — backtest viz; scripts/fvm_ui.py — FVM Cockpit)
+streamlit==1.58.0
+plotly==6.7.0
+matplotlib==3.11.0
+
 # dev / test
 pytest==9.0.3

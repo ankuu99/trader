@@ -15,7 +15,7 @@ import pandas as pd
 
 from trader.data.store import Store
 from trader.fvm import factors, handoff, scoring, technical, vetoes
-from trader.fvm.data import prices
+from trader.fvm.data import prices, universe
 from trader.fvm.data.store import FVMStore
 from trader.fvm.fields import (
     BASIC_EPS_Q, CFO_A, DE_A, INT_COVERAGE_A, NET_PROFIT_A, NET_PROFIT_Q,
@@ -170,4 +170,88 @@ def load_stock(db: str, market_db: str, symbol: str, asof: str) -> dict:
         "factors": pd.DataFrame(factor_rows),
         "fundamentals": fundamentals, "shareholding": shareholding,
         "sector": fvm.sectors_map().get(symbol, "Unknown"),
+    }
+
+
+# ------------------------------------------------------------------ #
+# Coverage / ops (U2) — cheap SQL aggregates, no scoring sweep        #
+# ------------------------------------------------------------------ #
+def _fundamentals_coverage(db: str) -> dict[str, dict]:
+    """Per ingested symbol: quarter/annual period depth, latest quarter, last ingest."""
+    con = sqlite3.connect(db)
+    try:
+        rows = con.execute(
+            """SELECT symbol,
+                      SUM(statement='quarter') AS q_rows,
+                      SUM(statement='annual')  AS a_rows,
+                      MAX(CASE WHEN statement='quarter' THEN period END) AS last_q,
+                      MAX(CASE WHEN statement='annual'  THEN period END) AS last_a,
+                      MAX(ingested_at) AS ingested
+               FROM fundamentals GROUP BY symbol""").fetchall()
+        depth = {}
+        for sym, *_ in rows:
+            q = con.execute("SELECT COUNT(DISTINCT period) FROM fundamentals "
+                            "WHERE symbol=? AND statement='quarter'", (sym,)).fetchone()[0]
+            a = con.execute("SELECT COUNT(DISTINCT period) FROM fundamentals "
+                            "WHERE symbol=? AND statement='annual'", (sym,)).fetchone()[0]
+            depth[sym] = (q, a)
+        sh = {r[0] for r in con.execute("SELECT DISTINCT symbol FROM shareholding").fetchall()}
+    finally:
+        con.close()
+    out = {}
+    for sym, q_rows, a_rows, last_q, last_a, ingested in rows:
+        q_depth, a_depth = depth[sym]
+        out[sym] = {"q_depth": q_depth, "a_depth": a_depth, "last_q": last_q,
+                    "last_a": last_a, "ingested": ingested, "has_shareholding": sym in sh}
+    return out
+
+
+def _price_coverage(market_db: str) -> dict[str, dict]:
+    con = sqlite3.connect(market_db)
+    try:
+        rows = con.execute(
+            "SELECT instrument, COUNT(*), MIN(timestamp), MAX(timestamp) "
+            "FROM candles WHERE timeframe='day' GROUP BY instrument").fetchall()
+    finally:
+        con.close()
+    out = {}
+    for inst, n, lo, hi in rows:
+        sym = inst.split(":", 1)[1] if ":" in inst else inst
+        out[sym.upper()] = {"bars": n, "first": (lo or "")[:10], "last": (hi or "")[:10]}
+    return out
+
+
+def coverage(db: str, market_db: str, asof: str, index_name: str = "NIFTY500") -> dict:
+    """Universe ingest/price coverage for the ops page. Cheap aggregates only."""
+    fvm = FVMStore(db)
+    target = universe.eligible_universe(fvm, asof, index_name=index_name)
+    funda = _fundamentals_coverage(db)
+    px = _price_coverage(market_db)
+    sectors = fvm.sectors_map()
+    ingested = set(funda)
+
+    rows = []
+    for sym in sorted(set(target) | ingested):
+        f = funda.get(sym, {})
+        p = px.get(sym, {})
+        rows.append({
+            "symbol": sym, "sector": sectors.get(sym, "Unknown"),
+            "in_universe": sym in target, "ingested": sym in ingested,
+            "q_depth": f.get("q_depth", 0), "a_depth": f.get("a_depth", 0),
+            "last_q": f.get("last_q", ""), "shareholding": bool(f.get("has_shareholding")),
+            "price_bars": p.get("bars", 0), "price_last": p.get("last", ""),
+            "last_ingest": (f.get("ingested") or "")[:10],
+        })
+    df = pd.DataFrame(rows)
+
+    missing = sorted(set(target) - ingested)
+    not_priced = sorted(s for s in ingested if not px.get(s, {}).get("bars"))
+    return {
+        "asof": asof, "df": df,
+        "target": len(target), "ingested": len(ingested),
+        "priced": sum(1 for s in ingested if px.get(s, {}).get("bars")),
+        "missing": missing, "not_priced": not_priced,
+        "last_ingest": max((f.get("ingested") or "" for f in funda.values()), default=""),
+        "min_q_depth": min((f["q_depth"] for f in funda.values()), default=0),
+        "max_q_depth": max((f["q_depth"] for f in funda.values()), default=0),
     }
