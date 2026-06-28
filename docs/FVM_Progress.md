@@ -107,6 +107,12 @@ session. Companion docs:
   tested + live-validated on real UltraTech (cfo/np 1.94, D/E 0.26, int-cov 9.7, rev-growth 16%).
   Caught + fixed a real bug: debt_trend was absolute-₹ (size-dominated) → now scale-free D/E slope.
   **33 pytests pass.**
-- **Next (Phase 1 remainder):** `scoring.py` (winsorize→percentile/z→sector-relative→pillar→composite),
-  `vetoes.py` (4 vetoes + min-scoreability), Pillar 2 (valuation; needs Kite price for PEG/P-E) +
-  Pillar 5 (sector-tailwind aggregate). Then Phase 2 (technical).
+- **Phase 1 COMPLETE** (autonomous session): added `scoring.py` (full normalization → composite 0-100
+  + Pillar-5 realized sector-tailwind), `vetoes.py` (4 vetoes + min-scoreability + live compliance),
+  Pillar 2 valuation factors (`factors.pillar2_factors` — EV/EBITDA + price-gated PEG/PE). **48 pytests
+  pass.** LIVE-validated end-to-end on 8 real stocks (ingested financials+shareholding): composite
+  ranking TCS 70.6 / INFY 66 … RELIANCE 33 / SUNPHARMA 24 — defensible, all veto-pass.
+  - `OPEN`: Pillar-2 PEG/PE need Kite price (optional now → neutral; EV/EBITDA carries valuation) —
+    wire with the Phase-2 price layer. R3 fusion (geo-mean) deferred to dry-runs per design.
+- **Now: Phase 2 — technical layer** (`technical.py`: weekly 40w/10w Trend_Score, daily Timing_Score,
+  parabolic veto, wide stop — pure functions over OHLCV, Kite wiring separate).

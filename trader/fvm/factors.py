@@ -167,10 +167,58 @@ def pillar4_factors(store, symbol, asof) -> dict:
     }
 
 
-def all_factors(store, symbol, asof, basis="consolidated") -> dict:
+# ------------------------------------------------------------------ #
+# Pillar 2 — Valuation                                                #
+# ------------------------------------------------------------------ #
+
+PEG_CAP = 5.0  # winsor cap; also the "bad" sentinel for negative-earnings / no-runway
+
+
+def ttm_eps(store, symbol, asof, basis="consolidated") -> float | None:
+    """Trailing-twelve-month EPS = sum of the last 4 quarterly Basic EPS (PIT). None if <4q."""
+    series = _series(store, symbol, F.BASIC_EPS_Q, asof, basis)
+    vals = [v for _, v in series]
+    return sum(vals[-4:]) if len(vals) >= 4 else None
+
+
+def pillar2_factors(store, symbol, asof, price: float | None = None,
+                    basis="consolidated") -> dict:
+    """Valuation factors. `ev_ebitda` is pure-Trendlyne; `peg`/`pe` need a current price
+    (Kite, threaded from the strategy/engine). PEG uses TRAILING growth only (forward
+    estimates dropped for v1, §13b) — degrades gracefully.
+
+    PEG degenerate handling (design §2): negative earnings or non-positive growth ⇒ NOT
+    "cheap" — set PEG to the worst sentinel (PEG_CAP), never None/neutral. PEG is winsorized
+    to [0, PEG_CAP]; lower = better (direction flipped in scoring; z-scored there).
+    """
+    ev_ebitda = _latest(_series(store, symbol, F.EV_EBITDA_A, asof, basis))  # lower=better
+
+    pe = peg = None
+    if price is not None:
+        eps = ttm_eps(store, symbol, asof, basis)
+        if eps is not None and eps > 0:
+            pe = price / eps
+            g = pillar1_factors(store, symbol, asof, basis)["yoy_profit_growth"]  # fraction
+            if g is not None and g > 0:
+                peg = min(PEG_CAP, max(0.0, pe / (g * 100.0)))
+            else:
+                peg = PEG_CAP        # no runway / declining → worst, never "cheap"
+        else:
+            pe = None
+            peg = PEG_CAP            # negative earnings → worst, never "cheap"
+
+    return {
+        "ev_ebitda": ev_ebitda,     # lower=better, sector-relative
+        "pe": pe,                   # lower=better, sector-relative
+        "peg": peg,                 # lower=better, z-scored, sector-relative
+    }
+
+
+def all_factors(store, symbol, asof, basis="consolidated", price: float | None = None) -> dict:
     """Convenience: merge the implemented pillars' raw factors for one (symbol, asof)."""
     return {
         **pillar1_factors(store, symbol, asof, basis),
+        **pillar2_factors(store, symbol, asof, price, basis),
         **pillar3_factors(store, symbol, asof, basis),
         **pillar4_factors(store, symbol, asof),
     }

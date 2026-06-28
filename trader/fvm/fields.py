@@ -17,6 +17,7 @@ EBITDA_Q           = ("quarter", "EBITDA Qtr")
 # --- Pillar 2: Valuation (annual snapshots; live PEG/P-E use Kite price + TTM EPS) ---
 EV_EBITDA_A        = ("annual", "EV Per EBITDA Annual")              # pre-computed (no cash-gap)
 EPS_A              = ("annual", "EPS Annual")
+BASIC_EPS_Q        = ("quarter", "Basic EPS Qtr")                    # for TTM EPS (P/E, PEG)
 EARNINGS_YIELD_A   = ("annual", "Earnings Yield Annual")            # = 1 / P/E (annual snapshot)
 PRICE_TO_BOOK_A    = ("annual", "Price to Book Value Adjusted")
 
