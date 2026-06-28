@@ -5,6 +5,8 @@ session. Companion docs:
 - `FVM_Strategy_Architecture.md` — the what/why (high-level architecture)
 - `FVM_Design_Decisions.md` — the exactly-how (mechanisms, data sourcing, ingestion)
 - `FVM_Implementation_Plan.md` — the build plan (phases + validation gate)
+- `FVM_Cockpit_UI.md` — the Streamlit cockpit UI guide (pages + how to run)
+- `FVM_Forward_Plan.md` — the ordered next-steps to-do
 
 ---
 
