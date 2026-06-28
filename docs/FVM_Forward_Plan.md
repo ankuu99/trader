@@ -38,11 +38,12 @@ Quarterly fincsv stops at 2023-03 → backtest can't extend before ~2024. Either
 short-but-broad 2024→ window as the verdict (preferred — breadth > depth for power here), or
 (b) source deeper quarterly history (Screener / BSE archives).
 
-### 6. Manual-investing shortlist CLI  (NEW — see below; independent of the gate)
-Build a thin `scripts/fvm_shortlist.py` that runs scoring + vetoes + technical as-of today over
-the ingested universe and prints a ranked candidate list (composite score, pillar breakdown,
-veto status, trend/timing). This is a *research/screening aid* for manual investing — usable
-before Milestone A passes, with the caveat that the strategy edge is not yet validated.
+### 6. Manual-investing shortlist CLI  ✅ DONE (2026-06-28)
+`scripts/fvm_shortlist.py` — runs scoring + vetoes + technical as-of a date over the ingested
+universe and prints (1) FVM CANDIDATES (names clearing fundamentals+trend+timing, ranked as the
+strategy ranks) and (2) FULL BOARD by composite with a per-name decision tag
+(CANDIDATE / NO_TIMING / NO_TREND / WEAK_FUND / VETOED). `--asof`, `--top`, `--verbose`.
+Usable now on the 39 names; gets meaningful as the universe fills (steps 1–3).
 
 ### 7. (Gated on Milestone A passing) Phase 5 — live integration
 Two-sleeve capital model, wire FVM signals into the live loop. Only after the gate passes on a

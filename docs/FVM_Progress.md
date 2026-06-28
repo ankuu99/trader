@@ -142,6 +142,13 @@ report, and (only if Gate A passes) Phase 5 live integration.
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
 
+### 2026-06-28 (shortlist CLI)
+- **Built `scripts/fvm_shortlist.py`** — ranks the scored universe as-of a date: FVM CANDIDATES
+  (clear fundamentals+trend+timing, strategy-ranked) + FULL BOARD by composite with decision tags
+  (CANDIDATE/NO_TIMING/NO_TREND/WEAK_FUND/VETOED). Verified candidates appear on dates with entry
+  triggers (ADANIPORTS 2024-08, TCS 2025-01, ABBOTINDIA 2025-06); today (2026-06-28) = no setup
+  (trend-passing names are parabolic-extended). Forward-plan step 6 done.
+
 ### 2026-06-28 (Milestone-A harness + first result)
 - **Built the walk-forward gate.** `trader/fvm/walkforward.py` (naive-momentum benchmark =
   hold-while-in-top-N-by-12–1-momentum, same universe/costs; rolling folds; gate = beat
