@@ -119,7 +119,7 @@ mega-caps); (b) deeper quarterly history if obtainable; re-run the harness as co
 | `engine.py` | positional weekly-rebalance backtest | ✅ |
 | `labels.py` | triple-barrier labels | ✅ |
 | `walkforward.py` | Milestone-A harness: naive-momentum benchmark + rolling folds + gate | ✅ |
-| `ui/data.py` | Cockpit data layer (framework-agnostic): `build_board` + `load_stock` + `coverage` + `milestone_a`, calls scoring/vetoes/technical/handoff/walkforward cache-only | ✅ smoke |
+| `ui/data.py` | Cockpit data layer (framework-agnostic): `build_board` + `load_stock` + `coverage` + `milestone_a` + `scoring_lab`/`gate_counts`, calls scoring/vetoes/technical/handoff/walkforward cache-only | ✅ smoke |
 
 ## Runbook — to run the real backtest (Milestone A)
 1. **Refresh Kite token** (expires midnight IST): `python scripts/login.py` (or wait for the 08:15 cron).
@@ -143,11 +143,12 @@ report, and (only if Gate A passes) Phase 5 live integration.
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
 
-### 2026-06-28 (FVM Cockpit UI — U0–U3)
-- **Built the cockpit shell + manual-investing core + validation viewer.** `trader/fvm/ui/data.py`
-  (framework-agnostic data layer: `build_board` scores the whole ingested universe as-of a date,
-  `load_stock` assembles one name's full read, `coverage` aggregates ingest/price coverage,
-  `milestone_a` runs the walk-forward gate + a continuous FVM-vs-benchmark equity comparison — all
+### 2026-06-28 (FVM Cockpit UI — U0–U4)
+- **Built the cockpit shell + manual-investing core + validation + scoring lab.**
+  `trader/fvm/ui/data.py` (framework-agnostic data layer: `build_board` scores the whole ingested
+  universe as-of a date, `load_stock` assembles one name's full read, `coverage` aggregates
+  ingest/price coverage, `milestone_a` runs the walk-forward gate + a continuous FVM-vs-benchmark
+  equity comparison, `scoring_lab`/`gate_counts` expose score anatomy + live gate funnel — all
   call only the tested scoring/vetoes/technical/handoff/walkforward functions, cache-only) +
   `scripts/fvm_ui.py` (Streamlit + Plotly, `streamlit run scripts/fvm_ui.py`).
 - **Page 1 Today's Shortlist:** FVM candidates table + full board with decision tags
@@ -162,13 +163,17 @@ report, and (only if Gate A passes) Phase 5 live integration.
   summary metrics, continuous FVM-vs-benchmark equity curve, per-fold table (coloured edge), and a
   **down-vs-up regime split** that makes the defensive character explicit (current 39-name run:
   +9.8pp edge in the 3 down/choppy folds, −8.4pp in the 3 up folds — wins drawdowns, lags rallies).
+  **Page 5 Scoring Lab:** composite distribution (Gate-A cut + floor lines), pillar contributions,
+  per-factor coverage/NaN + mean-normalized heatmap (flags thin factors — e.g. pledge 0% coverage
+  on the current universe → neutral, no signal), and gate-sensitivity sliders driving a live funnel
+  (universe→veto→Gate-A→Gate-B→trigger→candidates; today 39→34→12→6→0→0 at defaults).
 - `st.cache_data` wraps the heavy sweeps. **Added streamlit/plotly/matplotlib to requirements.txt**
   (were unpinned; matplotlib enables the `background_gradient` factor heatmap).
 - Verified: data layer smoke-tested headless (39/39 priced, decisions {WEAK_FUND 22, NO_TIMING 6,
   NO_TREND 6, VETOED 5}; coverage 39/399 ingested, all priced, q-depth 8–13; milestone_a reproduces
-  the gate exactly — FAIL, beats 3/6, profit 4/6, edge +0.7pp), Streamlit boots clean (no
-  tracebacks). Forward-plan §6b U0–U3 done.
-- **Next:** U4 Scoring Lab (composite distribution, pillar contributions, gate-sensitivity sliders).
+  the gate exactly — FAIL, beats 3/6, profit 4/6, edge +0.7pp; scoring_lab funnel matches the
+  shortlist), Streamlit boots clean (no tracebacks). Forward-plan §6b U0–U4 done.
+- **Next:** U5 Portfolio/Live — deferred until Phase 5 lands (+ a Flask read-only live monitor).
 
 ### 2026-06-28 (shortlist CLI)
 - **Built `scripts/fvm_shortlist.py`** — ranks the scored universe as-of a date: FVM CANDIDATES

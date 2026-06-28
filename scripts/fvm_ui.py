@@ -65,6 +65,11 @@ def milestone(test_len_w: int, step_w: int, capital: float) -> dict:
                                 capital=capital)
 
 
+@st.cache_data(show_spinner="Scoring the universe…")
+def lab(asof: str) -> dict:
+    return fvm_data.scoring_lab(DB, MARKET_DB, asof)
+
+
 # ------------------------------------------------------------------ #
 # Helpers                                                            #
 # ------------------------------------------------------------------ #
@@ -401,6 +406,84 @@ def page_milestone():
 
 
 # ------------------------------------------------------------------ #
+# Page: Scoring Lab                                                   #
+# ------------------------------------------------------------------ #
+def page_scoring_lab(asof: str):
+    st.header("Scoring Lab")
+    L = lab(asof)
+    if L.get("priced", 0) == 0:
+        st.warning("No priced names. Run `scripts/fvm_prices.py` first.")
+        return
+    st.caption(f"Cross-sectional score anatomy as of **{asof}** · {L['priced']} scored names. "
+               "The composite is relative — every factor is normalized across this population, "
+               "so coverage and breadth shape the scores.")
+
+    comp = pd.Series(L["composite"])
+    cut0 = comp.quantile(0.70)
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.subheader("Composite distribution")
+        fig = go.Figure(go.Histogram(x=comp, nbinsx=20, marker_color="#1f77b4"))
+        fig.add_vline(x=cut0, line=dict(color="#1a9850", dash="dash"),
+                      annotation_text="70th pctile (Gate-A cut)")
+        fig.add_vline(x=50.0, line=dict(color="#d73027", dash="dot"),
+                      annotation_text="floor 50")
+        fig.update_layout(height=320, margin=dict(l=0, r=0, t=10, b=0),
+                          xaxis_title="composite", yaxis_title="names")
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        st.subheader("Pillar contributions")
+        pt = L["pillar_table"]
+        pfig = go.Figure(go.Bar(x=pt["mean_contribution"], y=pt["pillar"], orientation="h",
+                                marker_color="#1f77b4",
+                                text=[f"{v:.1f}" for v in pt["mean_contribution"]]))
+        pfig.update_layout(height=320, margin=dict(l=0, r=0, t=10, b=0),
+                           xaxis_title="mean contribution to composite")
+        st.plotly_chart(pfig, use_container_width=True)
+        st.caption("A pillar pinned at its weight×0.5 = no cross-sectional signal "
+                   "(all names neutral — usually missing data).")
+
+    st.subheader("Factor coverage & signal")
+    ft = L["factor_table"]
+    thin = ft[ft["coverage_pct"] < 50]
+    if not thin.empty:
+        st.warning(f"{len(thin)} factor(s) below 50% coverage — they sit at neutral 0.5 for most "
+                   f"names and add no signal: {', '.join(thin['factor'])}. Fix via the ingest "
+                   f"(shareholding/quarterly depth) before reading too much into the pillars.")
+    st.dataframe(
+        ft.sort_values(["pillar", "coverage_pct"]).style
+          .background_gradient(subset=["coverage_pct"], cmap="RdYlGn", vmin=0, vmax=100)
+          .background_gradient(subset=["mean_normalized"], cmap="RdYlGn", vmin=0, vmax=1),
+        use_container_width=True, hide_index=True, height=440)
+    st.caption("coverage_pct = names with a non-null raw value (rest fall back to neutral 0.5). "
+               "mean_normalized far from 0.5 = the factor is actually discriminating.")
+
+    st.subheader("Gate sensitivity")
+    st.caption("Move the gates and watch the funnel. Shows how many names survive each stage — "
+               "**use to understand the gates, not to tune them to a desired candidate count "
+               "(overfit risk on a thin universe).**")
+    g1, g2, g3 = st.columns(3)
+    pctile_cut = g1.slider("Gate-A composite pctile cut", 0.0, 1.0, 0.70, 0.05)
+    floor = g2.slider("Gate-A composite floor", 0.0, 100.0, 50.0, 5.0)
+    trend_floor = g3.slider("Gate-B trend floor", 0.0, 1.0, 0.40, 0.05)
+
+    gc = fvm_data.gate_counts(L, pctile_cut, floor, trend_floor)
+    funnel = [("Universe", gc["universe"]), ("Pass veto", gc["veto_ok"]),
+              ("Gate A (fund)", gc["gate_a"]), ("Gate B (trend)", gc["gate_b"]),
+              ("Trigger (timing)", gc["trigger"]), ("Candidates", gc["candidates"])]
+    fc = st.columns(len(funnel))
+    for col, (label, v) in zip(fc, funnel):
+        col.metric(label, v)
+    ffig = go.Figure(go.Funnel(y=[f[0] for f in funnel], x=[f[1] for f in funnel],
+                               marker=dict(color="#1f77b4")))
+    ffig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
+    st.plotly_chart(ffig, use_container_width=True)
+    if gc["trigger"] == 0:
+        st.info("Zero triggers today is common — Gate-B names just have no fresh pullback/breakout "
+                "(timing_score 0). The funnel narrows at the timing stage, not the fundamentals.")
+
+
+# ------------------------------------------------------------------ #
 # Shell                                                              #
 # ------------------------------------------------------------------ #
 def main():
@@ -408,7 +491,8 @@ def main():
     asof = st.sidebar.date_input("As of", value=datetime.date.today(),
                                  max_value=datetime.date.today()).isoformat()
 
-    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage", "Milestone-A"]
+    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage",
+             "Milestone-A", "Scoring Lab"]
     nav = st.session_state.get("nav", pages[0])
     nav = st.sidebar.radio("Page", pages, index=pages.index(nav) if nav in pages else 0)
     st.session_state["nav"] = nav
@@ -418,7 +502,7 @@ def main():
         st.cache_data.clear()
         st.rerun()
     st.sidebar.caption("Cache-only. Run fvm_ingest + fvm_prices to refresh data.\n\n"
-                       "Scoring Lab · Portfolio — coming next "
+                       "Portfolio / Live — coming after Phase 5 "
                        "(docs/FVM_Forward_Plan.md §6b).")
 
     if nav == "Today's Shortlist":
@@ -427,8 +511,10 @@ def main():
         page_detail(asof)
     elif nav == "Universe & Coverage":
         page_coverage(asof)
-    else:
+    elif nav == "Milestone-A":
         page_milestone()
+    else:
+        page_scoring_lab(asof)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ strategy ranks) and (2) FULL BOARD by composite with a per-name decision tag
 (CANDIDATE / NO_TIMING / NO_TREND / WEAK_FUND / VETOED). `--asof`, `--top`, `--verbose`.
 Usable now on the 39 names; gets meaningful as the universe fills (steps 1–3).
 
-### 6b. FVM Cockpit UI  (U0–U3 DONE 2026-06-28 — U4+ pending)
+### 6b. FVM Cockpit UI  (U0–U4 DONE 2026-06-28 — U5 pending, post-Phase-5)
 A UI on top of everything. **Stack decision: Streamlit + Plotly now** (reuse `scripts/ui.py`
 pattern — research/manual-investing cockpit), **add a Flask read-only live-monitor later** when
 Phase 5 lands (mirrors `trader/ui/`). **Build order: manual-investing core first** (U0 scaffold +
@@ -72,13 +72,16 @@ Page map (= "covers everything"):
    summary metrics, FVM-vs-benchmark continuous equity curve, per-fold table (coloured edge),
    down-vs-up regime split (exposes the defensive-overlay character). Fold length/stride/capital
    sliders.
-5. **Scoring Lab** — composite distribution, pillar contributions, sector tailwind, factor
-   coverage/NaN rates, gate-sensitivity sliders (pctile_cut, trend_floor) → live candidate count.
+5. **Scoring Lab** ✅ — composite distribution (with Gate-A cut + floor lines), pillar
+   contributions, per-factor coverage/NaN + mean-normalized heatmap (flags thin factors),
+   gate-sensitivity sliders (pctile_cut / floor / trend_floor) → live funnel
+   (universe→veto→Gate-A→Gate-B→trigger→candidates).
 6. **Portfolio / Live** — open positions, sleeve capital, exit-stack state (placeholder until Phase 5).
 
 Build phasing: ~~**U0** scaffold + cached scoring-sweep helper~~ ✅ → ~~**U1** Shortlist + Stock
 Detail~~ ✅ (`scripts/fvm_ui.py` + `trader/fvm/ui/data.py`, `streamlit run scripts/fvm_ui.py`) →
-~~**U2** Coverage~~ ✅ → ~~**U3** Milestone-A viewer~~ ✅ → **U4** Scoring Lab (next) → **U5** Portfolio/Live
+~~**U2** Coverage~~ ✅ → ~~**U3** Milestone-A viewer~~ ✅ → ~~**U4** Scoring Lab~~ ✅ → **U5**
+Portfolio/Live (deferred until Phase 5 lands; + Flask live monitor)
 (+ Flask live monitor, after Phase 5).
 
 ### 7. (Gated on Milestone A passing) Phase 5 — live integration

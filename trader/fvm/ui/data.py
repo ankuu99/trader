@@ -335,3 +335,83 @@ def milestone_a(db: str, market_db: str, from_dt: str = "2018-01-01", to_dt: str
         "folds": pd.DataFrame(res["folds"]), "summary": res["summary"],
         "equity": equity, "regime": regime,
     }
+
+
+# ------------------------------------------------------------------ #
+# Scoring Lab (U4) — score anatomy + gate sensitivity                 #
+# ------------------------------------------------------------------ #
+def scoring_lab(db: str, market_db: str, asof: str) -> dict:
+    """Cross-sectional score anatomy: composite distribution, pillar means, per-factor
+    coverage + mean normalized score, and the raw inputs needed for live gate sensitivity.
+    Calls only scoring/vetoes/technical/handoff (cache-only)."""
+    fvm = FVMStore(db)
+    symbols = scored_symbols(db)
+    asof_ts = pd.to_datetime(asof)
+    price_data = _load_prices(market_db, symbols, asof)
+    universe = list(price_data)
+    if not universe:
+        return {"priced": 0, "total": len(symbols)}
+
+    pp = prices.price_provider(price_data, asof)
+    scores = scoring.compute_scores(fvm, universe, asof, price_provider=pp)
+    vmap = {s: vetoes.check_vetoes(fvm, s, asof) for s in universe}
+    tmap = {}
+    for s in universe:
+        d = price_data[s]
+        d = d[pd.to_datetime(d["timestamp"]) <= asof_ts]
+        tmap[s] = technical.evaluate(d)
+    sectors = fvm.sectors_map()
+
+    # raw factor values across the universe (for coverage / NaN rates)
+    raw = {s: factors.all_factors(fvm, s, asof, price=pp(s)) for s in universe}
+    tail = scoring._sector_tailwind(raw, sectors)
+    for s in universe:
+        raw[s]["sector_tailwind"] = tail.get(s)
+
+    n = len(universe)
+    factor_rows = []
+    for fname, (pillar, w, direction, ntype, scope) in FACTORS.items():
+        present = sum(1 for s in universe if raw[s].get(fname) is not None)
+        mean_norm = sum(scores[s]["factors"].get(fname, 0.5) for s in universe) / n
+        factor_rows.append({
+            "factor": fname, "pillar": pillar, "weight_in_pillar": w, "direction": direction,
+            "coverage_pct": round(100 * present / n, 0), "missing": n - present,
+            "mean_normalized": round(mean_norm, 3),
+        })
+
+    pillar_rows = []
+    for p in PILLARS:
+        mean_p = sum(scores[s]["pillars"][p] for s in universe) / n
+        pillar_rows.append({
+            "pillar": p, "weight": PILLAR_WEIGHTS[p], "mean_score": round(mean_p, 3),
+            "mean_contribution": round(100 * PILLAR_WEIGHTS[p] * mean_p, 1),
+        })
+
+    board = pd.DataFrame([
+        {"symbol": s, "sector": sectors.get(s, "Unknown"),
+         "composite": round(scores[s]["composite"], 1),
+         **{p: round(scores[s]["pillars"][p], 3) for p in PILLARS}}
+        for s in universe]).sort_values("composite", ascending=False).reset_index(drop=True)
+
+    return {
+        "asof": asof, "priced": n, "total": len(symbols),
+        "board": board,
+        "composite": [scores[s]["composite"] for s in universe],
+        "factor_table": pd.DataFrame(factor_rows),
+        "pillar_table": pd.DataFrame(pillar_rows),
+        "_scores": scores, "_vmap": vmap, "_tmap": tmap,
+    }
+
+
+def gate_counts(lab: dict, pctile_cut: float, floor: float, trend_floor: float) -> dict:
+    """Re-run the handoff gate at given thresholds over the cached lab inputs. Returns the
+    funnel: universe → pass-veto → gate-A pool → gate-B trend → trigger → candidates."""
+    cands, diag = handoff.select_candidates(
+        lab["_scores"], lab["_vmap"], lab["_tmap"], regime_ok=True,
+        pctile_cut=pctile_cut, floor=floor, trend_floor=trend_floor)
+    veto_ok = sum(1 for d in diag.values() if d.get("veto_passed"))
+    gate_a = sum(1 for d in diag.values() if d.get("gate_a"))
+    gate_b = sum(1 for d in diag.values() if d.get("gate_b"))
+    trigger = sum(1 for d in diag.values() if d.get("gate_b") and d.get("trigger"))
+    return {"universe": len(diag), "veto_ok": veto_ok, "gate_a": gate_a,
+            "gate_b": gate_b, "trigger": trigger, "candidates": len(cands)}
