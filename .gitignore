@@ -5,6 +5,7 @@
 # Data & logs (generated at runtime)
 data/
 !trader/data/
+!trader/fvm/data/
 logs/
 backtest_results/
 
