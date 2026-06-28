@@ -45,7 +45,7 @@ strategy ranks) and (2) FULL BOARD by composite with a per-name decision tag
 (CANDIDATE / NO_TIMING / NO_TREND / WEAK_FUND / VETOED). `--asof`, `--top`, `--verbose`.
 Usable now on the 39 names; gets meaningful as the universe fills (steps 1–3).
 
-### 6b. FVM Cockpit UI  (PLANNED — build next session; decided 2026-06-28)
+### 6b. FVM Cockpit UI  (U0+U1 DONE 2026-06-28 — U2+ pending)
 A UI on top of everything. **Stack decision: Streamlit + Plotly now** (reuse `scripts/ui.py`
 pattern — research/manual-investing cockpit), **add a Flask read-only live-monitor later** when
 Phase 5 lands (mirrors `trader/ui/`). **Build order: manual-investing core first** (U0 scaffold +
@@ -57,12 +57,12 @@ U1), rest follows.
 path. Use `st.cache_data` for the heavy per-day universe scoring sweep.
 
 Page map (= "covers everything"):
-1. **Today's Shortlist** (home) — interactive `fvm_shortlist`: candidates + full board, decision
-   tags (CANDIDATE/NO_TIMING/NO_TREND/WEAK_FUND/VETOED), sort/filter by score/pillar/sector,
-   search, `asof` date picker, NO_TIMING watchlist.
-2. **Stock Detail** (drill-down, explainability) — composite + decision badge; 5-pillar bars +
-   factor table (direction/normalized/raw); veto panel; technical charts (weekly candles + 40w/10w
-   MA + trend_score; daily + 50d MA + timing markers + parabolic-ext zone + initial stop);
+1. **Today's Shortlist** (home) ✅ — interactive `fvm_shortlist`: candidates + full board, decision
+   tags (CANDIDATE/NO_TIMING/NO_TREND/WEAK_FUND/VETOED), filter by decision/sector + symbol search,
+   `asof` date picker, click-through to Stock Detail.
+2. **Stock Detail** (drill-down, explainability) ✅ — composite + decision badge; 5-pillar bars +
+   factor table (direction/normalized/raw, colour-graded); veto panel + parabolic-ext warning;
+   technical charts (weekly candles + 40w/10w MA; daily + 50d MA + catastrophe stop + volume);
    fundamentals history (rev/NP/CFO/EPS/D-E/ROCE, PIT-vintaged); shareholding trend
    (promoter/FII/DII/pledge).
 3. **Universe & Coverage** (ops) — fundamentals coverage, quarterly depth per name, price coverage,
@@ -73,8 +73,9 @@ Page map (= "covers everything"):
    coverage/NaN rates, gate-sensitivity sliders (pctile_cut, trend_floor) → live candidate count.
 6. **Portfolio / Live** — open positions, sleeve capital, exit-stack state (placeholder until Phase 5).
 
-Build phasing: **U0** scaffold + cached scoring-sweep helper → **U1** Shortlist + Stock Detail
-(do first) → **U2** Coverage → **U3** Milestone-A viewer → **U4** Scoring Lab → **U5** Portfolio/Live
+Build phasing: ~~**U0** scaffold + cached scoring-sweep helper~~ ✅ → ~~**U1** Shortlist + Stock
+Detail~~ ✅ (`scripts/fvm_ui.py` + `trader/fvm/ui/data.py`, `streamlit run scripts/fvm_ui.py`) →
+**U2** Coverage (next) → **U3** Milestone-A viewer → **U4** Scoring Lab → **U5** Portfolio/Live
 (+ Flask live monitor, after Phase 5).
 
 ### 7. (Gated on Milestone A passing) Phase 5 — live integration
