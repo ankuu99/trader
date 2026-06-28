@@ -23,18 +23,18 @@ watchlist:
   - NSE:CUPID
   # - NSE:GOKEX
   - NSE:GUJALKALI
-  - NSE:MARKSANS       # +₹18.3k, 107t — pharma
-  - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
+  # - NSE:MARKSANS       # +₹18.3k, 107t — pharma
+  # - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
 
-  - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
+  # - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
   # - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
   - NSE:RADICO         # +₹5.2k, 15t — spirits
   - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
   # - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
-  - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
-  - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
+  # - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
+  # - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
   # - NSE:RECLTD       # removed 2026-06-18: DOWNTREND + REC-into-PFC merger event risk
   # - NSE:MCX            # +₹390,  26t — commodity exchange
@@ -47,6 +47,9 @@ watchlist:
   - NSE:SKYGOLD        # +₹16.9k, 119t
   - NSE:DIACABS        # +₹18.7k, 112t — calibrated
   # - NSE:TARAPUR      # removed 2026-06-18: FALLING_KNIFE −60%; thin/illiquid microcap
+  - NSE:GAYAPROJ-BE
+  - NSE:QUESS
+  
 
 
 
