@@ -5,6 +5,7 @@ from trader.fvm.data.universe import (
     eligible_universe,
     is_financial,
     parse_constituents_with_sector,
+    prioritized_universe,
 )
 
 _CSV = (
@@ -53,6 +54,30 @@ def test_eligible_universe_excludes_financials_and_respects_pit(tmp_path):
     # keeping financials in (toggle off) brings the banks back
     u_all = eligible_universe(store, "2024-06-01", exclude_financials=False)
     assert "HDFCBANK" in u_all
+
+
+def test_prioritized_universe_orders_mid_small_large(tmp_path):
+    store = FVMStore(tmp_path / "u.db")
+    # 4 non-financial NIFTY500 names: A (mid), B (small), C (small), D (large-remainder)
+    store.write_membership([
+        {"index_name": "NIFTY500", "symbol": s, "start_date": "2024-01-01", "end_date": None}
+        for s in ("AAA", "BBB", "CCC", "DDD")])
+    store.write_membership([
+        {"index_name": "NIFTYMIDCAP150", "symbol": "AAA", "start_date": "2024-01-01", "end_date": None}])
+    store.write_membership([
+        {"index_name": "NIFTYSMALLCAP250", "symbol": s, "start_date": "2024-01-01", "end_date": None}
+        for s in ("BBB", "CCC")])
+    # mid (AAA) -> small (BBB, CCC alphabetical) -> large-remainder (DDD)
+    assert prioritized_universe(store, "2024-06-01") == ["AAA", "BBB", "CCC", "DDD"]
+
+
+def test_prioritized_universe_falls_back_when_no_size_data(tmp_path):
+    store = FVMStore(tmp_path / "u.db")
+    store.write_membership([
+        {"index_name": "NIFTY500", "symbol": s, "start_date": "2024-01-01", "end_date": None}
+        for s in ("ZZZ", "AAA")])
+    # no size-band membership -> everything is large-remainder -> plain alphabetical
+    assert prioritized_universe(store, "2024-06-01") == ["AAA", "ZZZ"]
 
 
 def test_liquidity_filter_hook(tmp_path):

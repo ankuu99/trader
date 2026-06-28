@@ -50,6 +50,10 @@ _INDEX_FILES = {
     "NIFTY200": "ind_nifty200list.csv",
     "NIFTY100": "ind_nifty100list.csv",
     "NIFTY50": "ind_nifty50list.csv",
+    # size-band indices (used to order the ingest mid-cap-first; NIFTY500 = the union of
+    # NIFTY100 large + Midcap150 + Smallcap250, a disjoint partition)
+    "NIFTYMIDCAP150": "ind_niftymidcap150list.csv",
+    "NIFTYSMALLCAP250": "ind_niftysmallcap250list.csv",
 }
 _CONSTITUENT_BASE = "https://niftyindices.com/IndexConstituent"
 

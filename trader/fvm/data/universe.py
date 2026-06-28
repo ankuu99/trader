@@ -66,6 +66,46 @@ def ingest_sectors(store, index_name: str = "NIFTY500", client: NseClient | None
     return n
 
 
+# Size-band indices, in ingest-priority order. NIFTY500 = NIFTY100 (large) ∪ Midcap150 ∪
+# Smallcap250 (a disjoint partition), so listing mid then small puts large-caps last.
+SIZE_INDICES = ("NIFTYMIDCAP150", "NIFTYSMALLCAP250")
+
+
+def ingest_size_memberships(store, indices=SIZE_INDICES,
+                            start_date: str = "2024-01-01",
+                            client: NseClient | None = None) -> dict[str, int]:
+    """One-shot: write current Midcap150 / Smallcap250 constituents to index_membership.
+    Used only to ORDER the ingest (mid-cap first) — eligibility still comes from NIFTY500."""
+    from trader.fvm.data import nse  # local import avoids a cycle at module load
+    client = client or NseClient()
+    out = {}
+    for idx in indices:
+        out[idx] = nse.ingest_current_membership(store, idx, start_date, client)
+    return out
+
+
+def prioritized_universe(store, asof: str, index_name: str = "NIFTY500",
+                         exclude_financials: bool = True,
+                         size_indices=SIZE_INDICES) -> list[str]:
+    """`eligible_universe`, re-ordered mid-cap → small-cap → large-cap-remainder.
+
+    A fundamental overlay's edge is largest in mid/small-caps, so the daily Trendlyne quota
+    should fill those first. Falls back to plain alphabetical order for any size band whose
+    membership hasn't been ingested. Within each band, names stay alphabetical (stable)."""
+    eligible = eligible_universe(store, asof, index_name, exclude_financials)
+    eset = set(eligible)
+    ordered, seen = [], set()
+    for idx in size_indices:
+        band = sorted(set(store.members_asof(idx, asof)) & eset)
+        for s in band:
+            if s not in seen:
+                ordered.append(s)
+                seen.add(s)
+    # large-cap remainder (eligible names in no ingested size band) last, alphabetical
+    ordered.extend(s for s in eligible if s not in seen)
+    return ordered
+
+
 def eligible_universe(store, asof: str, index_name: str = "NIFTY500",
                       exclude_financials: bool = True,
                       liquidity_ok=None) -> list[str]:

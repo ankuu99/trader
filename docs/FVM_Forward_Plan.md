@@ -13,17 +13,19 @@ ordered to-do; `FVM_Progress.md` is what's already done. Last updated 2026-06-28
 
 ## The plan (ordered — top of the list is the critical path)
 
-### 1. Re-order the ingest to prioritise MID-CAPS  ← DO THIS FIRST (tomorrow)
-The store is skewed to large-caps (hand-ingested), the *worst* universe for a fundamental
-overlay. Mid-caps are where quality/momentum divergence — and the edge, if real — is largest.
-Change the ingest ordering in `scripts/fvm_ingest.py` so the daily quota fills mid-caps first
-(e.g. sort the eligible universe by an inverse-size / index-rank proxy, or seed from a mid-cap
-index membership). Cheap change, high leverage on what the next ~14 days of quota buy.
+### 1. Re-order the ingest to prioritise MID-CAPS  ✅ DONE (2026-06-28)
+Implemented via size-band index membership (the deliberate route, not a price proxy). Ingested
+**NIFTY Midcap 150 + Smallcap 250** constituents one-shot (`universe.ingest_size_memberships`);
+`universe.prioritized_universe` re-orders the eligible NIFTY500 set **mid → small →
+large-remainder** (NIFTY500 = NIFTY100 ∪ Midcap150 ∪ Smallcap250, a disjoint partition).
+`scripts/fvm_ingest.py` now ingests from that order, so the daily quota fills mid-caps first.
+Verified: eligible 399 = 114 mid + 208 small + 77 large; the next ~75 names to ingest are all
+mid-caps. 2 new unit tests (`test_prioritized_universe_*`). Membership already written to fvm.db.
 
-### 2. Run the daily fundamentals ingest until the universe fills
-- `python scripts/fvm_ingest.py` after each Trendlyne quota reset (~25 stocks/day, resumable).
+### 2. Run the daily fundamentals ingest until the universe fills  ← CURRENT (your daily run)
+- `python scripts/fvm_ingest.py` after each Trendlyne quota reset (~40 stocks/day, resumable;
+  fills mid-caps first now). 39/399 done; ~9 days to full.
 - Needs a fresh `TRENDLYNE_COOKIE` in `config/.env` if financials 403.
-- ~14 days to the full ~399-name universe.
 
 ### 3. Re-run the price cache after each batch
 - `python scripts/fvm_prices.py` (cache-only is cheap; only fetches newly-scoreable names).

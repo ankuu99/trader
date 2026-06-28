@@ -57,9 +57,16 @@ def main():
         nse.ingest_current_membership(store, args.index, "2024-01-01", nse_client)
     if not store.sectors_map():
         universe.ingest_sectors(store, args.index, nse_client)
+    # size-band memberships order the ingest mid-cap-first (one-shot; idempotent)
+    if not store.members_asof("NIFTYMIDCAP150", asof):
+        universe.ingest_size_memberships(store, client=nse_client)
 
-    syms = universe.eligible_universe(store, asof, args.index)
-    print(f"universe: {len(syms)} eligible (non-financial) names")
+    syms = universe.prioritized_universe(store, asof, args.index)
+    n_mid = len(set(store.members_asof("NIFTYMIDCAP150", asof)) & set(syms))
+    n_small = len(set(store.members_asof("NIFTYSMALLCAP250", asof)) & set(syms))
+    print(f"universe: {len(syms)} eligible (non-financial) names "
+          f"[ordered mid-cap-first: {n_mid} mid, {n_small} small, "
+          f"{len(syms) - n_mid - n_small} large-remainder]")
 
     done = skipped = sh_ok = errors = 0
     for sym in syms:
