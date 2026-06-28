@@ -59,6 +59,12 @@ def coverage(asof: str) -> dict:
     return fvm_data.coverage(DB, MARKET_DB, asof)
 
 
+@st.cache_data(show_spinner="Running the walk-forward gate (~minutes, first run only)…")
+def milestone(test_len_w: int, step_w: int, capital: float) -> dict:
+    return fvm_data.milestone_a(DB, MARKET_DB, test_len_w=test_len_w, step_w=step_w,
+                                capital=capital)
+
+
 # ------------------------------------------------------------------ #
 # Helpers                                                            #
 # ------------------------------------------------------------------ #
@@ -305,6 +311,96 @@ def page_coverage(asof: str):
 
 
 # ------------------------------------------------------------------ #
+# Page: Milestone-A / Validation                                     #
+# ------------------------------------------------------------------ #
+def _equity_chart(eq: pd.DataFrame):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=eq["week"], y=eq["FVM"], name="FVM",
+                             line=dict(color="#1a9850", width=2)))
+    fig.add_trace(go.Scatter(x=eq["week"], y=eq["Benchmark"], name="Naive momentum",
+                             line=dict(color="#888", width=2, dash="dot")))
+    fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
+                      legend=dict(orientation="h", y=1.06), yaxis_title="sleeve equity (₹)")
+    return fig
+
+
+def page_milestone():
+    st.header("Milestone-A — Validation Gate")
+    st.caption("Rules-only FVM vs a naive-momentum benchmark (same universe + cost model), "
+               "rolling walk-forward folds. Gate (§12c): **beat the benchmark AND be profitable "
+               "in the majority of folds.** First run is slow (~minutes); cached after.")
+
+    c1, c2, c3 = st.columns(3)
+    test_len_w = c1.slider("Fold length (weeks)", 26, 78, 39, step=13)
+    step_w = c2.slider("Fold stride (weeks)", 4, 39, 13, step=1)
+    capital = c3.number_input("Sleeve capital (₹)", 100_000, 5_000_000, 500_000, step=50_000)
+
+    if not st.session_state.get("ms_run"):
+        st.info("Heavy compute. Click to run the gate with the settings above.")
+        if st.button("▶ Run walk-forward gate", type="primary"):
+            st.session_state["ms_run"] = True
+            st.rerun()
+        return
+
+    m = milestone(test_len_w, step_w, capital)
+    if not m["ok"]:
+        st.error(m["reason"])
+        return
+
+    s = m["summary"]
+    passed = s["gate_pass"]
+    (st.success if passed else st.error)(
+        f"### GATE {'PASS' if passed else 'FAIL'} — "
+        f"beats benchmark {s['fvm_beats_bench']}/{s['folds']}, "
+        f"profitable {s['fvm_profitable']}/{s['folds']}")
+    if m["priced"] < 30:
+        st.warning(f"Thin universe ({m['priced']}/{m['total']} names) — **indicative, not "
+                   f"decisive.** Re-run as fundamentals coverage grows toward 399 "
+                   f"(see Universe & Coverage). Do not tune params to flip this.")
+
+    mc = st.columns(5)
+    mc[0].metric("Folds", s["folds"])
+    mc[1].metric("Beats benchmark", f"{s['fvm_beats_bench']}/{s['folds']}",
+                 f"{s['fvm_beats_bench_pct']:.0f}%")
+    mc[2].metric("Profitable", f"{s['fvm_profitable']}/{s['folds']}",
+                 f"{s['fvm_profitable_pct']:.0f}%")
+    mc[3].metric("Mean edge", f"{s['mean_edge_pct']:+.1f}pp",
+                 f"FVM {s['mean_fvm_return_pct']:+.1f}% vs bench {s['mean_bench_return_pct']:+.1f}%")
+    mc[4].metric("Worst fold maxDD", f"{s['worst_fvm_maxdd_pct']:.1f}%")
+
+    st.subheader("Equity — FVM vs benchmark (continuous, full data-valid window)")
+    st.caption(f"Data-valid window starts {m['start_week']} "
+               f"(first week with ≥{m['params']['min_scoreable']} scoreable names). "
+               f"{m['priced']}/{m['total']} priced · {m['n_folds']} folds.")
+    st.plotly_chart(_equity_chart(m["equity"]), use_container_width=True)
+
+    st.subheader("Per-fold results")
+    fdf = m["folds"][["fold", "fvm_return_pct", "bench_return_pct", "edge_pct",
+                      "fvm_trades", "fvm_win_rate", "fvm_maxdd_pct"]].copy()
+    fdf = fdf.rename(columns={"fvm_return_pct": "FVM %", "bench_return_pct": "bench %",
+                              "edge_pct": "edge pp", "fvm_trades": "trades",
+                              "fvm_win_rate": "win %", "fvm_maxdd_pct": "maxDD %"})
+    styled = fdf.style.format({"FVM %": "{:+.1f}", "bench %": "{:+.1f}", "edge pp": "{:+.1f}",
+                               "win %": "{:.0f}", "maxDD %": "{:.1f}"}).map(
+        lambda v: f"color:{'#1a9850' if v > 0 else '#d73027'}", subset=["edge pp"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    st.subheader("Regime split — does the edge come from defence?")
+    r = m["regime"]
+    rc = st.columns(2)
+    rc[0].metric(f"Down/choppy folds (bench ≤ 0) · n={r['down_n']}",
+                 f"{r['down_edge']:+.1f}pp edge" if r["down_edge"] is not None else "—",
+                 f"FVM {r['down_fvm']:+.1f}%" if r["down_fvm"] is not None else None)
+    rc[1].metric(f"Up folds (bench > 0) · n={r['up_n']}",
+                 f"{r['up_edge']:+.1f}pp edge" if r["up_edge"] is not None else "—",
+                 f"FVM {r['up_fvm']:+.1f}%" if r["up_fvm"] is not None else None,
+                 delta_color="inverse")
+    st.caption("A large positive edge in down folds with a negative edge in up folds = "
+               "defensive quality overlay (wins drawdowns, lags momentum rallies) — not a "
+               "momentum-beating return engine. That's the honest read of the current result.")
+
+
+# ------------------------------------------------------------------ #
 # Shell                                                              #
 # ------------------------------------------------------------------ #
 def main():
@@ -312,7 +408,7 @@ def main():
     asof = st.sidebar.date_input("As of", value=datetime.date.today(),
                                  max_value=datetime.date.today()).isoformat()
 
-    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage"]
+    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage", "Milestone-A"]
     nav = st.session_state.get("nav", pages[0])
     nav = st.sidebar.radio("Page", pages, index=pages.index(nav) if nav in pages else 0)
     st.session_state["nav"] = nav
@@ -322,15 +418,17 @@ def main():
         st.cache_data.clear()
         st.rerun()
     st.sidebar.caption("Cache-only. Run fvm_ingest + fvm_prices to refresh data.\n\n"
-                       "Milestone-A · Scoring Lab · Portfolio — coming next "
+                       "Scoring Lab · Portfolio — coming next "
                        "(docs/FVM_Forward_Plan.md §6b).")
 
     if nav == "Today's Shortlist":
         page_shortlist(asof)
     elif nav == "Stock Detail":
         page_detail(asof)
-    else:
+    elif nav == "Universe & Coverage":
         page_coverage(asof)
+    else:
+        page_milestone()
 
 
 if __name__ == "__main__":

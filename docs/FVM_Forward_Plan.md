@@ -45,7 +45,7 @@ strategy ranks) and (2) FULL BOARD by composite with a per-name decision tag
 (CANDIDATE / NO_TIMING / NO_TREND / WEAK_FUND / VETOED). `--asof`, `--top`, `--verbose`.
 Usable now on the 39 names; gets meaningful as the universe fills (steps 1–3).
 
-### 6b. FVM Cockpit UI  (U0+U1+U2 DONE 2026-06-28 — U3+ pending)
+### 6b. FVM Cockpit UI  (U0–U3 DONE 2026-06-28 — U4+ pending)
 A UI on top of everything. **Stack decision: Streamlit + Plotly now** (reuse `scripts/ui.py`
 pattern — research/manual-investing cockpit), **add a Flask read-only live-monitor later** when
 Phase 5 lands (mirrors `trader/ui/`). **Build order: manual-investing core first** (U0 scaffold +
@@ -68,15 +68,17 @@ Page map (= "covers everything"):
 3. **Universe & Coverage** (ops) ✅ — ingested/target (→399) progress, per-name quarter/annual
    depth + shareholding + price coverage, gap flags, missing-names list (CSV export to feed the
    daily ingest), per-sector coverage.
-4. **Milestone-A / Validation** — per-fold table, FVM vs benchmark equity curves, gate verdict,
-   down-vs-up regime split, drawdown.
+4. **Milestone-A / Validation** ✅ — button-gated walk-forward run (cached); gate verdict banner,
+   summary metrics, FVM-vs-benchmark continuous equity curve, per-fold table (coloured edge),
+   down-vs-up regime split (exposes the defensive-overlay character). Fold length/stride/capital
+   sliders.
 5. **Scoring Lab** — composite distribution, pillar contributions, sector tailwind, factor
    coverage/NaN rates, gate-sensitivity sliders (pctile_cut, trend_floor) → live candidate count.
 6. **Portfolio / Live** — open positions, sleeve capital, exit-stack state (placeholder until Phase 5).
 
 Build phasing: ~~**U0** scaffold + cached scoring-sweep helper~~ ✅ → ~~**U1** Shortlist + Stock
 Detail~~ ✅ (`scripts/fvm_ui.py` + `trader/fvm/ui/data.py`, `streamlit run scripts/fvm_ui.py`) →
-~~**U2** Coverage~~ ✅ → **U3** Milestone-A viewer (next) → **U4** Scoring Lab → **U5** Portfolio/Live
+~~**U2** Coverage~~ ✅ → ~~**U3** Milestone-A viewer~~ ✅ → **U4** Scoring Lab (next) → **U5** Portfolio/Live
 (+ Flask live monitor, after Phase 5).
 
 ### 7. (Gated on Milestone A passing) Phase 5 — live integration

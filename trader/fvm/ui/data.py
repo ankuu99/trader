@@ -14,7 +14,8 @@ from pathlib import Path
 import pandas as pd
 
 from trader.data.store import Store
-from trader.fvm import factors, handoff, scoring, technical, vetoes
+from trader.fvm import engine as enginemod
+from trader.fvm import factors, handoff, scoring, technical, vetoes, walkforward
 from trader.fvm.data import prices, universe
 from trader.fvm.data.store import FVMStore
 from trader.fvm.fields import (
@@ -254,4 +255,83 @@ def coverage(db: str, market_db: str, asof: str, index_name: str = "NIFTY500") -
         "last_ingest": max((f.get("ingested") or "" for f in funda.values()), default=""),
         "min_q_depth": min((f["q_depth"] for f in funda.values()), default=0),
         "max_q_depth": max((f["q_depth"] for f in funda.values()), default=0),
+    }
+
+
+# ------------------------------------------------------------------ #
+# Milestone-A validation (U3) — walk-forward gate + equity curves     #
+# ------------------------------------------------------------------ #
+def milestone_a(db: str, market_db: str, from_dt: str = "2018-01-01", to_dt: str | None = None,
+                capital: float = 500_000.0, test_len_w: int = 39, step_w: int = 13,
+                warmup_w: int = 52, min_scoreable: int = 5) -> dict:
+    """Run the Milestone-A walk-forward gate + a continuous full-window equity comparison.
+
+    Mirrors scripts/fvm_milestone_a.py — same auto-start at the first data-scoreable week,
+    same defaults — but also captures the FVM vs benchmark equity curves over the whole
+    data-valid window for charting. Calls only the tested walkforward/engine functions.
+    """
+    to_dt = to_dt or datetime.datetime.now().date().isoformat()
+    fvm = FVMStore(db)
+    candle_store = Store(Path(market_db))
+    symbols = scored_symbols(db)
+    price_data = prices.load_universe_prices(
+        None, candle_store, symbols,
+        datetime.datetime.fromisoformat(from_dt), datetime.datetime.fromisoformat(to_dt),
+        token_map={}, min_bars=60)
+    if len(price_data) < 2:
+        return {"ok": False, "reason": "not enough priced names — run fvm_prices.py first",
+                "priced": len(price_data), "total": len(symbols)}
+
+    sectors = {s: fvm.get_sector(s) or "Unknown" for s in price_data}
+    weeks = walkforward.all_weeks(price_data)
+    start_idx = walkforward.first_scoreable_week(
+        fvm, weeks, list(price_data), vetoes.check_vetoes, min_names=min_scoreable)
+    if start_idx is None:
+        return {"ok": False, "reason": f"no week has >= {min_scoreable} scoreable names",
+                "priced": len(price_data), "total": len(symbols)}
+
+    folds = walkforward.make_folds(weeks, test_len_w=test_len_w, step_w=step_w,
+                                   warmup_w=warmup_w, start_idx=start_idx)
+    if not folds:
+        return {"ok": False, "reason": "no folds — widen the date range or reduce test_len_w",
+                "priced": len(price_data), "total": len(symbols),
+                "start_week": weeks[start_idx].date().isoformat()}
+
+    def score_fn(store, uni, asof):
+        return scoring.compute_scores(store, uni, asof,
+                                      price_provider=prices.price_provider(price_data, asof))
+
+    res = walkforward.run_walk_forward(fvm, price_data, sectors, capital, folds, score_fn=score_fn)
+
+    # continuous full data-valid window, for one FVM-vs-benchmark equity line each
+    full = weeks[start_idx:]
+    fvm_run = enginemod.run_backtest(fvm, price_data, sectors, capital,
+                                     rebalance_weeks=full, score_fn=score_fn)
+    bench_run = walkforward.naive_momentum_backtest(price_data, capital, rebalance_weeks=full)
+    equity = pd.DataFrame({
+        "week": [pd.to_datetime(w) for w, _ in fvm_run["equity_curve"]],
+        "FVM": [e for _, e in fvm_run["equity_curve"]],
+        "Benchmark": [e for _, e in bench_run["equity_curve"]],
+    })
+
+    # down-vs-up regime split (by benchmark sign per fold)
+    down = [r for r in res["folds"] if r["bench_return_pct"] <= 0]
+    up = [r for r in res["folds"] if r["bench_return_pct"] > 0]
+    regime = {
+        "down_n": len(down), "up_n": len(up),
+        "down_edge": (sum(r["edge_pct"] for r in down) / len(down)) if down else None,
+        "up_edge": (sum(r["edge_pct"] for r in up) / len(up)) if up else None,
+        "down_fvm": (sum(r["fvm_return_pct"] for r in down) / len(down)) if down else None,
+        "up_fvm": (sum(r["fvm_return_pct"] for r in up) / len(up)) if up else None,
+    }
+
+    return {
+        "ok": True, "priced": len(price_data), "total": len(symbols),
+        "capital": capital, "from": from_dt, "to": to_dt,
+        "start_week": weeks[start_idx].date().isoformat(),
+        "n_weeks": len(weeks), "n_folds": len(folds),
+        "params": {"test_len_w": test_len_w, "step_w": step_w, "warmup_w": warmup_w,
+                   "min_scoreable": min_scoreable},
+        "folds": pd.DataFrame(res["folds"]), "summary": res["summary"],
+        "equity": equity, "regime": regime,
     }
