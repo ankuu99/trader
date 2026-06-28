@@ -57,12 +57,36 @@ Search: `<COMPANY> CRISIL OR ICRA OR CARE rating <CURRENT_YEAR>`
 A **downgrade**, "rating watch negative", or "default (D)" is a high-confidence AVOID signal —
 especially if it corroborates a `FALLING_KNIFE`/`DOWNTREND` guard.
 
-## Step 4 — Promoter pledge & shareholding trend
+## Step 4 — Fundamental panel (structured, PIT — prefer over web search)
 
-Search: `<COMPANY> promoter pledge shareholding pattern latest quarter`
+Run the deterministic two-sided fundamental panel. It pulls Trendlyne financials +
+shareholding from `fvm.db` (auto-fetching the stock on demand if absent, including small-caps
+outside the Nifty500 universe like CUPID), and returns BOTH distress red-flags AND a quality
+score — point-in-time, reproducible, and far more reliable than LLM news synthesis for numbers:
 
-Red flags: rising pledged %, falling promoter holding, large insider selling. CLAUDE.md already
-notes very low / pledged promoter holding as pump-and-dump risk.
+```bash
+python scripts/fund_panel.py --symbol <NSE:SYMBOL> --json 2>/dev/null
+```
+
+Parse the JSON. Key fields: `fund_verdict` (`STRONG`/`OK`/`WEAK`/`DISTRESS`/`INSUFFICIENT`),
+`quality_score` (0–1, absolute thresholds — NOT the FVM cross-sectional composite), `red_flags`
+(pledge spike, promoter selling, profit collapse, leverage/coverage/cash distress), `positives`
+(growth, margin expansion, ROCE, low leverage, no pledge), `financial` (if true, lender flags
+are suppressed as structural), `notes`.
+
+Use it **two-sidedly** (this is the key reframe):
+- A **`DISTRESS`** verdict or any `high`-severity red flag → strong lean toward **AVOID** — the
+  business may not support a dip recovery (falling-knife risk the backtest can't see).
+- A **`STRONG`** verdict (durable growth, low leverage, clean ownership) → *positive* evidence
+  the stock is a good LRExtrema fit **even in an uptrend** — quality is exactly what makes a
+  pullback mean-revert rather than continue (the CUPID case). Do NOT treat quality as irrelevant
+  to a mean-reversion strategy.
+
+If `fund_verdict` is `INSUFFICIENT` (not in Trendlyne master / stale cookie), fall back to a web
+search (`<COMPANY> promoter pledge shareholding pattern latest quarter`) and the logged-in
+Trendlyne browser session for pledge/holding trend. Red flags: rising pledged %, falling
+promoter holding, large insider selling (CLAUDE.md notes low/pledged promoter holding as
+pump-and-dump risk).
 
 ## Step 5 — Event-window check
 
@@ -82,14 +106,16 @@ headwind (the macro reason a stock may keep declining).
 
 ## Step 7 — Synthesize the verdict
 
-Combine the quant guard (Step 1) and qualitative findings (Steps 2–6). The verdict is the
-**worse** of the two views — a clean chart with an auditor resignation is still AVOID.
+Combine the quant guard (Step 1), the fundamental panel (Step 4), and qualitative findings
+(Steps 2,3,5,6). Distress/red-flag evidence takes the **worse** of the views — a clean chart
+with an auditor resignation or a `DISTRESS` panel is still AVOID. But a `STRONG` fundamental
+panel can *upgrade* a stock the trend guard alone would treat as a weak fit (a quality uptrend).
 
 | Verdict | When |
 |---------|------|
-| **AVOID** | `FALLING_KNIFE`/`DOWNTREND`, OR any serious red flag (rating downgrade, auditor/CFO exit, SEBI action, pledge spike, structural sector decline) |
-| **WATCH** | `WATCH_RECOVERING`/`UPTREND`/`low confidence`, OR soft concerns (mild deterioration, mixed news, imminent event window) — re-check before adding/keeping |
-| **FIT** | `RANGE_BOUND` with adequate confidence AND no material qualitative red flags |
+| **AVOID** | `FALLING_KNIFE`/`DOWNTREND`, panel `DISTRESS`/high-severity red flag, OR any serious qualitative red flag (rating downgrade, auditor/CFO exit, SEBI action, pledge spike, structural sector decline) |
+| **WATCH** | `WATCH_RECOVERING`/`low confidence`, panel `WEAK`/`INSUFFICIENT`, OR soft concerns (mild deterioration, mixed news, imminent event window) — re-check before adding/keeping |
+| **FIT** | (`RANGE_BOUND` with adequate confidence **OR** `UPTREND` backed by a `STRONG` panel) AND no material red flags. A quality compounder whose dips reliably recover is a *good* fit even trending up (CUPID) — do not auto-downgrade an uptrend. |
 
 Disagreements between quant and qualitative are the most informative cases — call them out
 explicitly (e.g. "chart is range-bound but a rating downgrade landed last week → AVOID").
@@ -108,6 +134,11 @@ One-line rationale. Note if quant and qualitative disagreed.
 - Verdict: <structural_verdict> (confidence <…>)
 - Drawdown from peak: X% | trailing returns: 1m/3m/6m/12m
 - Reading: <range-bound / falling knife / …>
+
+## Fundamental panel (Step 4)
+- Verdict: <fund_verdict> | quality_score: <0–1> | source: <fvm.db/fetched/none>
+- Red flags: <list or none> | Positives: <list>
+- Reading: <distress → dip won't recover / quality → dip is buyable / financial-sector note>
 
 ## Qualitative findings
 | Source | Finding | Date | Signal |

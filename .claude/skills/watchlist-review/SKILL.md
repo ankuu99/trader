@@ -149,22 +149,31 @@ Using the JSON data, classify each stock:
 Don't blindly run a full multi-source qualitative search for every name — that's wasteful.
 Gate it: a cheap deterministic check for all, the deep `qualify` gate only where warranted.
 
-### 3a — Trend guard for every stock (cheap, deterministic)
+### 3a — Trend guard + fundamental panel for every stock (cheap, deterministic)
 
-Run the falling-knife guard on each watchlist symbol and record its `structural_verdict`:
+Run **both** deterministic checks on each watchlist symbol — neither costs a web search and
+both are reproducible:
 
 ```bash
 python scripts/trend_guard.py --symbol <NSE:SYMBOL> --fetch --json 2>/dev/null
+python scripts/fund_panel.py  --symbol <NSE:SYMBOL> --json 2>/dev/null
 ```
 
-A `FALLING_KNIFE` or `DOWNTREND` verdict is an immediate escalation toward **REMOVE**,
-regardless of backtest P&L — it's exactly the regime mismatch the backtest can't see.
+- **Trend guard** — a `FALLING_KNIFE` or `DOWNTREND` `structural_verdict` is an immediate
+  escalation toward **REMOVE**, regardless of backtest P&L — the regime mismatch the backtest
+  can't see.
+- **Fund panel** — record `fund_verdict` + `quality_score`. Use it **two-sidedly**:
+  a `DISTRESS` verdict or `high`-severity red flag escalates toward **REMOVE** (the dip may not
+  recover); a `STRONG` panel is positive evidence to **KEEP** even on an `UPTREND`/declining-trend
+  guard (a quality compounder's pullbacks mean-revert — the CUPID case). It auto-fetches names
+  not yet ingested and suppresses leverage/cash flags for financials (M&MFIN, LTF).
 
 ### 3b — Full qualitative gate only for stocks that need it
 
 Invoke the `qualify` skill (filings, rating actions, pledge, events, governance) **only** for
 stocks that are not already clean — i.e. any of:
 - trend guard = `FALLING_KNIFE` / `DOWNTREND` / `WATCH_RECOVERING`, OR
+- fund panel = `DISTRESS` / `WEAK` (or any high-severity red flag), OR
 - Step-2 class = `REMOVE` / `CALIBRATE` / `WATCH`, OR
 - trend guard `confidence` = `low`.
 
@@ -202,22 +211,23 @@ Save a markdown report to `reviews/watchlist_review_YYYYMMDD.md` with this struc
 ## Recommendations
 
 ### ✅ KEEP
-| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | News |
-|-------|----------|------------|-------|----|-------|------|------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Fund | Gate | News |
+|-------|----------|------------|-------|----|-------|------|------|------|
 
 ### 👀 WATCH
-| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | Concern |
-|-------|----------|------------|-------|----|-------|------|---------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Fund | Gate | Concern |
+|-------|----------|------------|-------|----|-------|------|------|---------|
 
 ### 🔧 CALIBRATE
-| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Gate | Action |
-|-------|----------|------------|-------|----|-------|------|--------|
+| Stock | Full P&L | Recent P&L | Trend | WR | Guard | Fund | Gate | Action |
+|-------|----------|------------|-------|----|-------|------|------|--------|
 
 ### ❌ REMOVE
-| Stock | Full P&L | Recent P&L | Trend | Guard | Gate | Reason |
-|-------|----------|------------|-------|-------|------|--------|
+| Stock | Full P&L | Recent P&L | Trend | Guard | Fund | Gate | Reason |
+|-------|----------|------------|-------|-------|------|------|--------|
 
-(`Guard` = trend_guard structural verdict; `Gate` = `qualify` FIT/WATCH/AVOID where run.)
+(`Guard` = trend_guard structural verdict; `Fund` = fund_panel verdict + quality_score;
+`Gate` = `qualify` FIT/WATCH/AVOID where run.)
 
 ## New Candidates
 (Stocks worth screening based on sector research or news)
