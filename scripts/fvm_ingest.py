@@ -75,8 +75,12 @@ def main():
             done += 1
         except TrendlyneError as e:
             errors += 1
-            print(f"  financials {sym}: {e}")
-            if "403" in str(e) or "cookie" in str(e).lower():
+            msg = str(e)
+            print(f"  financials {sym}: {msg}")
+            if "429" in msg or "quota" in msg.lower() or "rate-limit" in msg.lower():
+                print("  -> daily Trendlyne quota reached; stopping. Re-run after the daily reset.")
+                break
+            if "403" in msg or "cookie" in msg.lower():
                 print("  -> likely a stale TRENDLYNE_COOKIE; refresh it in config/.env and re-run")
                 break
         try:

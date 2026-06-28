@@ -67,6 +67,10 @@ class TrendlyneClient:
                 "This endpoint needs TRENDLYNE_COOKIE (financials). Set a fresh session "
                 "cookie in config/.env (see design §15c).")
         r = self.s.get(f"{_BASE}/{path}", timeout=60)
+        if r.status_code == 429:
+            raise TrendlyneError(
+                "429 rate-limited: Trendlyne daily/monthly quota reached "
+                "(~50 calls/day, 500/month) — resume after the daily reset")
         if r.status_code == 403:
             raise TrendlyneError(
                 f"403 on {path}: token/cookie invalid or expired"
