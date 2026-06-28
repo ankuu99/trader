@@ -45,6 +45,38 @@ strategy ranks) and (2) FULL BOARD by composite with a per-name decision tag
 (CANDIDATE / NO_TIMING / NO_TREND / WEAK_FUND / VETOED). `--asof`, `--top`, `--verbose`.
 Usable now on the 39 names; gets meaningful as the universe fills (steps 1–3).
 
+### 6b. FVM Cockpit UI  (PLANNED — build next session; decided 2026-06-28)
+A UI on top of everything. **Stack decision: Streamlit + Plotly now** (reuse `scripts/ui.py`
+pattern — research/manual-investing cockpit), **add a Flask read-only live-monitor later** when
+Phase 5 lands (mirrors `trader/ui/`). **Build order: manual-investing core first** (U0 scaffold +
+U1), rest follows.
+
+**Hard rule:** UI never reimplements engine logic — it calls the tested `scoring` / `vetoes` /
+`technical` / `handoff` / `walkforward` functions. Isolated under `scripts/fvm_ui.py` +
+`trader/fvm/ui/`; reads `fvm.db` + `market.db` cache-only; never touches the LRExtrema UI or live
+path. Use `st.cache_data` for the heavy per-day universe scoring sweep.
+
+Page map (= "covers everything"):
+1. **Today's Shortlist** (home) — interactive `fvm_shortlist`: candidates + full board, decision
+   tags (CANDIDATE/NO_TIMING/NO_TREND/WEAK_FUND/VETOED), sort/filter by score/pillar/sector,
+   search, `asof` date picker, NO_TIMING watchlist.
+2. **Stock Detail** (drill-down, explainability) — composite + decision badge; 5-pillar bars +
+   factor table (direction/normalized/raw); veto panel; technical charts (weekly candles + 40w/10w
+   MA + trend_score; daily + 50d MA + timing markers + parabolic-ext zone + initial stop);
+   fundamentals history (rev/NP/CFO/EPS/D-E/ROCE, PIT-vintaged); shareholding trend
+   (promoter/FII/DII/pledge).
+3. **Universe & Coverage** (ops) — fundamentals coverage, quarterly depth per name, price coverage,
+   last refresh, missing names, progress→399 (steer the daily ingest).
+4. **Milestone-A / Validation** — per-fold table, FVM vs benchmark equity curves, gate verdict,
+   down-vs-up regime split, drawdown.
+5. **Scoring Lab** — composite distribution, pillar contributions, sector tailwind, factor
+   coverage/NaN rates, gate-sensitivity sliders (pctile_cut, trend_floor) → live candidate count.
+6. **Portfolio / Live** — open positions, sleeve capital, exit-stack state (placeholder until Phase 5).
+
+Build phasing: **U0** scaffold + cached scoring-sweep helper → **U1** Shortlist + Stock Detail
+(do first) → **U2** Coverage → **U3** Milestone-A viewer → **U4** Scoring Lab → **U5** Portfolio/Live
+(+ Flask live monitor, after Phase 5).
+
 ### 7. (Gated on Milestone A passing) Phase 5 — live integration
 Two-sleeve capital model, wire FVM signals into the live loop. Only after the gate passes on a
 broad universe.
