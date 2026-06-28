@@ -9,15 +9,33 @@ session. Companion docs:
 ---
 
 ## Status at a glance
-**Phases 0–4 BUILT & UNIT-TESTED** (data → factors → scoring → vetoes → technical → handoff →
-exits → engine → labels → price layer). **72 pytests pass.** The whole FVM logic is implemented
-under `trader/fvm/`, fully isolated, nothing in the existing system touched.
+**Phases 0–4 BUILT & UNIT-TESTED + Milestone-A harness BUILT** (data → factors → scoring →
+vetoes → technical → handoff → exits → engine → labels → price layer → walk-forward gate).
+**76 pytests pass.** The whole FVM logic is implemented under `trader/fvm/`, fully isolated,
+nothing in the existing system touched.
 
-**BLOCKER for Milestone A (the real backtest):** the remaining gap is **fundamentals coverage** —
-39/399 names ingested (Trendlyne 50/day quota → ~14 more days, or batch). **Price data is DONE:**
-daily candles 2018→today cached for all 39 scored names (`scripts/fvm_prices.py`). See the **Runbook**.
+**Milestone A — FIRST RESULT (indicative, GATE not yet passed).** Walk-forward harness
+(`scripts/fvm_milestone_a.py` + `trader/fvm/walkforward.py`) runs rules-only FVM vs a
+naive-momentum benchmark over rolling folds. On the 39-name scored universe, data-valid
+window **2024-05 → 2026-05** (6 × ~9-month folds): FVM beats benchmark **3/6**, profitable
+**4/6**, mean edge **+0.7%** (FVM −0.5% vs bench −1.2%), worst maxDD 10.1% → **GATE = FAIL**
+(needs majority on both). **Character is sensible & defensive:** FVM *beats* momentum hard in
+the 3 down/choppy folds (edge +1.2 / +12.7 / +15.5%) and *lags* in the 3 momentum rallies —
+a quality overlay protecting drawdowns, lagging melt-ups. **Do NOT tune to flip this** (6 folds
+= overfit risk). The result is dominated by data limits, see next.
+
+**Two hard data limits found this session (both gate the real backtest):**
+1. **Fundamentals breadth — 39/399 names** ingested (Trendlyne 50/day quota → ~14 more days).
+2. **Fundamentals DEPTH — Trendlyne quarterly only goes back to 2023-03** (~13 quarters; annual to
+   2016). So pre-2023 every name fails the min-scoreability veto (`insufficient_data`) → the
+   walk-forward can't extend before ~2024. The harness now auto-starts folds at the first
+   data-scoreable week so the gate isn't an artifact of empty cash-folds.
+
+**Price data is DONE:** daily candles 2018→today cached for all 39 names (`scripts/fvm_prices.py`).
 
 **Gate ahead:** Milestone A (rules-only backtest must beat naive momentum) before any live build (Phase 5).
+Path to a decisive run: (a) widen the universe (mid-caps — fundamentals should add more edge than on
+mega-caps); (b) deeper quarterly history if obtainable; re-run the harness as coverage grows.
 
 > ⚠️ Fixed an important bug this session: `trader/fvm/data/` was caught by the `data/` gitignore →
 > the entire data layer was untracked. Added `!trader/fvm/data/`; all 30 FVM files now committed.
@@ -100,6 +118,7 @@ daily candles 2018→today cached for all 39 scored names (`scripts/fvm_prices.p
 | `exits.py` | exit stack (thesis/price/trailing/valuation/recycle) | ✅ |
 | `engine.py` | positional weekly-rebalance backtest | ✅ |
 | `labels.py` | triple-barrier labels | ✅ |
+| `walkforward.py` | Milestone-A harness: naive-momentum benchmark + rolling folds + gate | ✅ |
 
 ## Runbook — to run the real backtest (Milestone A)
 1. **Refresh Kite token** (expires midnight IST): `python scripts/login.py` (or wait for the 08:15 cron).
@@ -122,6 +141,20 @@ report, and (only if Gate A passes) Phase 5 live integration.
 
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
+
+### 2026-06-28 (Milestone-A harness + first result)
+- **Built the walk-forward gate.** `trader/fvm/walkforward.py` (naive-momentum benchmark =
+  hold-while-in-top-N-by-12–1-momentum, same universe/costs; rolling folds; gate = beat
+  benchmark + profitable in the majority) + `scripts/fvm_milestone_a.py` CLI. 4 new pytests;
+  **76 pass.**
+- **First Milestone-A run (39 names).** Auto-starts at the data-valid week. 2024-05→2026-05,
+  6 folds: beats bench 3/6, profitable 4/6, mean edge +0.7%, worst maxDD 10.1% → **GATE FAIL**
+  (near-miss). Sensible defensive profile: wins the 3 down/choppy folds big, lags the 3 rallies.
+- **Found two hard data limits:** (1) breadth 39/399; (2) **Trendlyne quarterly depth stops at
+  2023-03** → pre-2023 is all `insufficient_data`, so no long walk-forward is possible. Documented;
+  harness auto-skips the vacuous window.
+- **Did NOT tune to flip the gate** (6 folds = overfit risk). Next: grow the universe (esp.
+  mid-caps) and re-run; keep daily fundamentals ingest going.
 
 ### 2026-06-28 (prices)
 - **Price ingestion DONE.** Added `scripts/fvm_prices.py` — fetches & caches daily candles
