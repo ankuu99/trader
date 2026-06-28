@@ -33,6 +33,23 @@ telegram.disable()
 setup(log_dir=config.log_dir, level="ERROR")
 logger = get_logger(__name__)
 
+# Canonical display order for exit reasons. Reasons not listed here are still
+# shown (appended alphabetically) — never silently dropped — so the distribution
+# always sums to the total trade count.
+_REASON_ORDER = [
+    "SL", "TRAILING", "TRAILING_EOD_CLOSE", "STALE", "STAGNATION", "TIME_DECAY",
+    "MOMENTUM_DECAY", "MODEL_EXIT", "PATTERN_TOP", "PATTERN_TOP_PARTIAL",
+    "TARGET", "MEAN_REVERT", "CHANNEL_EXIT", "INTRADAY_CLOSE", "TIME",
+    "STRATEGY", "OPEN@END",
+]
+
+
+def _ordered_reasons(present) -> list[str]:
+    """Known reasons in canonical order, then any extras present, alphabetically."""
+    ordered = [r for r in _REASON_ORDER if r in present]
+    ordered += sorted(set(present) - set(_REASON_ORDER))
+    return ordered
+
 
 def main():
     parser = argparse.ArgumentParser(description="Backtest strategies on historical data")
@@ -262,21 +279,23 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
     print(f"  {'─'*W}")
     print(f"  Exit reasons:                              avg_bars")
     max_count = max(s["count"] for s in reason_stats.values()) if reason_stats else 1
-    for reason in ["SL", "TRAILING", "STALE", "STAGNATION", "MODEL_EXIT", "PATTERN_TOP", "TARGET", "STRATEGY", "OPEN@END"]:
-        if reason not in reason_stats:
-            continue
+    shown = 0
+    for reason in _ordered_reasons(reason_stats):
         s = reason_stats[reason]
         bar = "█" * int(s["count"] / max_count * 20)
         wr = s["wins"] / s["count"] * 100
         avg_bars = s["held"] / s["count"]
+        shown += s["count"]
         print(f"    {reason:<12} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
+    print(f"    {'TOTAL':<12} {shown:>3}t")
 
     # Per-stock exit breakdown — one line per instrument
     _REASON_ABBREV = {
         "SL": "SL", "TRAILING": "TRL", "TRAILING_EOD_CLOSE": "EOD",
-        "PATTERN_TOP": "PAT", "STRATEGY": "STR", "TARGET": "TGT",
-        "OPEN@END": "END", "STAGNATION": "STG", "MODEL_EXIT": "MOD",
-        "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC", "STALE": "STL",
+        "PATTERN_TOP": "PAT", "PATTERN_TOP_PARTIAL": "PTP", "STRATEGY": "STR",
+        "TARGET": "TGT", "OPEN@END": "END", "STAGNATION": "STG", "MODEL_EXIT": "MOD",
+        "MOMENTUM_DECAY": "MOM", "MEAN_REVERT": "MRV", "CHANNEL_EXIT": "CHN",
+        "TIME": "TIM", "TIME_DECAY": "DCY", "INTRADAY_CLOSE": "IDC", "STALE": "STL",
     }
     _REASON_COLOUR = {
         "SL":                "\033[91m",   # bright red
@@ -285,6 +304,11 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         "PATTERN_TOP":       "\033[96m",   # cyan
         "MODEL_EXIT":        "\033[94m",   # blue
         "TARGET":            "\033[92m",   # green
+        "PATTERN_TOP_PARTIAL":"\033[96m",  # cyan
+        "MOMENTUM_DECAY":    "\033[35m",   # magenta
+        "MEAN_REVERT":       "\033[94m",   # blue
+        "CHANNEL_EXIT":      "\033[94m",   # blue
+        "TIME":              "\033[90m",   # grey
         "STAGNATION":        "\033[33m",   # dark yellow
         "STALE":             "\033[33m",   # dark yellow
         "TIME_DECAY":        "\033[35m",   # magenta
@@ -304,8 +328,6 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["count"] += 1
         per_stock[t["instrument"]][t.get("reason", "UNKNOWN")]["pnl"] += t["pnl"]
 
-    _REASON_ORDER = ["SL", "TRAILING", "TRAILING_EOD_CLOSE", "STALE", "STAGNATION", "TIME_DECAY",
-                     "MODEL_EXIT", "PATTERN_TOP", "TARGET", "INTRADAY_CLOSE", "STRATEGY", "OPEN@END"]
     BAR_W = 24
 
     def _stacked_bar(reasons: dict, total: int) -> str:
