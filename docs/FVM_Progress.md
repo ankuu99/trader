@@ -9,10 +9,18 @@ session. Companion docs:
 ---
 
 ## Status at a glance
-**Phase:** 0 — Data foundation · **Active task:** 0.3 Universe builder (next) · Phase 1 factors
-**Gate ahead:** Milestone A (validation — beat naive momentum) before any live build.
+**Phases 0–4 BUILT & UNIT-TESTED** (data → factors → scoring → vetoes → technical → handoff →
+exits → engine → labels → price layer). **72 pytests pass.** The whole FVM logic is implemented
+under `trader/fvm/`, fully isolated, nothing in the existing system touched.
 
-**Phase 0.2 = DONE** (data layer built + live-validated; 22 pytests green). Deferred follow-ups → task #21.
+**BLOCKER for Milestone A (the real backtest):** needs DATA we couldn't get overnight —
+(1) a refreshed **Kite token** (expired ~midnight IST) for price; (2) **full-universe fundamentals**
+ingest (Trendlyne 50/day quota → ~8–16 days, or batch). See the **Runbook** below.
+
+**Gate ahead:** Milestone A (rules-only backtest must beat naive momentum) before any live build (Phase 5).
+
+> ⚠️ Fixed an important bug this session: `trader/fvm/data/` was caught by the `data/` gitignore →
+> the entire data layer was untracked. Added `!trader/fvm/data/`; all 30 FVM files now committed.
 
 ---
 
@@ -74,8 +82,56 @@ session. Companion docs:
 
 ---
 
+## Module map (`trader/fvm/`)
+| Module | Role | Tested |
+|---|---|---|
+| `data/store.py` | `FVMStore` — PIT vintaged store (own `data/fvm.db`): fundamentals/shareholding (EAV), membership, sectors, master | ✅ |
+| `data/trendlyne.py` | fincsv API client + master + financials ingest (UA-allowlist; cookie) | ✅ |
+| `data/screener.py` | historical shareholding (HTML parse) | ✅ |
+| `data/nse.py` | membership + momentum benchmark + ASM/GSM | ✅ |
+| `data/universe.py` | eligible universe (PIT members ∩ non-financial ∩ liquidity hook) | ✅ |
+| `data/prices.py` | Kite daily → engine price_data + PIT price_provider | ✅(pure) |
+| `fields.py` | factor → Trendlyne field-name map | — |
+| `factors.py` | Pillars 1–4 factors + floored-YoY acceleration | ✅ |
+| `scoring.py` | winsorize→pctile/z→sector-relative→pillar→composite + Pillar-5 tailwind | ✅ |
+| `vetoes.py` | 4 vetoes + min-scoreability + live compliance | ✅ |
+| `technical.py` | weekly Trend_Score, daily Timing_Score, parabolic veto, wide stop | ✅ |
+| `handoff.py` | gate-then-time-then-rank candidate selection | ✅ |
+| `exits.py` | exit stack (thesis/price/trailing/valuation/recycle) | ✅ |
+| `engine.py` | positional weekly-rebalance backtest | ✅ |
+| `labels.py` | triple-barrier labels | ✅ |
+
+## Runbook — to run the real backtest (Milestone A)
+1. **Refresh Kite token** (expires midnight IST): `python scripts/login.py` (or wait for the 08:15 cron).
+2. **Ingest universe fundamentals** (rate-limited 50/day; needs a fresh `TRENDLYNE_COOKIE` in `.env`):
+   loop `trendlyne.ingest_financials(store, sym)` + `screener.ingest_shareholding(store, sym)` over
+   `universe.eligible_universe(...)`. Budget ~25 stocks/day → full ~399-name universe over ~8–16 days
+   (or accept a smaller universe to start). `nse.ingest_current_membership` + `universe.ingest_sectors`
+   are one-shot.
+3. **Load prices**: `prices.load_universe_prices(kite, store, symbols, from, to)` → `{sym: daily_df}`.
+4. **Run**: `engine.run_backtest(fvm_store, price_data, sectors, sleeve_capital, score_fn=..., price provider, regime_fn)`.
+   Compare to the naive-momentum benchmark (`nse.fetch_momentum_index` / cached CSV) per §12b.
+5. **Decision (§12c):** beats naive momentum + profitable in majority of walk-forward folds + maxDD
+   ceiling → proceed to Phase 5 (live). Else iterate / Plan-B / shelve.
+
+Remaining build (post-data): real walk-forward harness around `run_backtest`, benchmark comparison
+report, and (only if Gate A passes) Phase 5 live integration.
+
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
+
+### 2026-06-28 (overnight, autonomous)
+- **Built Phases 1→4 to completion** (rules-only): scoring, vetoes, Pillar 2/5, technical layer,
+  handoff, exit stack, positional backtest engine, triple-barrier labels, Kite price layer.
+  **72 pytests pass.** Commits: Phase 1 (7af3af8), Phase 2 (2b06d73), handoff (d67c377),
+  exits (8caa423), Phase 4 engine/labels (03d0986), price layer (a6a085d), gitignore fix.
+- **Live-validated the fundamental engine** end-to-end on 8 real stocks (composite TCS 70.6 …
+  SUNPHARMA 24, all veto-pass). Found+fixed: debt_trend abs-₹→scale-free; gitignore hiding the
+  data layer; engine gate-threshold passthrough.
+- **Blocked from the real backtest** by data only (Kite token expired; full-universe fundamentals
+  need quota/time) — engine is built & ready; see Runbook.
+- **Next:** (when data ready) run Milestone-A walk-forward backtest vs naive momentum; meanwhile
+  Phase 0.2 follow-ups (#21: momentum-history fetch, reconstitution change-lists).
 
 ### 2026-06-27
 - Completed design phase, adversarial stress-test, full data-sourcing investigation (incl. paid
