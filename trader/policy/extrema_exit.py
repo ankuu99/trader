@@ -18,6 +18,7 @@ from datetime import time
 
 from trader.core.config import config
 from trader.core.logger import get_logger
+from trader.features.indicators import linreg_slope
 from trader.policy.base import ExitDecision
 
 logger = get_logger(__name__)
@@ -57,6 +58,14 @@ class ExtremaExitPolicy:
         # Scale-out (Step 2): on a pattern-top, sell a fraction and trail the rest.
         self._scale_out_enabled: bool = bool(params.get("pattern_top_scale_out_enabled", False))
         self._scale_out_fraction: float = float(params.get("pattern_top_scale_out_fraction", 0.5))
+        # Exit-side trend guard: suppress pattern-top firing while the recent absolute
+        # close slope (%/bar, scale-invariant) is strongly positive — keeps a trending
+        # leg from being misread as a top. Default off = unchanged behaviour.
+        self._trend_guard_enabled: bool = bool(params.get("pattern_top_trend_guard_enabled", False))
+        self._trend_guard_lookback: int = int(params.get("pattern_top_trend_guard_lookback", 20))
+        self._trend_guard_min_slope_pct: float = float(
+            params.get("pattern_top_trend_guard_min_slope_pct", 0.1)
+        )
 
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
@@ -90,6 +99,23 @@ class ExtremaExitPolicy:
         f = 0.0 if hi <= lo else (p_max - lo) / (hi - lo)
         f = max(0.0, min(1.0, f))
         return self._trail_loose - (self._trail_loose - self._trail_tight) * f
+
+    def _in_uptrend(self, candles) -> bool:
+        """True when the recent *absolute* close trend is strongly positive — used to
+        suppress pattern-top exits on a clean uptrend leg. The slope features the model
+        trains on are slopes-of-returns (acceleration), which mean-revert through a trend
+        and keep flagging tops; this guard instead reads the level trend directly. OLS
+        slope of the last `lookback` closes (price vs index), normalised to %/bar by the
+        window mean so the threshold is scale-invariant across price levels and stocks."""
+        n = self._trend_guard_lookback
+        if n < 3 or len(candles) < n:
+            return False
+        closes = [c["close"] for c in list(candles)[-n:]]
+        mean = sum(closes) / len(closes)
+        if mean <= 0:
+            return False
+        slope_pct = linreg_slope(closes) / mean * 100.0  # %/bar
+        return slope_pct >= self._trend_guard_min_slope_pct
 
     # ------------------------------------------------------------------
     # Candle-speed exits
@@ -175,6 +201,27 @@ class ExtremaExitPolicy:
                 strat._last_p_min = p_min
                 strat._last_p_max = p_max
                 if p_max >= self._sell_threshold:
+                    # Trend guard: if price is in a clean uptrend, the "top" is almost
+                    # certainly a trending leg misread by the acceleration-based features.
+                    # Suppress the firing (no scale-out / no trailing arm) and keep riding;
+                    # stale / hold-bars / hard-stop remain as backstops, and pattern-top
+                    # re-arms naturally once the trend slope decays.
+                    if self._trend_guard_enabled and self._in_uptrend(strat._candles):
+                        strat.signal_log.append({
+                            "timestamp": ts,
+                            "close": close,
+                            "p_min": p_min,
+                            "p_max": p_max,
+                            "type": "PATTERN_TOP_SUPPRESSED",
+                        })
+                        logger.info(
+                            "LR-Extrema PATTERN-TOP SUPPRESSED (trend guard) | %s | P(max)=%.3f >= %.3f | "
+                            "uptrend >= %.3f%%/bar over %d bars | gain=%.2f%% | held=%d | close=%.2f | candle=%s",
+                            strat.instrument, p_max, self._sell_threshold,
+                            self._trend_guard_min_slope_pct, self._trend_guard_lookback,
+                            _pct_gain, pos.held_bars, close, ts,
+                        )
+                        return None
                     strat.signal_log.append({
                         "timestamp": ts,
                         "close": close,

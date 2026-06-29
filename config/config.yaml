@@ -49,7 +49,7 @@ watchlist:
   # - NSE:TARAPUR      # removed 2026-06-18: FALLING_KNIFE −60%; thin/illiquid microcap
   - NSE:GAYAPROJ-BE
   - NSE:QUESS
-  
+
 
 
 
@@ -72,7 +72,7 @@ strategies:
       hard_stop:
         stop_pct: 20              # hard stop-loss % from entry (also the entry SL hint)
       trailing:
-        profit_pct: 10            # min profit % before trailing activates (Step 0: 5→10)
+        profit_pct: 7            # min profit % before trailing activates (Step 0: 5→10)
         trail_pct: 2              # trailing distance from peak — TIGHT, protects the small post-scale-out remainder (Step 2 best)
         force_close_time: "15:25" # force-close trailing positions before this time (None=off)
         pattern_top_floor_enabled: false  # if true, exit when gain drops below sell_min_pct
@@ -195,6 +195,15 @@ per_stock_params:
   # default geometric-minima labels produce noisy signals.
   # Only "more selective" overrides here — overrides that reduce noise rather
   # than increase trade frequency (lowering threshold hurts portfolio via capital competition).
+  # ATHERENERG — structurally trending recent IPO. Exit-side trend guard suppresses the
+  # pattern-top exit while price is in a clean uptrend (acceleration-based features misread
+  # a trending leg as a top). Backtest 2025-05→2026-06: +32% standalone, +Rs6.3k in-portfolio,
+  # lower drawdown. Guard is per-stock only — it hurts mean-reverting names (e.g. GAYAPROJ-BE).
+  NSE:ATHERENERG:
+    lr_extrema:
+      exits:
+        pattern_top:
+          trend_guard: { enabled: true, lookback_bars: 10, min_slope_pct: 0.10 }
   NSE:GOKEX:
     lr_extrema:
       forward_label:

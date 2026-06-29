@@ -76,6 +76,14 @@ def flatten_strategy_params(params: dict) -> dict:
             so = pattern_top["scale_out"] or {}
             p["pattern_top_scale_out_enabled"] = bool(so.get("enabled", True))
             _set(p, "pattern_top_scale_out_fraction", so, "fraction")
+        # Exit-side trend guard (default off): suppress the pattern-top firing while
+        # price is in a clean uptrend, so a trending leg isn't misread as a top.
+        # Presence does NOT enable — `enabled` must be true.
+        if "trend_guard" in pattern_top:
+            tg = pattern_top["trend_guard"] or {}
+            p["pattern_top_trend_guard_enabled"] = bool(tg.get("enabled", False))
+            _set(p, "pattern_top_trend_guard_lookback", tg, "lookback_bars")
+            _set(p, "pattern_top_trend_guard_min_slope_pct", tg, "min_slope_pct")
 
         if "stale" in exits:
             p["stale_exit_enabled"] = True
