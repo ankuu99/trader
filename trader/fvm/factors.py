@@ -70,6 +70,15 @@ def floored_yoy_series(store, symbol, asof, basis="consolidated") -> list[tuple[
     Numerator carries the Δ₹ turnaround signal; the floor stabilises tiny/negative
     bases (keeps it unit-coherent). Each g winsorized to ±200%. Returns period-ascending
     (period, g) pairs (only quarters with a year-ago base AND a positive TTM-revenue floor).
+
+    Annual fallback (see _annual_floored_yoy_series): if no quarterly YoY point can be
+    computed at `asof` — which is the case for every name before ~2023-03, the floor of
+    Trendlyne's 13-quarter window — fall back to the same formula on ANNUAL net profit /
+    revenue (which reach 2013). This is what lets the backtest extend into the 2018-19 /
+    2020 drawdowns. Live (asof≈today) always has quarterly data, so this never fires there
+    and live behaviour is unchanged; only the historical pre-2023 window uses the fallback.
+    Because the whole pre-2023 pool hits the same wall together, the cross-sectional
+    normalization in scoring stays internally consistent within each as-of date.
     """
     np_d = dict(_series(store, symbol, F.NET_PROFIT_Q, asof, basis))
     rev_d = dict(_series(store, symbol, F.TOTAL_REVENUE_Q, asof, basis))
@@ -82,6 +91,34 @@ def floored_yoy_series(store, symbol, asof, basis="consolidated") -> list[tuple[
         qi = _q_index(period)
         ttm_rev = sum(v for p, v in rev_d.items() if 0 <= qi - _q_index(p) <= 3)
         floor = 0.01 * abs(ttm_rev)
+        denom = max(abs(np_d[base_p]), floor)
+        if denom <= 0:
+            continue
+        g = winsorize((np_d[period] - np_d[base_p]) / denom)
+        out.append((period, g))
+    if not out:
+        return _annual_floored_yoy_series(store, symbol, asof, basis)
+    return out
+
+
+def _annual_floored_yoy_series(store, symbol, asof, basis="consolidated") -> list[tuple[str, float]]:
+    """Annual analogue of floored_yoy_series — same floored-YoY formula on FY net profit:
+
+        g_y = (NP_y - NP_{y-1}) / max(|NP_{y-1}|, 1% of Revenue_y)
+
+    Used only as the pre-2023 fallback (Trendlyne caps quarterly at 13 quarters / 2023-03,
+    confirmed identical across the Excel-Connect API and the website endpoint). Annual NP +
+    revenue reach 2013, so this populates the crown-jewel back through the older regimes.
+    Returns period-ascending (period, g) pairs; the previous FY is the year-ago base.
+    """
+    np_d = dict(_series(store, symbol, F.NET_PROFIT_A, asof, basis))
+    rev_d = dict(_series(store, symbol, F.TOTAL_REVENUE_A, asof, basis))
+    out = []
+    for period in sorted(np_d):
+        base_p = _year_ago(period)  # annual periods are 'YYYY-03'; year-ago is the prior FY
+        if base_p not in np_d:
+            continue
+        floor = 0.01 * abs(rev_d.get(period, 0.0))  # FY revenue is already TTM
         denom = max(abs(np_d[base_p]), floor)
         if denom <= 0:
             continue

@@ -33,6 +33,7 @@ ST_DEBT_A          = ("annual", "Short Term Debt Annual")
 # --- Pillar 1 manufactured-earnings / revenue (annual, for the veto) ---
 REVENUE_GROWTH_A   = ("annual", "Revenue Growth Annual YoY %")
 NET_PROFIT_MARGIN_A = ("annual", "Net Profit Margin Annual %")
+TOTAL_REVENUE_A    = ("annual", "Total Revenue Annual")  # TTM-revenue floor for annual-fallback yoy
 
 # --- Pillar 4: Ownership lives in the `shareholding` table (Screener), not fundamentals.
 # Field keys used with FVMStore.read_shareholding_asof:

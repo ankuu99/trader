@@ -16,28 +16,72 @@ vetoes → technical → handoff → exits → engine → labels → price layer
 **76 pytests pass.** The whole FVM logic is implemented under `trader/fvm/`, fully isolated,
 nothing in the existing system touched.
 
-**Milestone A — FIRST RESULT (indicative, GATE not yet passed).** Walk-forward harness
-(`scripts/fvm_milestone_a.py` + `trader/fvm/walkforward.py`) runs rules-only FVM vs a
-naive-momentum benchmark over rolling folds. On the 39-name scored universe, data-valid
-window **2024-05 → 2026-05** (6 × ~9-month folds): FVM beats benchmark **3/6**, profitable
-**4/6**, mean edge **+0.7%** (FVM −0.5% vs bench −1.2%), worst maxDD 10.1% → **GATE = FAIL**
-(needs majority on both). **Character is sensible & defensive:** FVM *beats* momentum hard in
-the 3 down/choppy folds (edge +1.2 / +12.7 / +15.5%) and *lags* in the 3 momentum rallies —
-a quality overlay protecting drawdowns, lagging melt-ups. **Do NOT tune to flip this** (6 folds
-= overfit risk). The result is dominated by data limits, see next.
+**Milestone A — FINAL VERDICT (2026-07-01): CONCLUSIVE GATE FAIL. Decision: repurpose-or-shelve.**
+With the annual-fallback (`factors._annual_floored_yoy_series`) the walk-forward window now spans
+**2019→2026, 28 folds across ALL regimes incl. the Mar-2020 COVID crash.** Result: beats benchmark
+**3/28 (11%)**, profitable 20/28 (71% — ~tautological for long-only equity in a mostly-up decade),
+**mean edge −29.0pp** (FVM +17.6% vs bench +46.6%). **The defensive-overlay thesis is buried, not
+confirmed:** in the one real crash fold (2019-07→2020-03) FVM *lost more* than momentum (−14.8 vs
+−12.8) and beat it in only 2 of 4 down folds. So rules-only FVM is reliably profitable but **never
+reliably beats momentum and isn't even reliably defensive.** The earlier "inconclusive because
+bull-only" framing is RESOLVED — we got the regimes, FVM still fails. Next = the repurpose-or-shelve
+decision (see FVM_Forward_Plan.md "THE DECISION"); do NOT tune, do NOT BSE-scrape. Pre-2023 *breadth*
+result kept below for history.
 
-**Two hard data limits found this session (both gate the real backtest):**
-1. **Fundamentals breadth — 39/399 names** ingested (Trendlyne 50/day quota → ~14 more days).
+---
+**(superseded) Milestone A — BREADTH RESULT (2026-06-30): GATE FAIL, breadth did NOT rescue it.**
+Re-ran the walk-forward on the **138-name** scored universe (up from 39; daily prices cached for
+138/139). Then-current data-valid window **2024-05 → 2026-05** (6 × 39w folds):
+
+| Metric | 39 names (first run) | 138 names (breadth) |
+|---|---|---|
+| Beats benchmark | 3/6 | **1/6** |
+| Profitable | 3/6 (was reported 4/6) | **3/6** |
+| Mean edge | +0.7% | **−15.1%** (FVM +0.1% vs bench +15.2%) |
+| Worst FVM fold maxDD | 10.1% | 18.0% |
+
+FVM beat naive momentum in **only the one fold where the benchmark was negative** (2024-08→2025-05:
+−11.2% vs −19.6%, +8.4pp); it lagged 26–32pp in every up fold. **Breadth didn't rescue it — it
+exposed it:** the first-run near-miss was not thin-data noise. FVM as specified is a **defensive
+overlay that structurally cannot beat naive momentum in an up market** — wins drawdowns, loses
+rallies.
+
+**Crucial caveat — the gate was run on a stacked deck.** The *entire* data-valid window
+(2024-05→2026-05) is a near-uninterrupted mid/small-cap **bull regime** (5 of 6 folds had a
+*positive* benchmark, some +35–45%). A defensive fundamental tilt losing to momentum across a
+one-directional bull run is close to tautological — the "beat naive momentum in a majority of
+folds" gate is near-unwinnable on a bull-only window. So this FAIL is **inconclusive about strategy
+quality**: we cannot yet distinguish "FVM is weak" from "the only window we have is a bull market
+where defense structurally loses." **Did NOT tune anything to flip it** (standing rule).
+
+**Bottleneck has shifted: breadth → SOLVED (138 names); the wall is now REGIME COVERAGE / window
+length**, i.e. the Trendlyne quarterly-depth limit at 2023-03 capping the backtest at ~2024→. We
+have no fundamental history reaching a bear/sideways market (2018-19, 2020) where a defensive
+overlay should earn its keep. **Decision pulled forward (forward-plan step 5):** either (a) accept
+the verdict / repurpose FVM as a risk-filter on the LRExtrema sleeve rather than a standalone
+strategy, or **(b) source pre-2023 quarterly history (Screener/BSE) so the backtest spans a real
+drawdown — only then is the gate a fair test. Recommendation: (b) before any verdict on FVM.**
+
+**Two hard data limits (one now resolved):**
+1. ~~**Fundamentals breadth — 39/399**~~ → **138/399 scored** (2026-06-30); breadth no longer the
+   bottleneck for the gate.
 2. **Fundamentals DEPTH — Trendlyne quarterly only goes back to 2023-03** (~13 quarters; annual to
-   2016). So pre-2023 every name fails the min-scoreability veto (`insufficient_data`) → the
-   walk-forward can't extend before ~2024. The harness now auto-starts folds at the first
-   data-scoreable week so the gate isn't an artifact of empty cash-folds.
+   2013). Confirmed 2026-07-01 that this is Trendlyne's HARD CAP on *every* endpoint — reverse-
+   engineered the website's `get-fundamental_results-v2` endpoint and it returns the same 13q/2023-03
+   as Excel-Connect (RADICO). No deeper quarterly exists to fetch. **MITIGATED in code:**
+   `factors.floored_yoy_series` now falls back to annual NP/revenue (reach 2013) when quarterly is
+   absent, so the `insufficient_data` veto and the walk-forward window extend back to ~2017/2018
+   (live unchanged — only the pre-2023 backtest window uses it). 78 FVM pytests pass. Next: re-run
+   `fvm_milestone_a.py` to read the gate across the now-included 2018-19 + Mar-2020 drawdowns.
 
-**Price data is DONE:** daily candles 2018→today cached for all 39 names (`scripts/fvm_prices.py`).
+**Price data is DONE:** daily candles 2018→today cached for 138/139 names (`scripts/fvm_prices.py`;
+only GAYAPROJ short — the -BE name).
 
 **Gate ahead:** Milestone A (rules-only backtest must beat naive momentum) before any live build (Phase 5).
-Path to a decisive run: (a) widen the universe (mid-caps — fundamentals should add more edge than on
-mega-caps); (b) deeper quarterly history if obtainable; re-run the harness as coverage grows.
+Path to a decisive run: ~~(a) widen the universe (mid-caps)~~ ✅ DONE (138 names, gate still FAIL —
+the answer was not breadth); **(b) deeper pre-2023 quarterly history** is now the ONLY path to a fair
+test — without a bear/sideways regime in the window the gate is structurally unwinnable for a
+defensive overlay. Re-run the harness once history reaches a real drawdown, NOT before.
 
 > ⚠️ Fixed an important bug this session: `trader/fvm/data/` was caught by the `data/` gitignore →
 > the entire data layer was untracked. Added `!trader/fvm/data/`; all 30 FVM files now committed.
