@@ -126,8 +126,19 @@ def build_panel(f: dict, promoter_trend, financial: bool = False) -> dict:
         flag(de is not None and de > 2.0, "high", "high_leverage", f"D/E {de:.2f} (>2.0)")
         flag(de is not None and 1.0 < de <= 2.0 and (dt or 0) > 0, "med", "rising_leverage",
              f"D/E {de:.2f} and rising")
-        flag(cfo is not None and cfo < 0, "high", "negative_operating_cash",
-             f"CFO/NP {cfo:.2f} (operating cash negative vs reported profit)")
+        # Negative operating cash: deeply negative (cfo < -0.3) is real cash bleed → high.
+        # A *mildly* negative single year (-0.3..0) is routinely working-capital build in
+        # inventory-heavy growers (gold/jewellery, cables) — only high if returns/growth are
+        # ALSO weak; otherwise med with a working-capital note. Mirrors the financial-sector
+        # suppression: don't let one soft CFO year force DISTRESS on a 30%-ROCE doubler.
+        _cfo_weak_context = (roce is None or roce < 15) or (yoy is None or yoy < 0.15)
+        flag(cfo is not None and (cfo < -0.3 or (cfo < 0 and _cfo_weak_context)),
+             "high", "negative_operating_cash",
+             f"CFO/NP {cfo:.2f} (operating cash negative vs reported profit)" if cfo is not None else "")
+        flag(cfo is not None and -0.3 <= cfo < 0 and not _cfo_weak_context,
+             "med", "negative_operating_cash_wc",
+             f"CFO/NP {cfo:.2f} — single-year negative but ROCE/growth strong (likely working capital)"
+             if cfo is not None else "")
         flag(cfo is not None and 0 <= cfo < 0.3, "med", "weak_cash_conversion", f"CFO/NP {cfo:.2f}")
     flag(yoy is not None and yoy < -0.5, "high", "profit_collapse",
          f"YoY profit growth {yoy:+.0%} (PAT down >50%)" if yoy is not None else "")
