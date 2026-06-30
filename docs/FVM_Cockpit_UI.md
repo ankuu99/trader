@@ -1,11 +1,17 @@
 # FVM Cockpit — UI Guide
 
 A research / manual-investing dashboard over the FVM (Fundamental-Value-Momentum) pipeline.
-It scores the ingested universe, shows what the strategy would act on today, lets you drill into
-any name, tracks ingest coverage, and reports the Milestone-A validation gate.
+Its centrepiece is the **🔬 Stock Study** page — study one company in depth as a long-term
+buy-and-hold candidate. It also scores the ingested universe, shows what the (now-shelved) timing
+strategy would have acted on, tracks ingest coverage, and reports the Milestone-A gate.
 
-> **Decision-support tool.** Every number is produced by the same tested engine functions the
-> backtest and (eventually) the live loop use — the UI never reimplements scoring or gate logic.
+> **The reframe (important).** The FVM *trading strategy* — timing entries to beat momentum — is a
+> conclusive Milestone-A FAIL (see FVM_Progress.md: it never reliably beats momentum, even across
+> 2018-26 incl. the COVID crash). But the *fundamental engine* it's built on is exactly what
+> discretionary **long-term investing** needs: a consistent, point-in-time-correct way to judge
+> business quality and rank a stock against its peers. The cockpit — above all the Stock Study page
+> — is that engine repurposed as a research tool. It's decision-support and ammunition, not a
+> mechanical signal; the qualitative judgment (does the moat last? is management honest?) is yours.
 
 ---
 
@@ -16,9 +22,14 @@ source .venv/bin/activate
 streamlit run scripts/fvm_ui.py        # opens http://localhost:8501
 ```
 
-**Reads cached data only** — it never hits Kite or Trendlyne. Populate the caches first:
+Most pages **read cached data only**. Populate the caches first:
 - `python scripts/fvm_ingest.py`  → fundamentals + shareholding into `data/fvm.db`
 - `python scripts/fvm_prices.py`   → daily candles into `data/market.db`
+
+**Exception — the Stock Study page can fetch LIVE.** Type any NSE symbol that isn't cached and hit
+*"Fetch live from Trendlyne + Kite"* and it pulls financials (Trendlyne fincsv), shareholding
+(Screener) and prices (Kite) on demand, then studies it. That path needs a fresh `TRENDLYNE_COOKIE`
+in `config/.env` and a valid Kite token (`scripts/kite_totp_refresh.py`).
 
 The sidebar has an **As-of date** picker (everything is computed point-in-time as of that date —
 only data knowable on/before it is used), a **page selector**, and a **Clear cache / refresh**
@@ -28,7 +39,31 @@ button (use it after a fresh ingest, since results are cached).
 
 ## Pages
 
-### 1. Today's Shortlist  *(home)*
+### 🔬 Stock Study  *(home — long-term conviction)*
+Study one company in depth, in one place, as a multi-year buy-and-hold candidate. Type any NSE
+symbol (cached names are instant; uncached ones can be fetched live).
+
+- **Conviction scorecard** — the heart of the page. Maps what serious long-term investors actually
+  use — Buffett/Munger's **four M's** (Meaning · Moat · Management · Margin of safety) plus the
+  quant quality screen — onto our point-in-time data, as five sections, each criterion graded
+  **PASS / WATCH / FAIL / NA** with the value and a plain-English "why it matters":
+  - **Quality & Returns** *(Moat)* — ROCE, ROE, ROCE trend, net-margin trend.
+  - **Growth** *(Meaning)* — revenue & profit 5yr/3yr CAGR, growth momentum (3yr vs 5yr).
+  - **Balance sheet & Cash** *(Survival)* — D/E, interest coverage, earnings quality (CFO/PAT), FCF.
+  - **Management & Ownership** — promoter holding + trend, pledge, FII+DII trend, dividend payout.
+  - **Valuation & Margin of Safety** — P/E, EV/EBITDA, PEG, position in the 1-yr range.
+- **Red flags (Munger inversion)** — "what would guarantee failure?": the FVM vetoes (aggressive
+  accounting = profit not backed by cash, manufactured earnings), parabolic extension, promoter
+  pledging/selling — each with an explanation.
+- **Multi-year trajectory** — revenue & profit, returns & margins (vs the 15% quality bar), earnings
+  quality (CFO vs net profit), leverage (D/E + interest coverage), and ownership over time.
+- **Peer comparison** — the subject's sector peers ranked head-to-head (composite, ROCE, ROE,
+  growth, D/E, EV/EBITDA, promoter %) so you can answer *"which of these is the better business?"*.
+- **Price/technical context** and the **FVM pillar/factor detail** are tucked into expanders.
+
+It's evidence to reason over, not a buy/sell call — the qualitative moat/management judgment is yours.
+
+### 1. Today's Shortlist  *(strategy view)*
 What the strategy would act on, as of the selected date.
 
 - **FVM candidates** — names that clear the *entire* pipeline (fundamentals Gate A + weekly trend

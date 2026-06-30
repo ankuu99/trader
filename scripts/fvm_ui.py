@@ -29,6 +29,7 @@ from trader.fvm.technical import (
     EXT_HI_ATR, MA_DAILY, MA_LONG_W, MA_SHORT_W,
 )
 from trader.fvm.ui import data as fvm_data
+from trader.fvm.ui import study as fvm_study
 
 DB = str(ROOT / "data" / "fvm.db")
 MARKET_DB = str(ROOT / "data" / "market.db")
@@ -37,6 +38,7 @@ DECISION_COLORS = {
     "CANDIDATE": "#1a9850", "NO_TIMING": "#66bd63", "NO_TREND": "#fdae61",
     "WEAK_FUND": "#d9d9d9", "VETOED": "#d73027",
 }
+VERDICT_COLORS = {"PASS": "#1a9850", "WATCH": "#e8a33d", "FAIL": "#d73027", "NA": "#9aa0a6"}
 
 st.set_page_config(page_title="FVM Cockpit", page_icon="📈", layout="wide")
 
@@ -68,6 +70,17 @@ def milestone(test_len_w: int, step_w: int, capital: float) -> dict:
 @st.cache_data(show_spinner="Scoring the universe…")
 def lab(asof: str) -> dict:
     return fvm_data.scoring_lab(DB, MARKET_DB, asof)
+
+
+@st.cache_data(show_spinner="Building the dossier…")
+def study_data(symbol: str, asof: str) -> dict:
+    b = fvm_data.build_board(DB, MARKET_DB, asof)
+    return fvm_study.study_stock(DB, MARKET_DB, symbol, asof, board=b["board"])
+
+
+def ensure_data(symbol: str, asof: str) -> dict:
+    """On-demand live fetch for a name not yet cached (not cached itself — it writes to the DBs)."""
+    return fvm_study.ensure_stock_data(DB, MARKET_DB, symbol, asof)
 
 
 # ------------------------------------------------------------------ #
@@ -486,12 +499,209 @@ def page_scoring_lab(asof: str):
 # ------------------------------------------------------------------ #
 # Shell                                                              #
 # ------------------------------------------------------------------ #
+# ------------------------------------------------------------------ #
+# Page: Stock Study (single-name long-term deep dive)                 #
+# ------------------------------------------------------------------ #
+def _traj_xy(traj: dict, label: str):
+    d = traj.get(label, {})
+    items = sorted(d.items())
+    return [p for p, _ in items], [v for _, v in items]
+
+
+def _render_scorecard_section(sec: dict):
+    df = pd.DataFrame([{"Criterion": c["label"], "Value": c["value"],
+                        "Verdict": c["verdict"], "Why it matters": c["note"]}
+                       for c in sec["criteria"]])
+    sty = df.style.map(
+        lambda v: f"background-color:{VERDICT_COLORS.get(v, '')};color:#fff;font-weight:700;text-align:center",
+        subset=["Verdict"])
+    st.dataframe(sty, use_container_width=True, hide_index=True,
+                 column_config={"Why it matters": st.column_config.TextColumn(width="large")})
+
+
+def _fundamentals_charts(traj: dict):
+    rp1, rp2 = st.columns(2)
+    with rp1:
+        st.caption("Revenue & Net Profit (annual)")
+        rx, rv = _traj_xy(traj, "Revenue (Annual)")
+        px_, pv = _traj_xy(traj, "Net Profit (Annual)")
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        if rx:
+            fig.add_trace(go.Bar(x=rx, y=rv, name="Revenue", marker_color="#9ecae1"), secondary_y=False)
+        if px_:
+            fig.add_trace(go.Scatter(x=px_, y=pv, name="Net Profit", line=dict(color="#1a9850", width=2.5)), secondary_y=True)
+        fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, use_container_width=True)
+    with rp2:
+        st.caption("Returns & margins — quality trajectory (%)")
+        fig = go.Figure()
+        for label, color in [("ROCE %", "#1f77b4"), ("ROE %", "#ff7f0e"), ("Net margin %", "#2ca02c")]:
+            x, y = _traj_xy(traj, label)
+            if x:
+                fig.add_trace(go.Scatter(x=x, y=y, name=label, line=dict(color=color, width=2)))
+        fig.add_hline(y=15, line=dict(color="#888", width=1, dash="dot"),
+                      annotation_text="15% quality bar")
+        fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, use_container_width=True)
+
+    cp1, cp2 = st.columns(2)
+    with cp1:
+        st.caption("Earnings quality — operating cash flow vs net profit")
+        cx, cv = _traj_xy(traj, "CFO (Annual)")
+        px_, pv = _traj_xy(traj, "Net Profit (Annual)")
+        fig = go.Figure()
+        if cx:
+            fig.add_trace(go.Bar(x=cx, y=cv, name="CFO", marker_color="#1a9850"))
+        if px_:
+            fig.add_trace(go.Bar(x=px_, y=pv, name="Net Profit", marker_color="#fdae61"))
+        fig.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0), barmode="group",
+                          legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("CFO tracking (or above) profit = earnings backed by cash. Persistent gap = a flag.")
+    with cp2:
+        st.caption("Leverage — D/E and interest coverage")
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        dx, dv = _traj_xy(traj, "D/E")
+        ix, iv = _traj_xy(traj, "Interest coverage")
+        if dx:
+            fig.add_trace(go.Scatter(x=dx, y=dv, name="D/E", line=dict(color="#d73027", width=2)), secondary_y=False)
+        if ix:
+            fig.add_trace(go.Scatter(x=ix, y=iv, name="Int. coverage", line=dict(color="#1f77b4", width=2)), secondary_y=True)
+        fig.update_layout(height=290, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def _ownership_chart(traj: dict):
+    sh = traj.get("_shareholding", {})
+    if not sh:
+        st.info("No shareholding history recorded.")
+        return
+    fig = go.Figure()
+    colors = {"promoter": "#1a9850", "fii": "#1f77b4", "dii": "#ff7f0e", "pledge": "#d73027"}
+    for field, series in sh.items():
+        items = sorted(series.items())
+        fig.add_trace(go.Scatter(x=[p for p, _ in items], y=[v for _, v in items],
+                                 name=field.upper(), line=dict(color=colors.get(field, "#888"), width=2)))
+    fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", y=1.1),
+                      yaxis_title="% holding")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def page_study(asof: str):
+    st.header("🔬 Stock Study — long-term conviction")
+    st.caption("Study one company in depth as a multi-year buy-and-hold candidate. This is the "
+               "fundamental engine repurposed for **research**, not the FVM timing strategy. "
+               "Evidence to reason over — the moat/management judgment is yours.")
+
+    names = fvm_data.scored_symbols(DB)
+    c1, c2 = st.columns([3, 1])
+    typed = c1.text_input("NSE symbol (any name — fetched live if not cached)",
+                          value=st.session_state.get("study_symbol", names[0] if names else "")).strip().upper()
+    st.session_state["study_symbol"] = typed
+    if not typed:
+        st.info("Enter an NSE symbol to study.")
+        return
+
+    s = study_data(typed, asof)
+    if not s.get("priced"):
+        st.warning(f"**{typed}** isn't in the local cache (or has no price history on/before {asof}).")
+        if c2.button("⬇ Fetch live from Trendlyne + Kite", type="primary"):
+            with st.spinner(f"Fetching {typed} (financials + shareholding + prices)…"):
+                status = ensure_data(typed, asof)
+            ok = [k for k in ("fundamentals", "shareholding", "prices") if status[k] in ("fetched", "cached")]
+            st.success(f"{typed}: {', '.join(ok) or 'nothing'} ready. " +
+                       (f"Issues: {'; '.join(status['errors'])}" if status["errors"] else ""))
+            study_data.clear()
+            st.rerun()
+        st.caption("Live fetch needs a fresh TRENDLYNE_COOKIE in config/.env and a valid Kite token "
+                   "(run scripts/kite_totp_refresh.py).")
+        return
+
+    detail, card = s["detail"], s["conviction"]
+    dec = fvm_data._decision(board(asof)["diag"].get(typed, {}))
+
+    # --- header ---
+    st.markdown(f"## {typed} &nbsp; {_decision_badge(dec)}", unsafe_allow_html=True)
+    px_str = f" · last close ₹{detail['last_price']:.1f}" if detail.get("last_price") else ""
+    st.caption(f"{detail['sector']} · as of {asof}{px_str}")
+
+    # --- conviction banner ---
+    sm = card["summary"]
+    st.markdown(f"### {sm['headline']}")
+    m = st.columns(5)
+    m[0].metric("Composite", f"{detail['scores']['composite']:.1f}")
+    m[1].metric("✅ PASS", sm["pass"])
+    m[2].metric("⚠️ WATCH", sm["watch"])
+    m[3].metric("❌ FAIL", sm["fail"])
+    m[4].metric("Red flags", len(card["red_flags"]),
+                delta=None if not card["red_flags"] else "see panel", delta_color="inverse")
+
+    # --- red flags (inversion) ---
+    if card["red_flags"]:
+        with st.container(border=True):
+            st.markdown("#### ⚠️ Red flags — what could guarantee failure (Munger inversion)")
+            for f in card["red_flags"]:
+                st.markdown(f"- **{f['flag']}** — {f['note']}")
+
+    # --- conviction scorecard ---
+    st.subheader("Conviction scorecard")
+    st.caption("The four M's — Meaning · Moat · Management · Margin of safety — plus financial strength, "
+               "scored against what long-term investors look for.")
+    for sec in card["sections"]:
+        st.markdown(f"**{sec['name']}**  ·  _{sec['tag']}_")
+        _render_scorecard_section(sec)
+
+    # --- multi-year trajectories ---
+    st.subheader("Multi-year trajectory")
+    _fundamentals_charts(s["trajectories"])
+    st.caption("Ownership & governance over time")
+    _ownership_chart(s["trajectories"])
+
+    # --- peer comparison ---
+    st.subheader("Peer comparison — which name in the sector is the better business?")
+    peers = s["peers"]
+    if peers["df"].empty:
+        st.info("No sector peers in the scored universe to compare against.")
+    else:
+        st.caption(f"Sector: **{peers['sector']}** · ranked by FVM composite · 🔵 = this stock")
+        pdf = peers["df"].copy()
+        num_cols = [c for c in pdf.columns if c not in ("symbol", "decision", "is_subject")]
+        sty = pdf.drop(columns=["is_subject"]).style.format(
+            {c: "{:.1f}" for c in num_cols}, na_rep="—").apply(
+            lambda row: ["background-color:#dbeafe" if peers["df"].iloc[row.name]["is_subject"] else ""
+                         for _ in row], axis=1)
+        st.dataframe(sty, use_container_width=True, hide_index=True)
+        st.caption("Composite = FVM cross-sectional fundamental score. Higher ROCE/ROE/growth & lower "
+                   "D/E = a better business; EV/EBITDA is the price you pay for it.")
+
+    # --- technicals + pillars ---
+    with st.expander("Price & technical context"):
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            st.caption(f"Weekly + {MA_LONG_W}w/{MA_SHORT_W}w MA")
+            st.plotly_chart(_trend_chart(detail["weekly"]), use_container_width=True)
+        with tc2:
+            st.caption(f"Daily + {MA_DAILY}d MA")
+            st.plotly_chart(_timing_chart(detail["daily"], detail["technical"]["initial_stop"],
+                                          detail["last_price"]), use_container_width=True)
+    with st.expander("FVM fundamental pillars & factor detail"):
+        pillars = detail["scores"]["pillars"]
+        pfig = go.Figure(go.Bar(x=[pillars[p] for p in fvm_data.PILLARS], y=fvm_data.PILLARS,
+                                orientation="h", marker_color="#1f77b4",
+                                text=[f"{pillars[p]:.2f}" for p in fvm_data.PILLARS]))
+        pfig.update_layout(height=220, margin=dict(l=0, r=0, t=10, b=0), xaxis_range=[0, 1])
+        st.plotly_chart(pfig, use_container_width=True)
+        st.dataframe(detail["factors"].style.background_gradient(
+            subset=["normalized"], cmap="RdYlGn", vmin=0, vmax=1),
+            use_container_width=True, hide_index=True, height=420)
+
+
 def main():
     st.sidebar.title("📈 FVM Cockpit")
     asof = st.sidebar.date_input("As of", value=datetime.date.today(),
                                  max_value=datetime.date.today()).isoformat()
 
-    pages = ["Today's Shortlist", "Stock Detail", "Universe & Coverage",
+    pages = ["🔬 Stock Study", "Today's Shortlist", "Stock Detail", "Universe & Coverage",
              "Milestone-A", "Scoring Lab"]
     nav = st.session_state.get("nav", pages[0])
     nav = st.sidebar.radio("Page", pages, index=pages.index(nav) if nav in pages else 0)
@@ -505,7 +715,9 @@ def main():
                        "Portfolio / Live — coming after Phase 5 "
                        "(docs/FVM_Forward_Plan.md §6b).")
 
-    if nav == "Today's Shortlist":
+    if nav == "🔬 Stock Study":
+        page_study(asof)
+    elif nav == "Today's Shortlist":
         page_shortlist(asof)
     elif nav == "Stock Detail":
         page_detail(asof)

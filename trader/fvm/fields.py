@@ -35,6 +35,17 @@ REVENUE_GROWTH_A   = ("annual", "Revenue Growth Annual YoY %")
 NET_PROFIT_MARGIN_A = ("annual", "Net Profit Margin Annual %")
 TOTAL_REVENUE_A    = ("annual", "Total Revenue Annual")  # TTM-revenue floor for annual-fallback yoy
 
+# --- Long-term conviction study (annual; used by conviction.py, not the FVM strategy) ---
+ROE_A              = ("annual", "ROE Annual %")                   # pre-computed return on equity
+NET_PROFIT_3Y_A    = ("annual", "Net Profit 3Yr Growth %")       # 3yr profit CAGR
+NET_PROFIT_5Y_A    = ("annual", "Net Profit 5Yr Growth %")       # 5yr profit CAGR
+REVENUE_3Y_A       = ("annual", "Revenue Annual 3Yr Growth %")   # 3yr revenue CAGR
+REVENUE_5Y_A       = ("annual", "Revenue Annual 5Yr Growth %")   # 5yr revenue CAGR
+DIV_PER_SHARE_A    = ("annual", "Dividend Per Share Annual")
+DIV_PAYOUT_A       = ("annual", "Dividend Payout to NP Annual")  # payout % of net profit
+BOOK_VALUE_A       = ("annual", "Book Value Inc Reval Reserve Annual")
+CFI_A              = ("annual", "Cash from Investing Activity Annual")  # for FCF ≈ CFO + capex
+
 # --- Pillar 4: Ownership lives in the `shareholding` table (Screener), not fundamentals.
 # Field keys used with FVMStore.read_shareholding_asof:
 SH_PROMOTER = "promoter"
