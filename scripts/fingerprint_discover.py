@@ -70,15 +70,31 @@ def fingerprint(store, sym, asof, financial):
     return vec
 
 
-def _vectors(store, names, asof, sectors):
+def fingerprint_grid(store, sym, grid, financial):
+    """Trade-period PIT: factor vector at each as-of date in `grid` (all inside the
+    backtest window), then per-factor MEDIAN across the dates where a value is present.
+    Represents the fundamental profile a name presented *while it was being traded*,
+    with no look-ahead from today's (post-window) financials. Fair across all names."""
+    per_factor = {k: [] for k in FACTORS}
+    for asof in grid:
+        v = fingerprint(store, sym, asof, financial)
+        for k in FACTORS:
+            if v[k] is not None:
+                per_factor[k].append(v[k])
+    return {k: (float(np.median(vals)) if vals else None) for k, vals in per_factor.items()}
+
+
+def _vectors(store, names, asof, sectors, grid=None):
     out = {}
     for sym in names:
         bare = sym.replace("NSE:", "")
-        # only names that actually have financials (Net Profit annual present)
-        if not store.read_fundamental_asof(bare, "annual", "consolidated", "Net Profit Annual", asof):
+        # only names that actually have financials by the earliest as-of we will read
+        probe = (grid[0] if grid else asof)
+        if not store.read_fundamental_asof(bare, "annual", "consolidated", "Net Profit Annual", probe):
             continue
         fin = is_financial(sectors.get(bare) or "")
-        out[bare] = fingerprint(store, bare, asof, fin)
+        out[bare] = (fingerprint_grid(store, bare, grid, fin) if grid
+                     else fingerprint(store, bare, asof, fin))
     return out
 
 
@@ -126,7 +142,12 @@ def discriminate(win_vecs, con_vecs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", default="reviews/fingerprint_labels.json")
-    ap.add_argument("--asof", default=datetime.date.today().isoformat())
+    ap.add_argument("--asof", default=datetime.date.today().isoformat(),
+                    help="single snapshot date (look-ahead unless inside the backtest window)")
+    ap.add_argument("--asof-grid", default=None,
+                    help="comma-separated dates INSIDE the backtest window; per-stock median "
+                         "factor vector across them (trade-period PIT, no look-ahead). "
+                         "Overrides --asof. E.g. 2024-07-01,2025-01-01,2025-07-01,2026-01-01")
     ap.add_argument("--db", default="data/fvm.db")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--out", default=None)
@@ -136,14 +157,18 @@ def main():
     sectors = store.sectors_map()
     labels = json.load(open(args.labels))
 
-    win = _vectors(store, labels["curated_winners"], args.asof, sectors)
-    con = _vectors(store, labels["losers"] + labels["baseline"], args.asof, sectors)
+    grid = ([d.strip() for d in args.asof_grid.split(",") if d.strip()]
+            if args.asof_grid else None)
+    win = _vectors(store, labels["curated_winners"], args.asof, sectors, grid)
+    con = _vectors(store, labels["losers"] + labels["baseline"], args.asof, sectors, grid)
 
     rows, alpha, n_tests = discriminate(win, con)
     disc = [r for r in rows if r.get("discriminating")]
 
     result = {
-        "asof": args.asof,
+        "mode": "asof-grid (trade-period PIT)" if grid else "single-asof snapshot",
+        "asof": args.asof if not grid else None,
+        "asof_grid": grid,
         "n_winners_with_fund": len(win),
         "n_contrast_with_fund": len(con),
         "bonferroni_alpha": round(alpha, 5),
@@ -152,7 +177,12 @@ def main():
         "discriminating_factors": [r["factor"] for r in disc],
         "null_result": len(disc) == 0,
         "low_power": len(win) < 25,
-        "pit_caveat": "single-asof snapshot, not trade-period PIT — look-ahead; OOS validation (Step 5) is required before trusting.",
+        "pit_caveat": ("per-stock median over within-window as-of dates — no look-ahead from "
+                       "post-window financials; still N-limited and uses period-median not "
+                       "per-trade dates (candle cache too thin for per-trade PIT)."
+                       if grid else
+                       "single-asof snapshot, not trade-period PIT — look-ahead if asof is "
+                       "after the backtest window."),
     }
 
     if args.out:
@@ -161,7 +191,9 @@ def main():
         print(json.dumps(result, indent=2))
         return
 
-    print(f"asof: {args.asof}   winners w/ fund: {len(win)}   contrast w/ fund: {len(con)}")
+    print(f"mode: {result['mode']}"
+          + (f"   grid: {','.join(grid)}" if grid else f"   asof: {args.asof}"))
+    print(f"winners w/ fund: {len(win)}   contrast w/ fund: {len(con)}")
     if result["low_power"]:
         print("  ** LOW STATISTICAL POWER (winners < 25) — treat any signal as tentative **")
     print(f"  Bonferroni alpha = 0.05/{n_tests} = {alpha:.5f}\n")
