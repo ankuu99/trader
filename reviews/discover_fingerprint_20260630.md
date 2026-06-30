@@ -78,6 +78,27 @@ no data-collection path that obviously changes this. Tuning the bar to flip a sn
 would have been precisely the `project_meta_labeling` / FVM-milestone-A trap ("don't tune to
 flip") — the PIT pass is exactly why that discipline mattered.
 
+## Follow-up: does fundamentals *gate* (not rank) LRExtrema-worthiness? Also NULL.
+The fingerprint tests *ranking*. The sharper question is *gating*: do fundamentally-broken names
+do worse? Tested directly (133 names with fundamentals + screen trades≥3; PIT distress flag =
+ROCE<5 OR YoY<−50% OR non-financial interest-cover<1.5; compared LRExtrema screen return):
+
+| group | n | median return% | frac profitable |
+|---|---|---|---|
+| PIT-distress | 18 | −0.19 | 0.44 |
+| clean | 115 | −0.06 | 0.49 |
+
+Mann-Whitney (distress < clean) p=0.63 — **no evidence distress predicts worse LRExtrema returns.**
+
+**Critical caveat that reframes the gate's real role:** the names that *have* fundamental data are
+ingest-biased toward decent mid/large-caps. The genuinely toxic tail (RMDRIP, AQYLON, ELECTHERM)
+has **no fundamentals in the DB at all** — not in the ingest priority universe — so this test
+cannot even see them; they self-exclude. The extreme garbage is filtered by **liquidity + segment
+hygiene + the price-action `trend_guard`** (FALLING_KNIFE/SPIKE/DOWNTREND), *not* by fundamental
+quality. Among everything that survives those filters, fundamentals add no separating signal.
+→ `fund_panel`'s honest role is **redundant confirmation** in `qualify`, not a selection criterion.
+Artifact logic: inline gate test (this run), 2026-07-01.
+
 ## Reconciling with "IPCALAB and QUESS are doing well"
 True, and consistent — but it's a GATE result, not a GENERATOR result. The curated winners
 include both quality names (IPCALAB, QUESS, CUPID → STRONG) *and* fundamentally weak ones
