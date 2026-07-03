@@ -4,6 +4,7 @@ Scheduler — market-hours automation using APScheduler.
 Jobs:
   pre_market  : 09:00 IST — warm up data cache
   midday      : 13:20 IST — refresh 4h candle cache for ht_trend gate
+  eod_flush   : 15:16 IST — flush in-progress aggregated (4hour/day) bars
   post_market : 15:35 IST — daily P&L report, reset state
 """
 
@@ -25,6 +26,7 @@ class Scheduler:
         self._scheduler = BackgroundScheduler(timezone=_IST)
         self._pre_market_hooks: list = []
         self._midday_hooks: list = []
+        self._eod_flush_hooks: list = []
         self._market_close_hooks: list = []
         self._post_market_hooks: list = []
         self._heartbeat_hooks: list = []
@@ -34,6 +36,9 @@ class Scheduler:
 
     def on_midday(self, fn):
         self._midday_hooks.append(fn)
+
+    def on_eod_flush(self, fn):
+        self._eod_flush_hooks.append(fn)
 
     def on_market_close(self, fn):
         self._market_close_hooks.append(fn)
@@ -59,6 +64,14 @@ class Scheduler:
             lambda: self._run(self._midday_hooks, "midday"),
             CronTrigger(day_of_week="mon-fri", hour=13, minute=20, timezone=_IST),
             id="midday",
+        )
+        self._scheduler.add_job(
+            # Aggregated-timeframe (4hour/day) end-of-day flush: emit any
+            # in-progress bar whose last-member candle never completed (no ticks
+            # after 15:15) so day-TF decisions still fire before market close.
+            lambda: self._run(self._eod_flush_hooks, "eod_flush"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=16, timezone=_IST),
+            id="eod_flush",
         )
         self._scheduler.add_job(
             lambda: self._run(self._market_close_hooks, "market_close"),

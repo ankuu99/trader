@@ -1182,6 +1182,19 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         rows_html = ""
         for p in positions:
             sym = p["instrument"].split(":")[-1]
+            # Per-stock params: stop/trail/hold limits AND the strategy TF —
+            # held_bars counts strategy-TF bars (days for a day-TF stock).
+            _pos_cfg = config.get_strategy_params(p["instrument"], "lr_extrema") or {}
+            _pos_stop_pct = float(_pos_cfg.get("stop_pct", _stop_pct))
+            _pos_trail_pct = float(_pos_cfg.get("trail_pct", _trail_pct))
+            _pos_hold_max = int(_pos_cfg.get("hold_bars", _hold_bars_max))
+            _pos_tf = config.strategy_timeframe(p["instrument"])
+            _pos_aggregated = _pos_tf != config.candle_timeframe
+            _tf_badge = (
+                f' <span class="badge badge-dim" title="decisions update once per '
+                f'{_pos_tf} bar">{_pos_tf.upper()}</span>'
+                if _pos_aggregated else ""
+            )
             entry_ist = _fmt_ist(
                 datetime.fromisoformat(p["entry_time"]) if p.get("entry_time") else None
             )
@@ -1208,8 +1221,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 f"&#8377; {low:.2f} <span class='red' style='font-size:11px'>({low_pct:+.2f}%)</span>"
                 if low > 0 else "<span class='dim'>—</span>"
             )
-            sl_price = p["entry_price"] * (1 - _stop_pct / 100)
-            trail_trigger = peak * (1 - _trail_pct / 100) if trailing and peak > 0 else None
+            sl_price = p["entry_price"] * (1 - _pos_stop_pct / 100)
+            trail_trigger = peak * (1 - _pos_trail_pct / 100) if trailing and peak > 0 else None
             # Trail distance: how far current price is above trigger (cushion before stop fires)
             trail_cushion_str = ""
             if trail_trigger and cur > 0:
@@ -1225,11 +1238,15 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                    if trail_trigger else "")
                 + trail_cushion_str
             )
-            # Hold bars progress bar
-            hold_pct = min(100, int(held / _hold_bars_max * 100)) if _hold_bars_max else 0
+            # Hold bars progress bar (strategy-TF units — days for a day-TF stock)
+            hold_pct = min(100, int(held / _pos_hold_max * 100)) if _pos_hold_max else 0
             hold_bar_danger = "danger" if hold_pct >= 80 else ""
+            _hold_units = (
+                f" <span class='dim' style='font-size:10px'>{_pos_tf} bars</span>"
+                if _pos_aggregated else ""
+            )
             hold_cell = (
-                f"{held}/{_hold_bars_max}"
+                f"{held}/{_pos_hold_max}{_hold_units}"
                 f'<div class="bar-bg"><div class="bar-fill {hold_bar_danger}" style="width:{hold_pct}%"></div></div>'
             )
 
@@ -1283,7 +1300,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
             rows_html += (
                 f"<tr>"
-                f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>"
+                f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
                 f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}</td>"
                 f"<td>{p['quantity']}</td>"
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
@@ -1741,9 +1758,20 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         )
 
         ticker = sym.split(":")[-1]
+        # Aggregated-TF badge: P(buy)/P(sell), Status and Conviction update once
+        # per strategy-TF bar (~15:15 IST for a day bar) — label it so a slow
+        # cadence isn't misread as a stale/frozen model.
+        _ws_tf = config.strategy_timeframe(sym)
+        _ws_aggregated = _ws_tf != config.candle_timeframe
+        _ws_tf_badge = (
+            f' <span class="badge badge-dim" title="model scores update once per '
+            f'{_ws_tf} bar, not per 15m candle">{_ws_tf.upper()}</span>'
+            if _ws_aggregated else ""
+        )
+        _bars_label = f"{candles} {_ws_tf} bars" if _ws_aggregated else f"{candles} candles"
         ws_rows += (
             f"<tr>"
-            f"<td><a href='/chart/{ticker}' class='chart-link'>{ticker}</a></td>"
+            f"<td><a href='/chart/{ticker}' class='chart-link'>{ticker}</a>{_ws_tf_badge}</td>"
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"
@@ -1752,7 +1780,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             f"<td>{conviction_html}</td>"
             f"<td>{status_html}</td>"
             f"<td>{_badge(st, kind)}</td>"
-            f"<td class='dim'>{candles} candles</td>"
+            f"<td class='dim'>{_bars_label}</td>"
             f"<td>{sparkline_html}</td>"
             f"<td>{action_html}</td>"
             f"</tr>"

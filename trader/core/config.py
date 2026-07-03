@@ -1,3 +1,4 @@
+import math
 import os
 from datetime import time
 from pathlib import Path
@@ -11,6 +12,15 @@ _config_env = os.getenv("TRADER_CONFIG")
 CONFIG_FILE = Path(_config_env) if _config_env else ROOT / "config" / "config.yaml"
 
 _REQUIRED_ENV = ["KITE_API_KEY", "KITE_API_SECRET"]
+
+# Params whose calibrated values are specific to a candle timeframe. A stock
+# running on an aggregated TF (4hour/day) must override these per-stock — the
+# global defaults are 15m-calibrated and actively harmful on higher TFs.
+TF_SENSITIVE_PARAMS = (
+    "warmup_bars", "lookback_bars", "hold_bars", "retrain_every",
+    "extrema_order", "stop_pct", "trail_pct", "profit_pct",
+    "sell_min_pct", "min_hold_before_exit", "volume_ma_bars",
+)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -242,6 +252,65 @@ class Config:
         )
         merged = _deep_merge(base, override) if override else base
         return flatten_strategy_params(merged)
+
+    def strategy_timeframe(self, instrument: str, strategy_name: str = "lr_extrema") -> str:
+        """Strategy decision timeframe for *instrument* — the `timeframe` key in
+        per_stock_params (or the strategy block), defaulting to the base feed TF
+        (candle_timeframe). Aggregated TFs (4hour/day) are built from 15m base
+        candles via trader.data.aggregator.CandleAggregator."""
+        return self.get_strategy_params(instrument, strategy_name).get(
+            "timeframe", self.candle_timeframe
+        )
+
+    def warmup_days_for(self, instrument: str, strategy_name: str = "lr_extrema") -> int:
+        """Calendar days of 15m history needed to warm up *instrument*'s model.
+        Derived from (warmup_bars + lookback_bars) at the stock's strategy TF —
+        never configured manually. Floored at historical_cache_days so base-TF
+        stocks keep today's behaviour."""
+        from trader.data.aggregator import BARS_PER_DAY  # local import — avoid cycle
+        params = self.get_strategy_params(instrument, strategy_name)
+        tf = params.get("timeframe", self.candle_timeframe)
+        bars_per_day = BARS_PER_DAY.get(tf)
+        if bars_per_day is None:
+            return self.historical_cache_days
+        bars_needed = int(params.get("warmup_bars", 200)) + int(params.get("lookback_bars", 600))
+        # ~1.45 calendar days per trading day (weekends + holidays)
+        days = math.ceil(bars_needed / bars_per_day * 1.45)
+        return max(days, self.historical_cache_days)
+
+    def timeframe_warnings(self, strategy_name: str = "lr_extrema") -> list[str]:
+        """Startup validation for per-stock aggregated timeframes. Returns
+        human-readable warnings; empty list = all clear.
+        - a non-base TF requires the base feed to be 15minute
+        - TF_SENSITIVE_PARAMS not explicitly overridden for a non-base-TF stock
+          silently inherit 15m-calibrated defaults — flagged, not fatal."""
+        from trader.data.aggregator import TIMEFRAMES  # local import — avoid cycle
+        warnings: list[str] = []
+        for sym in self.watchlist:
+            tf = self.strategy_timeframe(sym, strategy_name)
+            if tf == self.candle_timeframe:
+                continue
+            if tf not in TIMEFRAMES:
+                warnings.append(f"{sym}: unknown timeframe '{tf}'")
+                continue
+            if self.candle_timeframe != "15minute":
+                warnings.append(
+                    f"{sym}: timeframe '{tf}' requires base candle_timeframe "
+                    f"'15minute' (got '{self.candle_timeframe}')"
+                )
+            override = (
+                (self._data.get("per_stock_params") or {})
+                .get(sym, {})
+                .get(strategy_name, {})
+            )
+            overridden = flatten_strategy_params(override)
+            missing = [p for p in TF_SENSITIVE_PARAMS if p not in overridden]
+            if missing:
+                warnings.append(
+                    f"{sym}: timeframe '{tf}' inherits 15m-calibrated defaults for: "
+                    + ", ".join(missing)
+                )
+        return warnings
 
     @property
     def max_open_positions(self) -> int:

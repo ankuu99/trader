@@ -27,6 +27,7 @@ load_dotenv(Path(__file__).resolve().parent / "config" / ".env")
 from trader.auth.session import create_kite
 from trader.core.config import config
 from trader.core.logger import get_logger, setup
+from trader.data.aggregator import CandleAggregator
 from trader.data.historical import warm_up
 from trader.data.live import LiveFeed
 from trader.data.store import Store
@@ -105,12 +106,40 @@ def main():
         strategies.extend(build_strategies(symbol, config))
     logger.info("Strategies loaded: %d", len(strategies))
 
+    # Per-stock aggregated timeframes (4hour/day built from 15m base candles).
+    # None = passthrough (strategy runs directly on base candles). The same
+    # instance serves warm-up replay AND the live feed, so a mid-day restart
+    # rebuilds the in-progress bar from today's stored candles automatically.
+    for _w in config.timeframe_warnings():
+        logger.warning("Timeframe config | %s", _w)
+    aggregator_map: dict[str, CandleAggregator | None] = {}
+    for symbol in valid_watchlist:
+        _tf = config.strategy_timeframe(symbol)
+        aggregator_map[symbol] = (
+            CandleAggregator(_tf) if _tf != config.candle_timeframe else None
+        )
+        if aggregator_map[symbol] is not None:
+            logger.info("Aggregated timeframe | %s | %s (base %s)",
+                        symbol, _tf, config.candle_timeframe)
+
+    def count_strategy_bars(symbol: str, df) -> int:
+        """Number of strategy-TF bars contained in a base-candle DataFrame —
+        used to restore _held_bars after restart. Passthrough: row count."""
+        if aggregator_map.get(symbol) is None:
+            return len(df)
+        _agg = CandleAggregator(config.strategy_timeframe(symbol))  # throwaway
+        return sum(
+            1 for _, row in df.iterrows() if _agg.add(row.to_dict()) is not None
+        )
+
     # Refresh candle cache before warm-up so strategies train on current data.
+    # Fetch depth is per-symbol: aggregated-TF stocks need far more calendar
+    # history to accumulate warmup_bars + lookback_bars at their TF.
     logger.info("Refreshing candle cache before strategy warm-up")
     for symbol in valid_watchlist:
         token = symbol_to_token[symbol]
         warm_up(kite, store, token, symbol, config.candle_timeframe,
-                config.historical_cache_days)
+                config.warmup_days_for(symbol))
         if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
             warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
 
@@ -118,19 +147,30 @@ def main():
     # 200+ live candles (33+ trading days) before emitting any signal.
     # NOTE: reconciliation must come AFTER warm-up so warm-up candles don't
     # override the reconciled position state (R3-2).
-    warmup_from = datetime.now() - timedelta(days=config.historical_cache_days)
     # Only the trailing window of warm-up scores is worth persisting — the
-    # dashboard conviction sparkline shows the last _CONVICTION_BACKFILL candles.
+    # dashboard conviction sparkline shows the last _CONVICTION_BACKFILL bars.
     _CONVICTION_BACKFILL = 80
     for symbol in valid_watchlist:
+        warmup_from = datetime.now() - timedelta(days=config.warmup_days_for(symbol))
         df = store.read_candles(symbol, config.candle_timeframe, warmup_from, datetime.now())
         strats_for_symbol = [s for s in strategies if s.instrument == symbol]
-        _n = len(df)
-        _persist_from = _n - _CONVICTION_BACKFILL
-        for _i, (_, row) in enumerate(df.iterrows()):
+        # Route base candles through the symbol's aggregator (passthrough when
+        # None). Strategies see strategy-TF bars; today's incomplete bucket is
+        # left as partial state inside the aggregator — the live feed continues
+        # filling it (mid-day restart rebuild).
+        _sym_agg = aggregator_map.get(symbol)
+        bars: list[dict] = []
+        for _, row in df.iterrows():
             candle = row.to_dict()
             candle["_symbol"] = symbol
             candle["instrument_token"] = symbol_to_token.get(symbol)
+            bar = candle if _sym_agg is None else _sym_agg.add(candle)
+            if bar is not None:
+                bars.append(bar)
+        _n = len(bars)
+        _persist_from = _n - _CONVICTION_BACKFILL
+        for _i, bar in enumerate(bars):
+            candle = bar
             for strat in strats_for_symbol:
                 strat.on_candle(candle)  # warm-up only — signals discarded
                 # Backfill the conviction trajectory (trailing window only) so the
@@ -203,10 +243,20 @@ def main():
             stop_price   = round(pos["entry_price"] * (1 - lr_cfg.get("stop_pct",   3.0) / 100), 2)
             target_price = round(pos["entry_price"] * (1 + lr_cfg.get("profit_pct", 3.0) / 100), 2)
             hold_bars_limit = lr_cfg.get("hold_bars", 150)
+            # SL/TARGET are swept per base candle (best granularity); held bars
+            # count in STRATEGY-TF bars — hold_bars for a day-TF stock means
+            # trading days, not 15m candles.
+            _held_agg = (
+                CandleAggregator(config.strategy_timeframe(instrument))
+                if aggregator_map.get(instrument) is not None else None
+            )
             held = 0
             missed_exit: tuple | None = None
             for _, row in post_df.iterrows():
-                held += 1
+                if _held_agg is None:
+                    held += 1
+                elif _held_agg.add(row.to_dict()) is not None:
+                    held += 1
                 if float(row["low"]) <= stop_price:
                     missed_exit = ("SL", stop_price)
                     break
@@ -306,7 +356,7 @@ def main():
             if entry_time_str:
                 entry_time_dt = datetime.fromisoformat(entry_time_str)
                 post_df = store.read_candles(instrument, config.candle_timeframe, entry_time_dt, datetime.now())
-                held_bars = len(post_df)
+                held_bars = count_strategy_bars(instrument, post_df)
             else:
                 held_bars = 0
 
@@ -482,6 +532,104 @@ def main():
         _htf_regime_cache[symbol] = (latest_ts, regime)
         return regime
 
+    def update_position_metrics(strategy, candle: dict):
+        """Per-BASE-candle position bookkeeping (UI freshness): runs every 15m
+        even for aggregated-TF stocks, using the base candle's close/low."""
+        if strategy.is_flat() or strategy.instrument not in risk._open_positions:
+            return
+        held = getattr(strategy, "_held_bars", 0)
+        _entry = getattr(strategy, "_entry_price", None) or 0.0
+        _close = candle["close"]
+        _qty = risk._open_positions[strategy.instrument]
+        _pct = (_close - _entry) / _entry * 100.0 if _entry else 0.0
+        _upnl = (_close - _entry) * _qty if _entry else 0.0
+        _peak = getattr(strategy, "_peak_close", None) or _close
+        _trail = getattr(strategy, "_trailing_active", False)
+        store.update_position_metrics(
+            strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
+            pattern_top_trailing=getattr(strategy, "_pattern_top_trailing", False),
+        )
+        # Persist peak_close and max_gain_pct so they survive daily restarts.
+        store.set_state(f"{strategy.instrument}.peak_close", _peak)
+        store.set_state(
+            f"{strategy.instrument}.max_gain_pct",
+            getattr(strategy, "_max_gain_pct", 0.0),
+        )
+
+    def run_strategy_decision(strategy, bar: dict, decision_ts):
+        """Strategy decision on a strategy-TF bar (base candle when passthrough).
+        decision_ts = wall-clock decision time (the triggering base candle / the
+        eod flush), NOT the bar's bucket-start timestamp — signals and model
+        scores are logged at the moment the decision was actually possible."""
+        symbol = strategy.instrument
+        _was_trailing = getattr(strategy, "_trailing_active", False)
+        signal = strategy.on_candle(bar)
+        if not _was_trailing and getattr(strategy, "_trailing_active", False):
+            _entry = getattr(strategy, "_entry_price", 0) or 0
+            _peak = getattr(strategy, "_peak_close", 0) or 0
+            _gain = (_peak - _entry) / _entry * 100 if _entry else 0
+            telegram.notify_trailing_activated(
+                symbol, _entry, _peak, _gain,
+                getattr(strategy, "_trail_pct", 1.5),
+                "PATTERN_TOP" if getattr(strategy, "_pattern_top_trailing", False) else "PROFIT_PCT",
+                config.env,
+            )
+        _drivers = (
+            strategy.last_feature_drivers()
+            if hasattr(strategy, "last_feature_drivers") else []
+        )
+        _p_min = getattr(strategy, "_last_p_min", 0.0)
+        _p_max = getattr(strategy, "_last_p_max", 0.0)
+        bot_state.model_scores[symbol] = {
+            "p_min": _p_min,
+            "p_max": _p_max,
+            "drivers": _drivers,
+        }
+        # Persist the conviction trajectory (UI sparkline). Only once the model
+        # is trained — a 0/0 pre-warmup score isn't a real reading. Cosmetic
+        # only: a persistence failure must never disturb the trading path.
+        _strat_model = getattr(strategy, "_model", None)
+        if _strat_model is not None and getattr(_strat_model, "is_trained", False):
+            try:
+                store.write_model_score(symbol, decision_ts, _p_min, _p_max)
+            except Exception as e:
+                logger.debug("model_score persist skipped | %s | %s", symbol, e)
+        filter_block = getattr(strategy, "last_filter_block", None)
+        if filter_block:
+            store.log_signal(
+                timestamp=decision_ts or datetime.now(),
+                instrument=symbol,
+                strategy=strategy.name,
+                direction="BUY",
+                signal_type="ENTRY",
+                price_hint=bar["close"],
+                accepted=False,
+                reject_reason=f"FILTER: {filter_block}",
+            )
+        if signal is None:
+            logger.debug(
+                "No signal | %s | held_bars=%d entry=%.2f",
+                symbol,
+                getattr(strategy, "_held_bars", 0),
+                getattr(strategy, "_entry_price", 0) or 0,
+            )
+            return
+        order = risk.validate(signal)
+        store.log_signal(
+            timestamp=decision_ts or datetime.now(),
+            instrument=signal.instrument,
+            strategy=signal.strategy,
+            direction=signal.direction.value,
+            signal_type=signal.signal_type.value,
+            price_hint=signal.price_hint,
+            accepted=order is not None,
+            reject_reason=None if order else risk._last_reject_reason,
+            exit_reason=signal.exit_reason if order is not None else None,
+        )
+        if order is None:
+            return
+        orders.place(order)
+
     # Candle handler
     def handle_candle(candle: dict):
         symbol = token_to_symbol.get(candle.get("instrument_token"))
@@ -511,98 +659,22 @@ def main():
         if symbol:
             store.write_candle(symbol, config.candle_timeframe, candle)
 
+        # Position bookkeeping runs on every base candle (UI stays fresh at 15m
+        # even for aggregated-TF stocks); strategy decisions run only when the
+        # symbol's strategy-TF bar completes.
         for strategy in strategies:
             if strategy.instrument != symbol:
                 continue
-            _was_trailing = getattr(strategy, "_trailing_active", False)
-            signal = strategy.on_candle(candle)
-            if not _was_trailing and getattr(strategy, "_trailing_active", False):
-                _entry = getattr(strategy, "_entry_price", 0) or 0
-                _peak = getattr(strategy, "_peak_close", 0) or 0
-                _gain = (_peak - _entry) / _entry * 100 if _entry else 0
-                telegram.notify_trailing_activated(
-                    symbol, _entry, _peak, _gain,
-                    getattr(strategy, "_trail_pct", 1.5),
-                    "PATTERN_TOP" if getattr(strategy, "_pattern_top_trailing", False) else "PROFIT_PCT",
-                    config.env,
-                )
-            _drivers = (
-                strategy.last_feature_drivers()
-                if hasattr(strategy, "last_feature_drivers") else []
-            )
-            _p_min = getattr(strategy, "_last_p_min", 0.0)
-            _p_max = getattr(strategy, "_last_p_max", 0.0)
-            bot_state.model_scores[strategy.instrument] = {
-                "p_min": _p_min,
-                "p_max": _p_max,
-                "drivers": _drivers,
-            }
-            # Persist the conviction trajectory (UI sparkline). Only once the model
-            # is trained — a 0/0 pre-warmup score isn't a real reading. Cosmetic
-            # only: a persistence failure must never disturb the trading path.
-            _strat_model = getattr(strategy, "_model", None)
-            if _strat_model is not None and getattr(_strat_model, "is_trained", False):
-                try:
-                    store.write_model_score(
-                        strategy.instrument, candle.get("timestamp"), _p_min, _p_max
-                    )
-                except Exception as e:
-                    logger.debug("model_score persist skipped | %s | %s",
-                                 strategy.instrument, e)
-            held = getattr(strategy, "_held_bars", 0)
-            if not strategy.is_flat() and strategy.instrument in risk._open_positions:
-                _entry = getattr(strategy, "_entry_price", None) or 0.0
-                _close = candle["close"]
-                _qty = risk._open_positions[strategy.instrument]
-                _pct = (_close - _entry) / _entry * 100.0 if _entry else 0.0
-                _upnl = (_close - _entry) * _qty if _entry else 0.0
-                _peak = getattr(strategy, "_peak_close", None) or _close
-                _trail = getattr(strategy, "_trailing_active", False)
-                store.update_position_metrics(
-                    strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
-                    pattern_top_trailing=getattr(strategy, "_pattern_top_trailing", False),
-                )
-                # Persist peak_close and max_gain_pct so they survive daily restarts.
-                store.set_state(f"{strategy.instrument}.peak_close", _peak)
-                store.set_state(
-                    f"{strategy.instrument}.max_gain_pct",
-                    getattr(strategy, "_max_gain_pct", 0.0),
-                )
-            filter_block = getattr(strategy, "last_filter_block", None)
-            if filter_block:
-                store.log_signal(
-                    timestamp=candle.get("timestamp") or datetime.now(),
-                    instrument=strategy.instrument,
-                    strategy=strategy.name,
-                    direction="BUY",
-                    signal_type="ENTRY",
-                    price_hint=candle["close"],
-                    accepted=False,
-                    reject_reason=f"FILTER: {filter_block}",
-                )
-            if signal is None:
-                logger.debug(
-                    "No signal | %s | held_bars=%d entry=%.2f",
-                    symbol,
-                    held,
-                    getattr(strategy, "_entry_price", 0) or 0,
-                )
+            update_position_metrics(strategy, candle)
+
+        _sym_agg = aggregator_map.get(symbol)
+        bar = candle if _sym_agg is None else _sym_agg.add(candle)
+        if bar is None:
+            return
+        for strategy in strategies:
+            if strategy.instrument != symbol:
                 continue
-            order = risk.validate(signal)
-            store.log_signal(
-                timestamp=candle.get("timestamp") or datetime.now(),
-                instrument=signal.instrument,
-                strategy=signal.strategy,
-                direction=signal.direction.value,
-                signal_type=signal.signal_type.value,
-                price_hint=signal.price_hint,
-                accepted=order is not None,
-                reject_reason=None if order else risk._last_reject_reason,
-                exit_reason=signal.exit_reason if order is not None else None,
-            )
-            if order is None:
-                continue
-            orders.place(order)
+            run_strategy_decision(strategy, bar, decision_ts=candle.get("timestamp"))
 
     # Scheduler
     scheduler = Scheduler()
@@ -612,10 +684,26 @@ def main():
         for symbol in valid_watchlist:
             token = symbol_to_token[symbol]
             warm_up(kite, store, token, symbol, config.candle_timeframe,
-                    config.historical_cache_days)
+                    config.warmup_days_for(symbol))
             if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
                 warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
         feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
+
+    def eod_flush():
+        # 15:16 IST — fallback for aggregated-TF stocks whose last-member candle
+        # never completed (no ticks after 15:15): emit the in-progress bar so
+        # the day/4h decision still fires before close. Normal days are a no-op
+        # (the bar already emitted on its last member).
+        for symbol, _agg in aggregator_map.items():
+            if _agg is None:
+                continue
+            bar = _agg.flush()
+            if bar is None:
+                continue
+            logger.info("EOD flush emitted partial bar | %s | %s", symbol, bar.get("timestamp"))
+            for strategy in strategies:
+                if strategy.instrument == symbol:
+                    run_strategy_decision(strategy, bar, decision_ts=datetime.now())
 
     def midday_refresh():
         # A 4h bar closes at 13:15 IST — refresh the 4h cache so the ht_trend gate
@@ -667,6 +755,7 @@ def main():
 
     scheduler.on_pre_market(pre_market)
     scheduler.on_midday(midday_refresh)
+    scheduler.on_eod_flush(eod_flush)
     scheduler.on_post_market(post_market)
     scheduler.on_heartbeat(heartbeat)
 

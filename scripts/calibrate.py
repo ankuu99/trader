@@ -13,7 +13,7 @@ import os
 import random
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -151,7 +151,12 @@ def main():
                         help="Number of random combinations to try (random mode only)")
     parser.add_argument("--timeframe", default=None,
                         choices=["5minute", "15minute", "30minute", "60minute", "day"],
-                        help="Candle timeframe (default: from config)")
+                        help="BASE candle timeframe (default: from config)")
+    parser.add_argument("--strategy-timeframe", default=None,
+                        choices=["15minute", "4hour", "day"],
+                        help="Strategy decision timeframe, aggregated from 15m base candles "
+                             "(default: from config / per-stock params). Overrides the "
+                             "'timeframe' strategy param for every combination in this run.")
     parser.add_argument("--params", nargs="+", default=None,
                         choices=_KEYS, metavar="PARAM",
                         help=f"Params to calibrate (default: all). Rest fixed at config values. "
@@ -180,6 +185,18 @@ def main():
     base_params = config.strategy_config("lr_extrema")
     active_grid = _build_active_grid(args.params, base_params)
 
+    # Strategy decision TF for this run (aggregated from 15m base). Injected
+    # into every combination so the engine builds the right aggregator; never
+    # itself a search dimension (searching the TF overfits it to the window).
+    _strategy_tf = args.strategy_timeframe or base_params.get("timeframe")
+    if _strategy_tf and _strategy_tf != config.candle_timeframe:
+        if config.candle_timeframe != "15minute":
+            print(f"ERROR: strategy timeframe '{_strategy_tf}' requires base "
+                  f"candle_timeframe '15minute' (got '{config.candle_timeframe}')")
+            return
+        print(f"Strategy timeframe: {_strategy_tf} (aggregated from "
+              f"{config.candle_timeframe} base candles)")
+
     if args.mode == "grid":
         combinations = _all_combinations(active_grid)
         if len(combinations) > 1000:
@@ -190,10 +207,24 @@ def main():
     else:
         combinations = _random_combinations(args.iterations, active_grid)
 
+    if _strategy_tf:
+        for c in combinations:
+            c["timeframe"] = _strategy_tf
+
     print(f"\nCalibration | {args.from_date} → {args.to_date} | {args.mode} mode | "
           f"{len(combinations)} combinations | watchlist={valid_watchlist}")
 
-    _prefetch_candles(kite, store, valid_watchlist, symbol_to_token, from_dt, to_dt)
+    # Prefetch must also cover the pre-warmup window — workers run kite=None
+    # (cache-only). Aggregated TFs need far more calendar depth per bar, sized
+    # to the LARGEST warmup/lookback values this run can sample.
+    from math import ceil
+    from trader.data.aggregator import BARS_PER_DAY
+    _prefetch_days = config.historical_cache_days
+    if _strategy_tf and _strategy_tf in BARS_PER_DAY and _strategy_tf != config.candle_timeframe:
+        _max_bars = max(active_grid["warmup_bars"]) + max(active_grid["lookback_bars"])
+        _prefetch_days = max(_prefetch_days, ceil(_max_bars / BARS_PER_DAY[_strategy_tf] * 1.45))
+    _prefetch_candles(kite, store, valid_watchlist, symbol_to_token,
+                      from_dt - timedelta(days=_prefetch_days), to_dt)
     print()
 
     n_workers = args.workers or os.cpu_count() or 1

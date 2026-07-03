@@ -15,6 +15,7 @@ from datetime import datetime, time as dtime, timedelta
 from trader.core.config import config
 from trader.core.logger import get_logger
 from trader.costs import round_trip_cost
+from trader.data.aggregator import BARS_PER_DAY, CandleAggregator
 from trader.data.historical import get_candles
 from trader.data.store import Store
 from trader.features.indicators import htf_trend_regime
@@ -95,6 +96,23 @@ def run_backtest(
         if per_symbol_params and symbol in per_symbol_params:
             return per_symbol_params[symbol]
         return params
+
+    def _tf_for(symbol: str) -> str:
+        """Strategy decision timeframe — base feed TF unless overridden per-stock."""
+        return _params_for(symbol).get("timeframe", config.candle_timeframe)
+
+    def _warmup_days_for(symbol: str, default_days: int) -> int:
+        """Calendar days of base-TF history needed to warm up this symbol's model.
+        Aggregated TFs consume ~BARS_PER_DAY-fewer bars per day, so the fetch
+        window is derived from (warmup_bars + lookback_bars) at the strategy TF."""
+        tf = _tf_for(symbol)
+        if tf == config.candle_timeframe or tf not in BARS_PER_DAY:
+            return default_days
+        p = _params_for(symbol)
+        bars_needed = int(p.get("warmup_bars", 200)) + int(p.get("lookback_bars", 600))
+        # ~1.45 calendar days per trading day (weekends + holidays)
+        derived = math.ceil(bars_needed / BARS_PER_DAY[tf] * 1.45)
+        return max(default_days, derived)
 
     def handle_order_update(update: dict):
         status = update.get("status")
@@ -337,6 +355,8 @@ def run_backtest(
             progress_callback(label, pct)
 
     # --- Fetch pre-warmup candles (DB empty at this point) ---
+    # Window is per-symbol: aggregated-TF stocks (4hour/day) need far more
+    # calendar depth to accumulate warmup_bars + lookback_bars at their TF.
     _fetch_start = time.time()
     pre_warmup_candles: dict[str, list[dict]] = {}
     for _i, symbol in enumerate(symbols):
@@ -344,9 +364,10 @@ def run_backtest(
         token = symbol_to_token.get(symbol)
         if token is None:
             continue
+        _sym_warmup_days = _warmup_days_for(symbol, pre_warmup_days)
         pre_df = get_candles(
             kite, store, token, symbol, config.candle_timeframe,
-            pre_warmup_from, from_dt - timedelta(minutes=1),
+            from_dt - timedelta(days=_sym_warmup_days), from_dt - timedelta(minutes=1),
         )
         if pre_df.empty:
             logger.info("No pre-warmup candles for %s before %s — model will be cold", symbol, from_dt.date())
@@ -354,7 +375,7 @@ def run_backtest(
         pre_warmup_candles[symbol] = [_build_candle(row, token, symbol) for _, row in pre_df.iterrows()]
         logger.info(
             "Pre-warmup fetched | %s | %d candles over %d days before %s",
-            symbol, len(pre_df), pre_warmup_days, from_dt.date(),
+            symbol, len(pre_df), _sym_warmup_days, from_dt.date(),
         )
 
     logger.info("Pre-warmup fetch done | %.1fs", time.time() - _fetch_start)
@@ -404,14 +425,28 @@ def run_backtest(
     _strategy_cls = strategy_cls or LRExtremaStrategy
     strategy_map.update({symbol: _strategy_cls(symbol, _params_for(symbol)) for symbol in symbol_candles})
 
-    # Replay pre-warmup candles through each strategy (no trade recording)
+    # Per-symbol aggregators: None = passthrough (strategy runs on base candles).
+    # Aggregated-TF strategies see composed bars; fills, intrabar SL/target and
+    # tick simulation below stay on the base 15m stream.
+    aggregator_map: dict[str, CandleAggregator | None] = {
+        symbol: (CandleAggregator(_tf_for(symbol))
+                 if _tf_for(symbol) != config.candle_timeframe else None)
+        for symbol in symbol_candles
+    }
+
+    # Replay pre-warmup candles through each strategy (no trade recording).
+    # Same aggregator instance as the main loop — a bucket left partially
+    # filled at from_dt carries over seamlessly.
     _warmup_start = time.time()
     _n_strat = max(len(strategy_map), 1)
     for _i, (symbol, strategy) in enumerate(strategy_map.items()):
         _phase_progress(f"Warming up model: {symbol}", 0.35 + 0.10 * _i / _n_strat)
         warmup_feed = pre_warmup_candles.get(symbol, [])
+        _agg = aggregator_map.get(symbol)
         for candle in warmup_feed:
-            strategy.on_candle(candle)
+            bar = candle if _agg is None else _agg.add(candle)
+            if bar is not None:
+                strategy.on_candle(bar)
         if warmup_feed:
             logger.info("Pre-warmup complete | %s | %d candles", symbol, len(warmup_feed))
 
@@ -429,6 +464,25 @@ def run_backtest(
             strategy._held_bars = 0
             strategy._peak_close = None
             strategy._trailing_active = False
+
+    def _process_decision(symbol: str, bar: dict):
+        """Run one strategy decision on a (base or aggregated) bar: signal →
+        risk validation → order placement. Shared by the main loop and the
+        day-boundary aggregator flush."""
+        strategy = strategy_map.get(symbol)
+        if strategy is None:
+            return
+        signal = strategy.on_candle(bar)
+        if signal is None:
+            return
+        if signal.signal_type == "EXIT":
+            reason = getattr(signal, "exit_reason", None)
+            if reason:
+                pending_exit_reasons[symbol] = reason
+        order = risk.validate(signal)
+        if order is None:
+            return
+        orders.place(order)
 
     _total_days = max((to_dt - from_dt).days, 1)
     _last_notified_date = None
@@ -463,6 +517,15 @@ def run_backtest(
             # Reset daily P&L and halt state so a daily-loss-limit breach on one
             # day doesn't permanently halt the rest of the backtest.
             risk.reset_day()
+            # Flush stale aggregator partials (missing last-member candle on the
+            # previous day — the backtest analogue of the live ~15:16 clock
+            # flush). Normal days emit on the last member; this is fallback only.
+            for _fsym, _fagg in aggregator_map.items():
+                if _fagg is None:
+                    continue
+                stale_bar = _fagg.flush()
+                if stale_bar is not None:
+                    _process_decision(_fsym, stale_bar)
         prev_date = candle_date
 
         orders.on_candle(candle)
@@ -597,17 +660,13 @@ def run_backtest(
                     })
                     break
 
-        signal = strategy.on_candle(candle)
-        if signal is None:
+        # Strategy decision — on the base candle (passthrough) or only when the
+        # aggregator completes a higher-TF bar.
+        _agg = aggregator_map.get(symbol)
+        bar = candle if _agg is None else _agg.add(candle)
+        if bar is None:
             continue
-        if signal.signal_type == "EXIT":
-            reason = getattr(signal, "exit_reason", None)
-            if reason:
-                pending_exit_reasons[symbol] = reason
-        order = risk.validate(signal)
-        if order is None:
-            continue
-        orders.place(order)
+        _process_decision(symbol, bar)
 
     logger.info(
         "Replay done | %.1fs | %d trades",

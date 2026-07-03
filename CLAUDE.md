@@ -95,6 +95,21 @@ data:
 
 ---
 
+## Per-stock aggregated timeframes (4hour / day)
+
+A stock can run its strategy on `4hour` or `day` bars built in memory from 15m base
+candles (`trader/data/aggregator.py::CandleAggregator`), while fills, intrabar SL/target,
+tick exits and the UI stay on the 15m stream. Configure via
+`per_stock_params.<sym>.lr_extrema.timeframe: day` — and override ALL TF-sensitive params
+for that stock (startup logs a warning per missing one). Bar boundaries are FROZEN:
+day = 09:15–15:15, 4hour = 09:15–13:15 + 13:15–15:15; the 15:15–15:30 tail is dropped.
+Bars emit on their last member candle (~15:15 decision, same-day entry); the scheduler
+flushes stragglers at 15:16 IST. Only 15m candles are persisted — never store aggregated
+bars. `calibrate.py --strategy-timeframe day` calibrates at an aggregated TF. Full
+rationale and decision log: `docs/Aggregated_Timeframes_Design.md`.
+
+---
+
 ## Core data flow
 
 ```
