@@ -19,35 +19,44 @@ interested:
 - 
 
 watchlist:
+  - NSE:CARRARO
+  - NSE:MGEL
+  - NSE:REDTAPE
+  - NSE:THANGAMAYL
+  - NSE:CHENNPETRO
+  - NSE:CUMMINSIND
+  - NSE:KPL
+  - NSE:ADFFOODS
+  - NSE:STYLAMIND
+  - NSE:TIPSMUSIC
+  - NSE:MAYURUNIQ
+  - NSE:GESHIP
+#  - NSE:JPOLYINVST
+#  - NSE:BHARATSE
+#  - NSE:NDRAUTO
+#  - NSE:CARERATING
+#  - NSE:UNIPARTS
+#  - NSE:KIRLOSENG
+#  - NSE:ALIVUS
+#  - NSE:VSTIND
+
+  - NSE:ENGINERSIN
+  - NSE:SCHAEFFLER
   - NSE:ATHERENERG
   - NSE:CUPID
   # - NSE:GOKEX
   # - NSE:GUJALKALI
   # - NSE:MARKSANS       # +₹18.3k, 107t — pharma
-  # - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
-
-  # - NSE:NATIONALUM     # +₹8.9k, 16t — aluminium
+  - NSE:INDHOTEL       # +₹7.2k,  90t — hospitality
+  - NSE:ACMESOLAR       
   - NSE:TVSMOTOR       # +₹8.6k, 11t — motorcycles / EVs
   # - NSE:BLUESTARCO     # +₹5.4k, 13t — HVAC
   - NSE:RADICO         # +₹5.2k, 15t — spirits
   - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
   # - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
-  # - NSE:ASHOKLEY       # +₹2.8k, 16t — commercial vehicles
-  # - NSE:HAL            # +₹2.0k,  8t — aerospace / defence
   - NSE:LTF            # +₹1.7k, 10t — NBFC
-  # - NSE:RECLTD       # removed 2026-06-18: DOWNTREND + REC-into-PFC merger event risk
-  # - NSE:MCX            # +₹390,  26t — commodity exchange
-  # --- Borderline (few trades, positive — keep for live monitoring) ---
-  # - NSE:DIXON          # +₹236,   4t — electronics manufacturing
-
-  # --- New additions (screened Jun 2026) ---
-  # - NSE:AQYLON       # removed 2026-06-18: FALLING_KNIFE −83%; rebranded story-stock (ex-Sri Adhikari Bros TV)
-  # - NSE:RMDRIP       # removed 2026-06-18: FALLING_KNIFE −73% secular decline
   - NSE:SKYGOLD        # +₹16.9k, 119t
-  - NSE:DIACABS        # +₹18.7k, 112t — calibrated
-  # - NSE:TARAPUR      # removed 2026-06-18: FALLING_KNIFE −60%; thin/illiquid microcap
-  - NSE:GAYAPROJ-BE
   - NSE:QUESS
   - NSE:IPCALAB
 
@@ -61,7 +70,9 @@ strategies:
     lookback_bars: 1200
     threshold: 0.90               # min P(local-min) to enter
     veto_threshold: 1.0           # block entry if P(local-max) >= this
-    retrain_every: 25
+    retrain_every: 25             # 15m bars (~1.5 trading days). NB: the daily system
+                                  # restart re-trains every model from scratch during
+                                  # warm-up anyway — this only sets the INTRADAY cadence.
     extrema_order: 10
 
     # --- Exit stack (Stage 3: trader/policy/ExtremaExitPolicy) ---
@@ -127,6 +138,16 @@ strategies:
         min_bars: 10
         max_bars: 60
         t_threshold: 2.0
+      # Neutral class — adds class-2 "neither" training samples drawn ≥ margin_bars
+      # away from every geometric extremum (deterministic, evenly spaced; ratio =
+      # neutrals per extremum sample). Fixes the forced P(min)+P(max)=1 split that
+      # makes ordinary hard-falling candles read as near-certain minima (the live
+      # FP problem — see neutral_class_learnings.md). Changes P(min)/P(max) scale:
+      # thresholds MUST be recalibrated before enabling in live.
+      neutral:
+        enabled: false
+        ratio: 1.0
+        margin_bars: null           # null => extrema_order
 
     # --- Model config (Stage 2: trader/models) ---
     # Swappable classifier behind the ExtremaModel interface. Only `logistic` is
@@ -156,6 +177,16 @@ strategies:
         slow: 26
         signal_period: 9
         hist_lookback: 3
+
+      # Drawdown curvature — anchors at the swing high (t0) within lookback_bars, then
+      # splits the decline (t0..now) in half and returns slope(recent_half) - slope(older_half)
+      # over % returns. > 0 = the decline is decelerating / bending up (bottoming signal);
+      # < 0 = the decline is still accelerating. One stable scalar (drawdown_curvature).
+      # TESTED 2026-07-01 on 2026-YTD: robustly WORSE than baseline at every lookback
+      # (27.1% → 24.3%/23.3%/20.3% for lb 30/50/100). Kept disabled.
+      curvature:
+        enabled: false
+        lookback_bars: 50           # window to locate the swing high (t0)
 
     # --- Meta-labeling precision gate (secondary model) ---
     # A secondary classifier that, after the primary fires a candidate entry, predicts
@@ -200,6 +231,148 @@ per_stock_params:
   # pattern-top exit while price is in a clean uptrend (acceleration-based features misread
   # a trending leg as a top). Backtest 2025-05→2026-06: +32% standalone, +Rs6.3k in-portfolio,
   # lower drawdown. Guard is per-stock only — it hurts mean-reverting names (e.g. GAYAPROJ-BE).
+  # IPCALAB — DAY-timeframe swing trading (bars aggregated 09:15–15:15 from 15m
+  # base candles; decisions ~15:15, same-day entry — docs/Aggregated_Timeframes_Design.md).
+  # Fundamentally qualified 2026-06-30 (reviews/qualify_IPCALAB_20260630.md).
+  # Every TF-sensitive param is overridden — the global values are 15m-calibrated.
+  # STARTING POINTS ONLY, not calibrated. Before trusting results:
+  #   python scripts/calibrate.py --from 2024-01-01 --strategy-timeframe day \
+  #       --params threshold stop_pct trail_pct hold_bars sell_threshold
+  # (needs ~2.4yr of 15m cache — first fetch requires a live Kite session)
+  NSE:IPCALAB:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      retrain_every: 1              # retrain every day bar — replicates what the daily
+                                    # system restart already does (fresh warm-up retrain
+                                    # each morning); keeps backtest == live behaviour
+      extrema_order: 3              # swing extrema = local min/max over ±3 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker (same philosophy as 15m)
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # EOD force-close is a 15m-regime rule; day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 15            # 15 days without best gain > 0.5% → exit
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 35            # faded-after-promise tier, just under hold_bars
+          min_gain_pct: -2.0
+      features:
+        volume_ma_bars: 20          # 20-day volume normalisation
+  NSE:INDHOTEL:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      retrain_every: 1              # retrain every day bar — replicates what the daily
+      extrema_order: 5              # swing extrema = local min/max over ±3 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker (same philosophy as 15m)
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # EOD force-close is a 15m-regime rule; day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          min_gain_pct: -2.0
+  NSE:ACMESOLAR:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      threshold: 0.80               # min P(local-min) to enter
+      retrain_every: 2              # retrain every day bar — replicates what the daily
+      extrema_order: 5              # swing extrema = local min/max over ±3 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker (same philosophy as 15m)
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # EOD force-close is a 15m-regime rule; day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          min_gain_pct: -2.0
+  NSE:SCHAEFFLER:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      threshold: 0.85               # min P(local-min) to enter
+      retrain_every: 1              # retrain every day bar — replicates what the daily
+      extrema_order: 5              # swing extrema = local min/max over ±3 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker (same philosophy as 15m)
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # EOD force-close is a 15m-regime rule; day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          min_gain_pct: -2.0
+  NSE:ENGINERSIN:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      threshold: 0.80               # min P(local-min) to enter
+      retrain_every: 1              # retrain every day bar — replicates what the daily
+      extrema_order: 5              # swing extrema = local min/max over ±3 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker (same philosophy as 15m)
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # EOD force-close is a 15m-regime rule; day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          min_gain_pct: -2.0
+
+  
   NSE:ATHERENERG:
     lr_extrema:
       exits:
@@ -233,36 +406,12 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 1.0
-  NSE:ASHOKLEY:
-    lr_extrema:
-      threshold: 0.92
-      forward_label:
-        enabled: true
-        min_return_pct: 2.0
-  NSE:BLUESTARCO:
-    lr_extrema:
-      threshold: 0.90
-      forward_label:
-        enabled: true
-        min_return_pct: 2.5
   NSE:GUJALKALI:
     lr_extrema:
       threshold: 0.95
       forward_label:
         enabled: true
         min_return_pct: 2.5
-  NSE:HAL:
-    lr_extrema:
-      threshold: 0.92
-      forward_label:
-        enabled: true
-        min_return_pct: 3.0
-  NSE:RECLTD:
-    lr_extrema:
-      threshold: 0.95
-      forward_label:
-        enabled: true
-        min_return_pct: 1.0
   NSE:MARKSANS:
     lr_extrema:
       threshold: 0.92
@@ -275,24 +424,15 @@ per_stock_params:
         trailing:
           profit_pct: 5
           trail_pct: 2
-  NSE:AQYLON:
-    lr_extrema:
-      threshold: 0.95
-      forward_label:
-        enabled: true
-        min_return_pct: 2.0
   NSE:DIACABS:
     lr_extrema:
       forward_label:
         enabled: true
         min_return_pct: 3.0
-  NSE:TARAPUR:
-    lr_extrema:
-      threshold: 0.95
-
+  
 data:
   db_path: data/market.db
-  historical_cache_days: 200
+  historical_cache_days: 400
 logging:
   level: INFO
   dir: logs/
