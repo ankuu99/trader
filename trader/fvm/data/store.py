@@ -104,6 +104,16 @@ class FVMStore:
                     source     TEXT NOT NULL DEFAULT 'niftyindices',
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS journal (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol     TEXT NOT NULL,
+                    asof       TEXT NOT NULL,          -- study as-of date
+                    verdict    TEXT NOT NULL,          -- the user's call (BUY/WATCH/AVOID/...)
+                    thesis     TEXT NOT NULL,          -- one-liner: why
+                    price      REAL,                   -- last price when the call was made
+                    created_at TEXT NOT NULL
+                );
             """)
 
     # ---------------------------------------------------------------- #
@@ -251,6 +261,37 @@ class FVMStore:
                 (index_name, asof, asof),
             ).fetchall()
         return [r[0] for r in rows]
+
+    # ---------------------------------------------------------------- #
+    # Thesis journal — record a call, resurface it later                #
+    # ---------------------------------------------------------------- #
+
+    def write_journal(self, symbol: str, asof: str, verdict: str, thesis: str,
+                      price: float | None = None) -> int:
+        """Record a thesis. Returns the new entry id."""
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO journal (symbol, asof, verdict, thesis, price, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (symbol.upper(), asof, verdict, thesis,
+                 None if price is None else float(price), now))
+            return cur.lastrowid
+
+    def read_journal(self, symbol: str | None = None) -> list[dict]:
+        """Journal entries, newest first; all symbols when `symbol` is None."""
+        q = "SELECT id, symbol, asof, verdict, thesis, price, created_at FROM journal"
+        args: tuple = ()
+        if symbol:
+            q += " WHERE symbol=?"
+            args = (symbol.upper(),)
+        q += " ORDER BY created_at DESC, id DESC"
+        with self._conn() as conn:
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+
+    def delete_journal(self, entry_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM journal WHERE id=?", (entry_id,))
 
     # ---------------------------------------------------------------- #
     # Sector map (financials-exclusion + sector-relative normalization) #

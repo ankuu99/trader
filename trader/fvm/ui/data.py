@@ -52,6 +52,17 @@ def scored_symbols(db_path: str) -> list[str]:
         con.close()
 
 
+def all_symbols(db_path: str) -> dict[str, str]:
+    """symbol -> company name for every NSE name in the Trendlyne master list
+    (fund_stocks) — feeds the searchable symbol dropdown in the Study page."""
+    con = sqlite3.connect(db_path)
+    try:
+        return {r[0]: (r[1] or "") for r in con.execute(
+            "SELECT nsecode, name FROM fund_stocks ORDER BY nsecode").fetchall()}
+    finally:
+        con.close()
+
+
 def _decision(diag: dict) -> str:
     """One-word reason a name is / isn't a candidate (same taxonomy as the CLI)."""
     if not diag.get("veto_passed", True):

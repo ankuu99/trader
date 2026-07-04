@@ -71,10 +71,22 @@ class TrendlyneClient:
             raise TrendlyneError(
                 "429 rate-limited: Trendlyne daily/monthly quota reached "
                 "(~50 calls/day, 500/month) — resume after the daily reset")
+        if r.status_code == 402:
+            raise TrendlyneError(
+                f"402 Payment Required on {path}: the Trendlyne Excel-Connect plan/token "
+                "has lapsed — renew the subscription and regenerate TRENDLYNE_TOKEN at "
+                "https://trendlyne.com/tools/data-downloader/trendlyne-excel-connect/")
         if r.status_code == 403:
             raise TrendlyneError(
                 f"403 on {path}: token/cookie invalid or expired"
                 + (" — refresh TRENDLYNE_COOKIE" if needs_cookie else " (UA blocked?)"))
+        # Trendlyne rejects a stale session with 205 + empty body (NOT 403) on the
+        # cookie-gated endpoints — without this guard the empty CSV parses to 0 rows
+        # and the ingest silently writes nothing while reporting success.
+        if needs_cookie and (r.status_code == 205 or not r.text.strip()):
+            raise TrendlyneError(
+                f"{r.status_code} empty response on {path}: Trendlyne session rejected — "
+                "stale TRENDLYNE_COOKIE; refresh it in config/.env and re-run")
         r.raise_for_status()
         return r
 
@@ -146,6 +158,12 @@ def ingest_financials(store, nsecode: str, client: TrendlyneClient | None = None
                 "knowledge_date": _knowledge_date_for_period(rec["period"]),
             })
         total += store.write_fundamentals(rows)
+    if total == 0:
+        # a fetch that yields nothing is a failure, not a success — otherwise the
+        # ingest marks the symbol done, resumes past it, and coverage silently stalls
+        raise TrendlyneError(
+            f"{nsecode}: fetched OK but parsed 0 rows — response format changed or "
+            "stale TRENDLYNE_COOKIE (refresh it in config/.env)")
     logger.info("ingest_financials | %s | %d rows", nsecode, total)
     return total
 

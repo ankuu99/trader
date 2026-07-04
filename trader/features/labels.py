@@ -35,7 +35,14 @@ class Labeler(ABC):
 class ExtremaLabeler(Labeler):
     """Geometric local extrema (±extrema_order neighbourhood), with optional
     forward-return filtering of minima (Enhancement A). Behaviour-identical to the
-    original LRExtremaStrategy labelling."""
+    original LRExtremaStrategy labelling.
+
+    Optional neutral class (labels.neutral): additionally emits class-2 samples
+    drawn from candles that are ≥ margin_bars away from every geometric extremum.
+    Without it the binary model must split P(min)+P(max)=1 on every candle — an
+    ordinary hard-falling candle reads as a near-certain minimum. The neutral class
+    gives that probability mass somewhere to go. Sampling is deterministic (evenly
+    spaced), so retrains are reproducible."""
 
     def __init__(self, instrument: str, params: dict):
         self._instrument = instrument
@@ -44,6 +51,13 @@ class ExtremaLabeler(Labeler):
         self._fl_enabled: bool = bool(_fl.get("enabled", False))
         self._fl_bars: int = int(_fl.get("forward_bars", 150))
         self._fl_min_return_pct: float = float(_fl.get("min_return_pct", 2.0))
+        _nc = (params.get("labels") or {}).get("neutral") or {}
+        self._neutral_enabled: bool = bool(_nc.get("enabled", False))
+        # neutrals emitted per extremum sample (1.0 => balanced with min+max count)
+        self._neutral_ratio: float = float(_nc.get("ratio", 1.0))
+        # min distance from any extremum; None => extrema_order
+        _margin = _nc.get("margin_bars")
+        self._neutral_margin: int = int(_margin) if _margin is not None else self._extrema_order
 
     def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
         closes = [c["close"] for c in candles]
@@ -83,7 +97,35 @@ class ExtremaLabeler(Labeler):
 
         indices = qualified_minima + list(maxima)
         classes = [0] * len(qualified_minima) + [1] * len(maxima)
+
+        if self._neutral_enabled:
+            neutrals = self._sample_neutrals(
+                len(candles), set(minima), set(maxima), len(indices)
+            )
+            indices += neutrals
+            classes += [2] * len(neutrals)
+
         return indices, classes
+
+    def _sample_neutrals(
+        self, n_candles: int, minima: set, maxima: set, n_extrema: int
+    ) -> list[int]:
+        """Evenly-spaced candle indices ≥ margin bars from every extremum.
+        Deterministic — no RNG — so successive retrains on the same window
+        produce the same labels. Index 20 onward only (feature min_history=21;
+        keeps sample counts honest rather than silently dropped downstream)."""
+        excluded = set()
+        for e in minima | maxima:
+            excluded.update(range(e - self._neutral_margin, e + self._neutral_margin + 1))
+        candidates = [i for i in range(20, n_candles) if i not in excluded]
+        target = round(self._neutral_ratio * n_extrema)
+        if target <= 0 or not candidates:
+            return []
+        if target >= len(candidates):
+            return candidates
+        step = len(candidates) / target
+        picked = {candidates[int(k * step)] for k in range(target)}
+        return sorted(picked)
 
 
 class TrendScanningLabeler(Labeler):

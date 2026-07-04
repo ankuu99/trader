@@ -20,17 +20,28 @@ logger = get_logger(__name__)
 
 
 def resolve_tokens(kite, symbols: list[str]) -> dict[str, int]:
-    """Map NSE trading symbols -> Kite instrument tokens (EQ segment)."""
+    """Map NSE trading symbols -> Kite instrument tokens (EQ segment).
+
+    Tolerant of segment suffixes: NSE lists trade-to-trade / surveillance names
+    with a `-BE` (or similar) suffix (e.g. `IDEAFORGE-BE`), so an exact match on
+    the bare symbol would miss them. We match on the suffix-stripped base too and
+    key the result by the requested symbol.
+    """
     want = {s.upper() for s in symbols}
     out: dict[str, int] = {}
     for inst in kite.instruments("NSE"):
+        if inst.get("instrument_type") != "EQ":
+            continue
         ts = inst.get("tradingsymbol", "").upper()
-        if ts in want and inst.get("instrument_type") == "EQ":
+        base = ts.split("-")[0]                # IDEAFORGE-BE -> IDEAFORGE
+        if ts in want:
             out[ts] = inst["instrument_token"]
+        elif base in want:
+            out[base] = inst["instrument_token"]
     missing = want - set(out)
     if missing:
-        logger.warning("resolve_tokens: %d symbols unresolved (e.g. %s)",
-                       len(missing), sorted(missing)[:5])
+        logger.warning("resolve_tokens: %d symbols unresolved (not found in NSE EQ "
+                       "instrument dump): %s", len(missing), sorted(missing)[:5])
     return out
 
 
@@ -42,6 +53,11 @@ def load_universe_prices(kite, store, symbols, from_dt, to_dt,
     out: dict[str, pd.DataFrame] = {}
     for s in symbols:
         tok = token_map.get(s.upper(), 0)
+        if not tok and kite is not None:             # unresolved symbol — don't pass token 0 to Kite
+                                                     # (cache-only mode keys by instrument string, token unused)
+            logger.warning("skipping %s: no Kite instrument token (symbol not found in NSE EQ "
+                           "dump; check the trading symbol / segment suffix)", s.upper())
+            continue
         try:
             df = historical.get_candles(kite, store, tok, f"NSE:{s.upper()}", "day", from_dt, to_dt)
         except Exception as e:                       # one symbol failing must not abort the run

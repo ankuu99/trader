@@ -42,6 +42,10 @@ class ExtremaFeaturePipeline(FeaturePipeline):
         self._macd_signal: int = int(_macd.get("signal_period", 9))
         self._macd_hist_lookback: int = int(_macd.get("hist_lookback", 5))
 
+        _curv = cfg.get("curvature") or {}
+        self._curv_enabled: bool = bool(_curv.get("enabled", False))
+        self._curv_lookback: int = int(_curv.get("lookback_bars", 50))
+
     @property
     def min_history(self) -> int:
         return 21
@@ -53,6 +57,8 @@ class ExtremaFeaturePipeline(FeaturePipeline):
             names.append("drawdown_from_high")
         if self._macd_enabled:
             names.extend(["macd_hist_norm", "macd_hist_slope"])
+        if self._curv_enabled:
+            names.append("drawdown_curvature")
         return names
 
     def compute(self, candles: list[dict]) -> "np.ndarray | None":
@@ -121,4 +127,26 @@ class ExtremaFeaturePipeline(FeaturePipeline):
             else:
                 base.extend([0.0, 0.0])
 
+        # Drawdown curvature — is the decline from the swing high decelerating?
+        # Anchor t0 = argmax close within lookback, split the decline t0..now in half,
+        # return slope(recent %-returns) - slope(older %-returns). Scale-invariant.
+        if self._curv_enabled:
+            base.append(self._drawdown_curvature(closes))
+
         return np.array(base, dtype=float)
+
+    def _drawdown_curvature(self, closes: list[float]) -> float:
+        n = min(self._curv_lookback, len(closes))
+        window = closes[-n:]
+        hi_idx = max(range(len(window)), key=lambda i: window[i])
+        seg = window[hi_idx:]  # swing high (t0) .. now (tn), inclusive
+        if len(seg) < 5:  # need >=4 returns to split into two halves of >=2
+            return 0.0
+        returns = [
+            (seg[i] - seg[i - 1]) / seg[i - 1]
+            for i in range(1, len(seg)) if seg[i - 1] != 0
+        ]
+        if len(returns) < 4:
+            return 0.0
+        half = len(returns) // 2
+        return linreg_slope(returns[half:]) - linreg_slope(returns[:half])

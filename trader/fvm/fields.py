@@ -44,7 +44,14 @@ REVENUE_5Y_A       = ("annual", "Revenue Annual 5Yr Growth %")   # 5yr revenue C
 DIV_PER_SHARE_A    = ("annual", "Dividend Per Share Annual")
 DIV_PAYOUT_A       = ("annual", "Dividend Payout to NP Annual")  # payout % of net profit
 BOOK_VALUE_A       = ("annual", "Book Value Inc Reval Reserve Annual")
-CFI_A              = ("annual", "Cash from Investing Activity Annual")  # for FCF ≈ CFO + capex
+CFI_A              = ("annual", "Cash from Investing Activity Annual")  # FCF fallback ≈ CFO + CFI
+FIXED_ASSETS_A     = ("annual", "Fixed Assets Annual")           # capex ≈ ΔFA + depreciation
+DEPRECIATION_A     = ("annual", "Depreciation")                  # annual D&A (no suffix in fincsv)
+
+# --- Working capital & accruals (annual; conviction.py study section) ---
+TRADE_RECEIVABLES_A  = ("annual", "Trade Receivables Annual")
+INVENTORY_TURNOVER_A = ("annual", "Inventory Turnover Ratio Annual")
+WORKING_CAPITAL_A    = ("annual", "Working Capital Annual")
 
 # --- Pillar 4: Ownership lives in the `shareholding` table (Screener), not fundamentals.
 # Field keys used with FVMStore.read_shareholding_asof:

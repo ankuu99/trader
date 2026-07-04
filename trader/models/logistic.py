@@ -21,13 +21,17 @@ class LogisticModel(ExtremaModel):
         # to the original values so behaviour is unchanged.
         self._max_iter: int = int(cfg.get("max_iter", 1000))
         self._solver: str = str(cfg.get("solver", "lbfgs"))
+        # None preserves the original unweighted fit; "balanced" reweights classes —
+        # mainly for 3-class training where neutrals can outnumber extrema.
+        self._class_weight = cfg.get("class_weight")
         self._model: LogisticRegression | None = None
         self._scaler: MinMaxScaler | None = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         scaler = MinMaxScaler()
         X_scaled = scaler.fit_transform(X)
-        model = LogisticRegression(max_iter=self._max_iter, solver=self._solver)
+        model = LogisticRegression(max_iter=self._max_iter, solver=self._solver,
+                                   class_weight=self._class_weight)
         model.fit(X_scaled, y)
         # Assign only after both succeed, so a failed retrain leaves prior state intact.
         self._scaler = scaler
@@ -49,14 +53,20 @@ class LogisticModel(ExtremaModel):
         self, x: np.ndarray, feature_names: "list[str] | None" = None
     ) -> "list[tuple[str, float]] | None":
         # Binary LogisticRegression stores one coef row oriented toward the higher
-        # class (1 = local-max / sell). The signed contribution to that log-odds is
-        # coef[j] * x_scaled[j]; negating it gives the push toward BUY (class 0).
+        # class (1 = local-max / sell); negating coef[j] * x_scaled[j] gives the
+        # push toward BUY (class 0). Multinomial (3-class with neutrals) stores one
+        # row per class — the class-0 row is already the push toward BUY.
         if self._model is None or self._scaler is None:
             return None
-        if len(getattr(self._model, "classes_", [])) < 2:
+        classes = list(getattr(self._model, "classes_", []))
+        if len(classes) < 2:
             return None
         x_scaled = self._scaler.transform(x.reshape(1, -1))[0]
-        coef = self._model.coef_[0]
-        contribs = [-float(c) * float(xs) for c, xs in zip(coef, x_scaled)]
+        if len(classes) == 2:
+            coef = self._model.coef_[0]
+            contribs = [-float(c) * float(xs) for c, xs in zip(coef, x_scaled)]
+        else:
+            coef = self._model.coef_[classes.index(0)]
+            contribs = [float(c) * float(xs) for c, xs in zip(coef, x_scaled)]
         names = feature_names or [f"f{i}" for i in range(len(contribs))]
         return list(zip(names, contribs))

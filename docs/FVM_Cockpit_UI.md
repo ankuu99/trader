@@ -39,9 +39,23 @@ button (use it after a fresh ingest, since results are cached).
 
 ## Pages
 
+> **Navigation:** the sidebar shows the two research pages (**🔬 Stock Study**, **Universe &
+> Coverage**); the strategy-era diagnostics (Today's Shortlist, Stock Detail, Milestone-A,
+> Scoring Lab) are tucked under a collapsed **⚙️ Engine (advanced)** group.
+
 ### 🔬 Stock Study  *(home — long-term conviction)*
-Study one company in depth, in one place, as a multi-year buy-and-hold candidate. Type any NSE
-symbol (cached names are instant; uncached ones can be fetched live).
+Study one company in depth, in one place, as a multi-year buy-and-hold candidate. The symbol box
+is a **searchable dropdown over the full ~7,600-name Trendlyne master list** — search by symbol
+or company name ("titan", "jubilant…"); ● marks cached names (instant), anything else is fetched
+live, and free-typed symbols outside the list are accepted too.
+
+The page is **verdict-first**: a glanceable strip on top — tier-weighted pass gauge, dealbreaker
+chips, the own-history P/E percentile + implied-growth context line, and the red-flag panel —
+answers "is this worth my time?" before any scrolling. Everything else lives in five tabs:
+**📋 Scorecard** (sections as expanders — FAIL/WATCH sections auto-open, clean-PASS collapsed),
+**🕰 History & Replay** (replay heatmap + multi-year trajectories + ownership),
+**🤝 Peers** (head-to-head table + live peer fetch), **📓 Journal**, and
+**📈 Technicals & Engine** (price charts + pillar/factor internals).
 
 - **Conviction scorecard** — the heart of the page. Maps what serious long-term investors actually
   use — Buffett/Munger's **four M's** (Meaning · Moat · Management · Margin of safety) plus the
@@ -49,16 +63,37 @@ symbol (cached names are instant; uncached ones can be fetched live).
   **PASS / WATCH / FAIL / NA** with the value and a plain-English "why it matters":
   - **Quality & Returns** *(Moat)* — ROCE, ROE, ROCE trend, net-margin trend.
   - **Growth** *(Meaning)* — revenue & profit 5yr/3yr CAGR, growth momentum (3yr vs 5yr).
-  - **Balance sheet & Cash** *(Survival)* — D/E, interest coverage, earnings quality (CFO/PAT), FCF.
+  - **Balance sheet & Cash** *(Survival)* — D/E, interest coverage, earnings quality (CFO/PAT),
+    FCF (CFO − capex, capex ≈ ΔFixed-Assets + depreciation; falls back to CFO+CFI without FA data).
+  - **Working Capital & Accruals** *(Cash conversion)* — debtor-days trend, receivables-vs-revenue
+    3yr growth (the channel-stuffing check), inventory-turnover trend, working-capital intensity.
   - **Management & Ownership** — promoter holding + trend, pledge, FII+DII trend, dividend payout.
-  - **Valuation & Margin of Safety** — P/E, EV/EBITDA, PEG, position in the 1-yr range.
+  - **Valuation & Margin of Safety** — **P/E vs the stock's OWN 5-yr history** (PIT quarterly
+    percentile — the band that means something), **EV/EBITDA vs own history**, **implied growth**
+    (reverse-DCF: the earnings CAGR the current P/E assumes — 10 yrs, 12.5% discount, 15x exit —
+    next to the delivered 5-yr CAGR), plus the soft sector-blind absolutes (P/E, EV/EBITDA, PEG,
+    position in the 1-yr range).
+
+  Criteria are **tiered** — `dealbreaker` (D/E, CFO/PAT, promoter pledge, receivables outrunning
+  revenue) / `core` / `soft` — and the headline verdict weighs the tiers: any dealbreaker FAIL
+  leads the headline, and a WATCH on dividend can't offset a FAIL on pledge.
 - **Red flags (Munger inversion)** — "what would guarantee failure?": the FVM vetoes (aggressive
   accounting = profit not backed by cash, manufactured earnings), parabolic extension, promoter
-  pledging/selling — each with an explanation.
+  pledging/selling, receivables compounding much faster than revenue — each with an explanation.
 - **Multi-year trajectory** — revenue & profit, returns & margins (vs the 15% quality bar), earnings
   quality (CFO vs net profit), leverage (D/E + interest coverage), and ownership over time.
 - **Peer comparison** — the subject's sector peers ranked head-to-head (composite, ROCE, ROE,
   growth, D/E, EV/EBITDA, promoter %) so you can answer *"which of these is the better business?"*.
+  When fewer than 3 sector peers are cached, a **⬇ Fetch sector peers** button pulls up to 5
+  same-sector names live (sector from the Nifty500 sector_map; each fetch costs Trendlyne fincsv
+  quota, and fetching stops at the first quota/cookie failure).
+- **Scorecard replay** — the whole scorecard re-run at every quarter-end over the trailing 2–8
+  years, fully point-in-time, as a criteria × quarters verdict heatmap with the PIT price track
+  underneath. The learning loop: see which criteria flipped BEFORE the price moved. Dealbreaker
+  FAILs in the window are called out. Pre-2023 quarters lean on annual-fallback data.
+- **📓 Thesis journal** — record the call (BUY/WATCH/AVOID) and the one-line why; entries
+  resurface with the price change since, so the feedback loop is on your reasoning, not just the
+  stock. Stored in `fvm.db` (`journal` table).
 - **Price/technical context** and the **FVM pillar/factor detail** are tucked into expanders.
 
 It's evidence to reason over, not a buy/sell call — the qualitative moat/management judgment is yours.

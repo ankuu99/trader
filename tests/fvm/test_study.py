@@ -86,9 +86,120 @@ def test_trajectories_assembles_annual_series(tmp_path):
     assert traj["_shareholding"]["promoter"]["2026-03"] == 62
 
 
+def _daily(start, periods, closes):
+    ts = pd.date_range(start, periods=periods, freq="D").astype(str)
+    return pd.DataFrame({"timestamp": ts, "open": closes, "high": closes,
+                         "low": closes, "close": closes, "volume": [1] * periods})
+
+
+def test_scorecard_replay_flips_verdict_before_asof(tmp_path):
+    store = _store(tmp_path)
+    sym = "REPLAYCO"
+    # D/E deteriorates over the years: early vintages read healthy, later ones read broken.
+    # Each FY value becomes knowable at its own period-end, so the PIT replay must show
+    # the flip in the quarter it became knowable — not before, not smeared.
+    _put(store, sym, F.DE_A, {"2023-03": 0.2, "2024-03": 0.3, "2025-03": 1.6, "2026-03": 1.8})
+    _put(store, sym, F.ROCE_A, {p: 20.0 for p in A})
+    n = 1500
+    daily = _daily("2023-01-01", n, [100.0] * n)
+
+    rp = study.replay_from_daily(store, sym, "2026-12-31", daily, years=4)
+    crit, summ = rp["criteria"], rp["summary"]
+    assert not crit.empty and not summ.empty
+    assert rp["quarters"] == sorted(rp["quarters"])
+
+    de = crit[crit["label"] == "Debt / Equity"].set_index("quarter")["verdict"]
+    assert de.loc["2024-06-30"] == "PASS"   # knows only FY24 (D/E 0.3)
+    assert de.loc["2026-06-30"] == "FAIL"   # knows FY26 (D/E 1.8)
+    # dealbreaker column populated in the summary once the flip happens
+    assert "Debt / Equity" in summ.set_index("quarter").loc["2026-06-30", "dealbreaker_fails"]
+    # price track is PIT (flat 100 series)
+    assert (summ["price"] == 100.0).all()
+
+
+def test_scorecard_replay_empty_without_prices(tmp_path):
+    store = _store(tmp_path)
+    rp = study.replay_from_daily(store, "NOPX", ASOF, None)
+    assert rp["criteria"].empty and rp["summary"].empty and rp["quarters"] == []
+
+
 def test_has_fundamentals_detects_presence(tmp_path):
     db = str(tmp_path / "fvm.db")
     store = FVMStore(db)
     assert not study.has_fundamentals(db, "AAA", ASOF)
     _put(store, "AAA", F.NET_PROFIT_A, {A[-1]: 100.0})
     assert study.has_fundamentals(db, "AAA", ASOF)
+
+
+def test_journal_roundtrip_with_price_change(tmp_path):
+    db = str(tmp_path / "fvm.db")
+    store = FVMStore(db)
+    eid = study.add_journal_entry(db, "aaa", "2026-06-30", "BUY",
+                                  "moat + cheapest own-history P/E", price=100.0)
+    assert eid > 0
+    study.add_journal_entry(db, "AAA", "2026-09-30", "WATCH", "margins wobbling", price=None)
+
+    entries = study.journal_entries(db, "AAA", last_price=120.0)
+    assert len(entries) == 2
+    assert entries[0]["verdict"] == "WATCH"            # newest first
+    assert entries[0]["change_pct"] is None            # no entry price recorded
+    assert abs(entries[1]["change_pct"] - 20.0) < 1e-9  # +20% since the BUY call
+    assert study.journal_entries(db, "OTHER", 50.0) == []
+
+    store.delete_journal(eid)
+    assert len(study.journal_entries(db, "AAA", 120.0)) == 1
+
+
+def _sectors(store, pharma, metals=()):
+    store.write_sectors([{"symbol": s, "sector": "Pharma"} for s in pharma] +
+                        [{"symbol": s, "sector": "Metals"} for s in metals])
+
+
+def test_peer_fetch_plan_tops_up_uncached_peers(tmp_path):
+    db = str(tmp_path / "fvm.db")
+    store = FVMStore(db)
+    _sectors(store, ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG"], metals=["ZZZ"])
+    _put(store, "BBB", F.NET_PROFIT_A, {A[-1]: 10.0})  # one peer already cached
+    plan = study.peer_fetch_plan(db, "AAA", ASOF)
+    assert plan["sector"] == "Pharma"
+    assert plan["cached"] == ["BBB"]
+    assert len(plan["to_fetch"]) == 4          # tops up to max_peers=5
+    assert "AAA" not in plan["to_fetch"]       # never the subject
+    assert "ZZZ" not in plan["to_fetch"]       # never cross-sector
+    assert "BBB" not in plan["to_fetch"]
+
+
+def test_peer_fetch_plan_enough_cached_fetches_nothing(tmp_path):
+    db = str(tmp_path / "fvm.db")
+    store = FVMStore(db)
+    _sectors(store, ["AAA", "BBB", "CCC", "DDD", "EEE"])
+    for p in ("BBB", "CCC", "DDD"):
+        _put(store, p, F.NET_PROFIT_A, {A[-1]: 10.0})
+    plan = study.peer_fetch_plan(db, "AAA", ASOF)
+    assert plan["cached"] == ["BBB", "CCC", "DDD"]
+    assert plan["to_fetch"] == []              # 3 cached peers is a usable table
+
+
+def test_peer_fetch_plan_unknown_sector_is_empty(tmp_path):
+    db = str(tmp_path / "fvm.db")
+    FVMStore(db)  # empty sector_map
+    plan = study.peer_fetch_plan(db, "NOSECTOR", ASOF)
+    assert plan["sector"] is None and plan["to_fetch"] == []
+
+
+def test_fetch_peers_stops_on_quota_exhaustion(tmp_path, monkeypatch):
+    db = str(tmp_path / "fvm.db")
+    store = FVMStore(db)
+    _sectors(store, ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"])
+    calls = []
+
+    def fake_ensure(db_, market_db_, symbol, asof, **kw):
+        calls.append(symbol)
+        # first fetch works, second hits the fincsv quota
+        return {"symbol": symbol, "fundamentals": "fetched" if len(calls) == 1 else "empty",
+                "shareholding": "fetched", "prices": "fetched", "errors": []}
+
+    monkeypatch.setattr(study, "ensure_stock_data", fake_ensure)
+    res = study.fetch_peers(db, str(tmp_path / "market.db"), "AAA", ASOF)
+    assert len(res["statuses"]) == 2           # stopped right after the quota signal
+    assert calls == res["to_fetch"][:2]

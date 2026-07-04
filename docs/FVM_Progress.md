@@ -189,6 +189,28 @@ report, and (only if Gate A passes) Phase 5 live integration.
 ## Session log
 *(newest first; one entry per working session — what changed, what's next)*
 
+### 2026-07-04 (Trendlyne Data-Downloader weekly snapshot layer)
+- **New data source: the Trendlyne "Data Downloader" xlsx** (`data/Stocks-data-IND-<d>-<Mon>-<YYYY>.xlsx`,
+  ~5,700 NSE names × 163 cols, downloaded manually weekly). Carries fields the API stack has NO
+  other source for: **Piotroski, DVM scores, promoter pledge with full-market coverage (fixes the
+  0%-coverage pledge factor), monthly MF/FII deltas, %days-below-current-PE/PB percentiles,
+  sector+industry relative valuations.** Only the 2 Forecaster forward-estimate columns are
+  plan-gated ("Export NA").
+- **Built `trader/fvm/data/snapshot.py`** — curated ~55-field wide table `tl_snapshot` in fvm.db
+  keyed (symbol, as_of); weekly ingests STACK into our own vintaged history of fields Trendlyne
+  never exposes retrospectively. Reads are asof-aware (latest vintage ≤ asof). **NOT for
+  backtests** — live cockpit / discretionary use only. Includes the 11-gate `quality_screen`
+  funnel (5,688→34 survivors on the 2026-07-03 export) + `watchlist_flags`.
+- **`scripts/tl_snapshot.py`** — weekly runner: ingest newest xlsx → screen (survivors CSV to
+  `data/screens/tl_screen_<asof>.csv`, a /discover feed) → watchlist red-flag panel
+  (`--symbols` override) → week-over-week evolution (screen entries/exits + watchlist drift).
+- **Integrated:** `conviction.scorecard(..., snapshot=...)` gains a Market-Intelligence section
+  (current-date `study_stock` only — the PIT replay never sees it); `fund_panel.py` overlays
+  pledge/promoter-trend fallbacks + snapshot line. Immediately caught **CUPID pledge 24.8% +
+  PE at 100th pctile of own history** (Screener path had no pledge data). 109 FVM tests pass.
+- **Next:** weekly cadence — download the export, run `python scripts/tl_snapshot.py`; evolution
+  view activates from the second vintage.
+
 ### 2026-06-28 (FVM Cockpit UI — U0–U4)
 - **Built the cockpit shell + manual-investing core + validation + scoring lab.**
   `trader/fvm/ui/data.py` (framework-agnostic data layer: `build_board` scores the whole ingested

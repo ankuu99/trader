@@ -184,6 +184,15 @@ class Config:
         # Used as the compounding base so Kite available cash never inflates position sizing.
         self._base_capital: float = float(data["capital"]["total"])
 
+    def reload(self, path) -> None:
+        """Replace the loaded config with an alternate YAML file (backtest.py
+        --config). The singleton is shared by every module that already imported
+        it, so mutating in place is the only correct swap."""
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        self._data = data
+        self._base_capital = float(data["capital"]["total"])
+
     @property
     def env(self) -> str:
         return self._data["env"]
@@ -304,6 +313,10 @@ class Config:
                 .get(strategy_name, {})
             )
             overridden = flatten_strategy_params(override)
+            # volume_ma_bars is consumed from the nested features: block —
+            # accept it there too (flatten leaves features nested).
+            if "volume_ma_bars" in (override.get("features") or {}):
+                overridden["volume_ma_bars"] = override["features"]["volume_ma_bars"]
             missing = [p for p in TF_SENSITIVE_PARAMS if p not in overridden]
             if missing:
                 warnings.append(

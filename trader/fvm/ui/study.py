@@ -130,11 +130,13 @@ def study_stock(db: str, market_db: str, symbol: str, asof: str,
         return {"symbol": symbol, "asof": asof, "priced": False, "detail": detail}
 
     store = FVMStore(db)
+    from trader.fvm.data import snapshot as snap
     card = cv.scorecard(
         store, symbol, asof,
         price=detail["last_price"], daily=detail["daily"],
         veto=(detail["veto"]["passed"], detail["veto"]["reasons"]),
         technical=detail["technical"],
+        snapshot=snap.read_snapshot(store, symbol, asof),
     )
     traj = trajectories(store, symbol, asof)
     peers = peer_table(board, symbol=symbol, store=store, asof=asof) if board is not None \
@@ -145,8 +147,117 @@ def study_stock(db: str, market_db: str, symbol: str, asof: str,
 
 
 # ------------------------------------------------------------------ #
+# Scorecard replay — the PIT time-machine                              #
+# ------------------------------------------------------------------ #
+
+def scorecard_replay(db: str, market_db: str, symbol: str, asof: str,
+                     years: int = 5) -> dict:
+    """Run the conviction scorecard at each quarter-end over the trailing `years`,
+    entirely point-in-time (price = close on/before the quarter-end, fundamentals as
+    knowable then). The learning loop: see which criteria flipped BEFORE the price moved.
+
+    Returns {symbol, quarters, criteria (long DataFrame: quarter/section/label/tier/verdict),
+    summary (per-quarter DataFrame: quarter/pass/watch/fail/na/price/dealbreaker_fails)}.
+    Empty frames if the name has no usable price history. Pre-2023 quarters lean on the
+    annual-fallback data (Trendlyne quarterly floor), so early columns are coarser.
+    """
+    symbol = symbol.upper()
+    price_map = fdata._load_prices(market_db, [symbol], asof)
+    return replay_from_daily(FVMStore(db), symbol, asof, price_map.get(symbol), years=years)
+
+
+def replay_from_daily(store, symbol: str, asof: str, daily: pd.DataFrame | None,
+                      years: int = 5) -> dict:
+    """Pure replay core — see scorecard_replay. Takes the daily frame directly."""
+    symbol = symbol.upper()
+    if daily is None or daily.empty:
+        return {"symbol": symbol, "quarters": [],
+                "criteria": pd.DataFrame(), "summary": pd.DataFrame()}
+
+    ts = pd.to_datetime(daily["timestamp"])
+    closes = daily["close"].astype(float)
+
+    crit_rows, sum_rows, quarters = [], [], []
+    for qe in cv._quarter_ends(asof, years * 4):
+        mask = ts <= pd.Timestamp(qe)
+        if not mask.any():
+            continue  # before the price history starts
+        price = float(closes[mask].iloc[-1])
+        d_slice = daily[mask.values]
+        card = cv.scorecard(store, symbol, qe, price=price, daily=d_slice)
+        if card["summary"]["pass"] + card["summary"]["watch"] + card["summary"]["fail"] == 0:
+            continue  # nothing scoreable that far back — skip the all-NA columns
+        quarters.append(qe)
+        for sec in card["sections"]:
+            for c in sec["criteria"]:
+                crit_rows.append({"quarter": qe, "section": sec["name"],
+                                  "label": c["label"], "tier": c["tier"],
+                                  "verdict": c["verdict"]})
+        sm = card["summary"]
+        sum_rows.append({"quarter": qe, "pass": sm["pass"], "watch": sm["watch"],
+                         "fail": sm["fail"], "na": sm["na"], "price": price,
+                         "dealbreaker_fails": ", ".join(sm["dealbreaker_fails"])})
+
+    return {"symbol": symbol, "quarters": quarters,
+            "criteria": pd.DataFrame(crit_rows), "summary": pd.DataFrame(sum_rows)}
+
+
+# ------------------------------------------------------------------ #
+# Thesis journal — feedback loop on your own judgment                  #
+# ------------------------------------------------------------------ #
+
+def journal_entries(db: str, symbol: str, last_price: float | None) -> list[dict]:
+    """Past theses for one name, newest first, each with the price change since the call
+    was made — the point of the journal: was your reasoning right, not just the price."""
+    entries = FVMStore(db).read_journal(symbol)
+    for e in entries:
+        e["change_pct"] = (100.0 * (last_price / e["price"] - 1.0)
+                           if last_price and e.get("price") else None)
+    return entries
+
+
+def add_journal_entry(db: str, symbol: str, asof: str, verdict: str, thesis: str,
+                      price: float | None) -> int:
+    return FVMStore(db).write_journal(symbol, asof, verdict, thesis, price)
+
+
+# ------------------------------------------------------------------ #
 # On-demand fetch — study ANY NSE name, not just the ingested universe #
 # ------------------------------------------------------------------ #
+
+def peer_fetch_plan(db: str, symbol: str, asof: str, max_peers: int = 5) -> dict:
+    """Which same-sector names would make the peer table useful, and which still need a
+    live fetch. Sector comes from sector_map (all Nifty500 names, ingested or not); a name
+    outside it has no sector -> empty plan. Uncached peers are alphabetical (no market-cap
+    data to rank by); with >= 3 peers already cached there is nothing worth fetching."""
+    symbol = symbol.upper()
+    store = FVMStore(db)
+    sector = store.get_sector(symbol)
+    if not sector or sector == "Unknown":
+        return {"symbol": symbol, "sector": None, "cached": [], "to_fetch": []}
+    peers = [s for s, sec in sorted(store.sectors_map().items())
+             if sec == sector and s != symbol]
+    cached = [p for p in peers if has_fundamentals(db, p, asof)]
+    need = max(0, max_peers - len(cached)) if len(cached) < 3 else 0
+    to_fetch = [p for p in peers if p not in cached][:need]
+    return {"symbol": symbol, "sector": sector, "cached": cached, "to_fetch": to_fetch}
+
+
+def fetch_peers(db: str, market_db: str, symbol: str, asof: str,
+                max_peers: int = 5) -> dict:
+    """Fetch enough same-sector peers (financials + shareholding + prices) that the peer
+    table can answer "which of these is the better business?". Hard-capped at `max_peers`
+    live fetches — each costs Trendlyne fincsv quota (~50/day). Returns the plan plus a
+    per-peer status list from ensure_stock_data."""
+    plan = peer_fetch_plan(db, symbol, asof, max_peers=max_peers)
+    statuses = []
+    for peer in plan["to_fetch"]:
+        status = ensure_stock_data(db, market_db, peer, asof)
+        statuses.append(status)
+        if status["fundamentals"] in ("empty", "failed"):
+            break  # quota exhausted / cookie stale — stop burning fetches
+    return {**plan, "statuses": statuses}
+
 
 def has_fundamentals(db: str, symbol: str, asof: str) -> bool:
     store = FVMStore(db)
@@ -179,8 +290,17 @@ def ensure_stock_data(db: str, market_db: str, symbol: str, asof: str,
                 status["fundamentals"] = "not-in-master"
                 status["errors"].append(f"{symbol} not in Trendlyne master list")
             else:
-                ingest_financials(store, symbol, TrendlyneClient())
-                status["fundamentals"] = "fetched"
+                n = ingest_financials(store, symbol, TrendlyneClient())
+                if n > 0:
+                    status["fundamentals"] = "fetched"
+                else:
+                    # endpoint returned an empty body (HTTP 205) — the fincsv quota
+                    # (~50/day, 500/month) is exhausted or the cookie is stale. Don't
+                    # claim success on zero rows.
+                    status["fundamentals"] = "empty"
+                    status["errors"].append(
+                        f"{symbol}: Trendlyne fincsv returned no rows — daily/monthly "
+                        "quota likely exhausted, or TRENDLYNE_COOKIE stale")
         except Exception as e:  # cookie stale / quota / network
             status["fundamentals"] = "failed"
             status["errors"].append(f"financials: {type(e).__name__}: {e}")

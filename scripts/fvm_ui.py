@@ -72,6 +72,11 @@ def lab(asof: str) -> dict:
     return fvm_data.scoring_lab(DB, MARKET_DB, asof)
 
 
+@st.cache_data
+def symbol_catalog() -> dict:
+    return fvm_data.all_symbols(DB)
+
+
 @st.cache_data(show_spinner="Building the dossier…")
 def study_data(symbol: str, asof: str) -> dict:
     b = fvm_data.build_board(DB, MARKET_DB, asof)
@@ -81,6 +86,11 @@ def study_data(symbol: str, asof: str) -> dict:
 def ensure_data(symbol: str, asof: str) -> dict:
     """On-demand live fetch for a name not yet cached (not cached itself — it writes to the DBs)."""
     return fvm_study.ensure_stock_data(DB, MARKET_DB, symbol, asof)
+
+
+@st.cache_data(show_spinner="Replaying the scorecard through time…")
+def replay_data(symbol: str, asof: str, years: int) -> dict:
+    return fvm_study.scorecard_replay(DB, MARKET_DB, symbol, asof, years=years)
 
 
 # ------------------------------------------------------------------ #
@@ -587,6 +597,37 @@ def _ownership_chart(traj: dict):
     st.plotly_chart(fig, use_container_width=True)
 
 
+_VERDICT_Z = {"FAIL": 0.0, "WATCH": 0.5, "PASS": 1.0}  # NA -> None (gap in the heatmap)
+
+
+def _replay_chart(rp: dict):
+    """Criteria × quarter verdict heatmap with the PIT price track underneath."""
+    crit, summ = rp["criteria"], rp["summary"]
+    # rows grouped by section, in scorecard order; reversed so the first section sits on top
+    order = crit.drop_duplicates(["section", "label"])[["section", "label"]].values.tolist()
+    labels = [lb for _, lb in order][::-1]
+    quarters = rp["quarters"]
+    by_ql = {(r["quarter"], r["label"]): r["verdict"] for _, r in crit.iterrows()}
+    z = [[_VERDICT_Z.get(by_ql.get((q, lb)), None) for q in quarters] for lb in labels]
+    text = [[by_ql.get((q, lb), "NA") for q in quarters] for lb in labels]
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                        row_heights=[0.72, 0.28])
+    fig.add_trace(go.Heatmap(
+        z=z, x=quarters, y=labels, text=text,
+        hovertemplate="%{y}<br>%{x}: %{text}<extra></extra>",
+        colorscale=[(0.0, VERDICT_COLORS["FAIL"]), (0.5, VERDICT_COLORS["WATCH"]),
+                    (1.0, VERDICT_COLORS["PASS"])],
+        zmin=0, zmax=1, showscale=False, xgap=1, ygap=1), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=summ["quarter"], y=summ["price"], name="Close (PIT)",
+        line=dict(color="#1f77b4", width=2)), row=2, col=1)
+    fig.update_layout(height=200 + 22 * len(labels), margin=dict(l=0, r=0, t=10, b=0),
+                      showlegend=False)
+    fig.update_yaxes(title_text="₹", row=2, col=1)
+    return fig
+
+
 def page_study(asof: str):
     st.header("🔬 Stock Study — long-term conviction")
     st.caption("Study one company in depth as a multi-year buy-and-hold candidate. This is the "
@@ -594,9 +635,22 @@ def page_study(asof: str):
                "Evidence to reason over — the moat/management judgment is yours.")
 
     names = fvm_data.scored_symbols(DB)
+    catalog = symbol_catalog()          # every NSE name in the Trendlyne master list
+    cached = set(names)
+    # cached (instantly studyable) names first, then the rest of the exchange
+    options = names + [s for s in sorted(catalog) if s not in cached]
+
     c1, c2 = st.columns([3, 1])
-    typed = c1.text_input("NSE symbol (any name — fetched live if not cached)",
-                          value=st.session_state.get("study_symbol", names[0] if names else "")).strip().upper()
+    prev = st.session_state.get("study_symbol", names[0] if names else None)
+    typed = c1.selectbox(
+        "NSE symbol — type to search by symbol or company name",
+        options,
+        index=options.index(prev) if prev in options else (0 if options else None),
+        format_func=lambda s: f"{'● ' if s in cached else ''}{s} — {catalog.get(s, '')}",
+        accept_new_options=True,
+        help="● = already cached (opens instantly). Anything else is fetched live from "
+             "Trendlyne + Kite. You can also type a symbol that isn't in the list.")
+    typed = (typed or "").strip().upper()
     st.session_state["study_symbol"] = typed
     if not typed:
         st.info("Enter an NSE symbol to study.")
@@ -609,8 +663,16 @@ def page_study(asof: str):
             with st.spinner(f"Fetching {typed} (financials + shareholding + prices)…"):
                 status = ensure_data(typed, asof)
             ok = [k for k in ("fundamentals", "shareholding", "prices") if status[k] in ("fetched", "cached")]
-            st.success(f"{typed}: {', '.join(ok) or 'nothing'} ready. " +
-                       (f"Issues: {'; '.join(status['errors'])}" if status["errors"] else ""))
+            issues = "; ".join(status["errors"])
+            if status["fundamentals"] == "empty":
+                st.warning(f"{typed}: Trendlyne returned no financials — its data quota "
+                           f"(~50/day, 500/month) is likely exhausted, or the cookie is stale. "
+                           f"Try again after the daily reset. {issues}")
+            elif not ok:
+                st.error(f"{typed}: fetch failed. {issues}")
+            else:
+                st.success(f"{typed}: {', '.join(ok)} ready. " +
+                           (f"Issues: {issues}" if issues else ""))
             study_data.clear()
             st.rerun()
         st.caption("Live fetch needs a fresh TRENDLYNE_COOKIE in config/.env and a valid Kite token "
@@ -619,47 +681,126 @@ def page_study(asof: str):
 
     detail, card = s["detail"], s["conviction"]
     dec = fvm_data._decision(board(asof)["diag"].get(typed, {}))
+    _study_verdict_strip(typed, asof, detail, card, dec)
 
-    # --- header ---
+    t_score, t_hist, t_peers, t_journal, t_tech = st.tabs(
+        ["📋 Scorecard", "🕰 History & Replay", "🤝 Peers", "📓 Journal",
+         "📈 Technicals & Engine"])
+    with t_score:
+        _study_tab_scorecard(card)
+    with t_hist:
+        _study_tab_history(typed, asof, s)
+    with t_peers:
+        _study_tab_peers(typed, asof, s)
+    with t_journal:
+        _study_tab_journal(typed, asof, detail)
+    with t_tech:
+        _study_tab_technicals(detail)
+
+
+_DOT = {"PASS": "🟢", "WATCH": "🟡", "FAIL": "🔴", "NA": "⚪"}
+
+
+def _find_crit(card: dict, label: str) -> dict | None:
+    for sec in card["sections"]:
+        for c in sec["criteria"]:
+            if c["label"] == label:
+                return c
+    return None
+
+
+def _study_verdict_strip(typed: str, asof: str, detail: dict, card: dict, dec: str):
+    """The glanceable answer to "is this worth my time?" — headline, tier-weighted gauge,
+    dealbreaker chips, and the two context numbers that frame everything else."""
+    sm = card["summary"]
     st.markdown(f"## {typed} &nbsp; {_decision_badge(dec)}", unsafe_allow_html=True)
     px_str = f" · last close ₹{detail['last_price']:.1f}" if detail.get("last_price") else ""
     st.caption(f"{detail['sector']} · as of {asof}{px_str}")
-
-    # --- conviction banner ---
-    sm = card["summary"]
     st.markdown(f"### {sm['headline']}")
-    m = st.columns(5)
-    m[0].metric("Composite", f"{detail['scores']['composite']:.1f}")
-    m[1].metric("✅ PASS", sm["pass"])
-    m[2].metric("⚠️ WATCH", sm["watch"])
-    m[3].metric("❌ FAIL", sm["fail"])
-    m[4].metric("Red flags", len(card["red_flags"]),
-                delta=None if not card["red_flags"] else "see panel", delta_color="inverse")
 
-    # --- red flags (inversion) ---
+    g1, g2 = st.columns([2, 3])
+    with g1:
+        st.progress(min(max(sm["pass_rate"], 0.0), 1.0),
+                    text=f"{sm['pass_rate'] * 100:.0f}% tier-weighted pass "
+                         f"(✅{sm['pass']} ⚠️{sm['watch']} ❌{sm['fail']})")
+        if sm["dealbreaker_fails"]:
+            st.error("⛔ " + " · ".join(sm["dealbreaker_fails"]))
+    with g2:
+        bits = []
+        for label, short in [("P/E vs own 5-yr history", "P/E vs own history"),
+                             ("Implied growth (reverse-DCF)", "Implied growth"),
+                             ("Receivables vs revenue (3yr)", "Receivables vs revenue")]:
+            c = _find_crit(card, label)
+            if c and c["verdict"] != "NA":
+                bits.append(f"{_DOT[c['verdict']]} {short}: **{c['value']}**")
+        if bits:
+            st.markdown("  \n".join(bits))
+
     if card["red_flags"]:
-        with st.container(border=True):
-            st.markdown("#### ⚠️ Red flags — what could guarantee failure (Munger inversion)")
+        with st.expander(f"⚠️ {len(card['red_flags'])} red flag(s) — what could guarantee "
+                         "failure (Munger inversion)", expanded=True):
             for f in card["red_flags"]:
                 st.markdown(f"- **{f['flag']}** — {f['note']}")
 
-    # --- conviction scorecard ---
-    st.subheader("Conviction scorecard")
-    st.caption("The four M's — Meaning · Moat · Management · Margin of safety — plus financial strength, "
-               "scored against what long-term investors look for.")
-    for sec in card["sections"]:
-        st.markdown(f"**{sec['name']}**  ·  _{sec['tag']}_")
-        _render_scorecard_section(sec)
 
-    # --- multi-year trajectories ---
-    st.subheader("Multi-year trajectory")
+def _study_tab_scorecard(card: dict):
+    st.caption("The four M's — Meaning · Moat · Management · Margin of safety — plus financial "
+               "strength and cash conversion. Sections with a FAIL/WATCH open automatically; "
+               "clean-PASS sections stay collapsed.")
+    for sec in card["sections"]:
+        n = {"PASS": 0, "WATCH": 0, "FAIL": 0, "NA": 0}
+        for c in sec["criteria"]:
+            n[c["verdict"]] += 1
+        badge = "  ".join(f"{_DOT[k]} {v}" for k, v in n.items() if v and k != "NA")
+        with st.expander(f"{sec['name']}  ·  {sec['tag']}   —   {badge or 'no data'}",
+                         expanded=bool(n["FAIL"] or n["WATCH"])):
+            _render_scorecard_section(sec)
+
+
+def _study_tab_history(typed: str, asof: str, s: dict):
+    st.markdown("**Scorecard replay — how the verdicts evolved**")
+    st.caption("The scorecard re-run at every quarter-end, point-in-time (only data knowable "
+               "then), with the price alongside. Watch which criteria flipped BEFORE the price "
+               "moved — that's where the signal lives. Pre-2023 quarters lean on annual data.")
+    ry1, _ = st.columns([1, 4])
+    replay_years = ry1.slider("Years", 2, 8, 5, key="replay_years")
+    rp = replay_data(typed, asof, replay_years)
+    if rp["criteria"].empty:
+        st.info("Not enough scoreable history to replay.")
+    else:
+        st.plotly_chart(_replay_chart(rp), use_container_width=True)
+        db_rows = rp["summary"][rp["summary"]["dealbreaker_fails"] != ""]
+        if not db_rows.empty:
+            st.warning("Dealbreaker FAILs in the window: " + "; ".join(
+                f"**{r['quarter']}** — {r['dealbreaker_fails']}" for _, r in db_rows.iterrows()))
+
+    st.divider()
+    st.markdown("**Multi-year trajectory**")
     _fundamentals_charts(s["trajectories"])
     st.caption("Ownership & governance over time")
     _ownership_chart(s["trajectories"])
 
-    # --- peer comparison ---
-    st.subheader("Peer comparison — which name in the sector is the better business?")
+
+def _study_tab_peers(typed: str, asof: str, s: dict):
+    st.caption("Which name in the sector is the better business?")
     peers = s["peers"]
+    if len(peers["df"]) < 4:  # subject + fewer than 3 peers — thin comparison
+        plan = fvm_study.peer_fetch_plan(DB, typed, asof)
+        if plan["to_fetch"]:
+            st.caption(f"Only {max(len(peers['df']) - 1, 0)} sector peer(s) cached for "
+                       f"**{plan['sector']}** — {len(plan['to_fetch'])} more can be fetched live.")
+            if st.button(f"⬇ Fetch {len(plan['to_fetch'])} sector peers "
+                         "(uses Trendlyne quota)"):
+                with st.spinner("Fetching sector peers…"):
+                    res = fvm_study.fetch_peers(DB, MARKET_DB, typed, asof)
+                got = [x["symbol"] for x in res["statuses"] if x["fundamentals"] == "fetched"]
+                bad = [x["symbol"] for x in res["statuses"] if x["fundamentals"] != "fetched"]
+                if got:
+                    st.success("Fetched: " + ", ".join(got))
+                if bad:
+                    st.warning("Not fetched (quota/cookie?): " + ", ".join(bad))
+                st.cache_data.clear()
+                st.rerun()
     if peers["df"].empty:
         st.info("No sector peers in the scored universe to compare against.")
     else:
@@ -674,17 +815,41 @@ def page_study(asof: str):
         st.caption("Composite = FVM cross-sectional fundamental score. Higher ROCE/ROE/growth & lower "
                    "D/E = a better business; EV/EBITDA is the price you pay for it.")
 
-    # --- technicals + pillars ---
-    with st.expander("Price & technical context"):
-        tc1, tc2 = st.columns(2)
-        with tc1:
-            st.caption(f"Weekly + {MA_LONG_W}w/{MA_SHORT_W}w MA")
-            st.plotly_chart(_trend_chart(detail["weekly"]), use_container_width=True)
-        with tc2:
-            st.caption(f"Daily + {MA_DAILY}d MA")
-            st.plotly_chart(_timing_chart(detail["daily"], detail["technical"]["initial_stop"],
-                                          detail["last_price"]), use_container_width=True)
-    with st.expander("FVM fundamental pillars & factor detail"):
+
+def _study_tab_journal(typed: str, asof: str, detail: dict):
+    st.caption("Write down the call and the one-line WHY. It resurfaces here with the price "
+               "change since — a feedback loop on your judgment, not just on the stock.")
+    with st.form(f"journal_{typed}", clear_on_submit=True):
+        jc1, jc2 = st.columns([1, 4])
+        j_verdict = jc1.selectbox("Call", ["BUY", "WATCH", "AVOID"])
+        j_thesis = jc2.text_input("Thesis (the why, one line)")
+        if st.form_submit_button("Save entry") and j_thesis.strip():
+            fvm_study.add_journal_entry(DB, typed, asof, j_verdict, j_thesis.strip(),
+                                        detail.get("last_price"))
+            st.success("Saved.")
+    past = fvm_study.journal_entries(DB, typed, detail.get("last_price"))
+    if past:
+        jdf = pd.DataFrame([{
+            "When": e["created_at"][:10], "As-of": e["asof"], "Call": e["verdict"],
+            "Thesis": e["thesis"],
+            "Price then": e["price"], "Since": (None if e["change_pct"] is None
+                                                else f"{e['change_pct']:+.1f}%"),
+        } for e in past])
+        st.dataframe(jdf, use_container_width=True, hide_index=True,
+                     column_config={"Thesis": st.column_config.TextColumn(width="large")})
+
+
+def _study_tab_technicals(detail: dict):
+    st.markdown("**Price & technical context**")
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        st.caption(f"Weekly + {MA_LONG_W}w/{MA_SHORT_W}w MA")
+        st.plotly_chart(_trend_chart(detail["weekly"]), use_container_width=True)
+    with tc2:
+        st.caption(f"Daily + {MA_DAILY}d MA")
+        st.plotly_chart(_timing_chart(detail["daily"], detail["technical"]["initial_stop"],
+                                      detail["last_price"]), use_container_width=True)
+    with st.expander("FVM fundamental pillars & factor detail (engine internals)"):
         pillars = detail["scores"]["pillars"]
         pfig = go.Figure(go.Bar(x=[pillars[p] for p in fvm_data.PILLARS], y=fvm_data.PILLARS,
                                 orientation="h", marker_color="#1f77b4",
@@ -701,10 +866,23 @@ def main():
     asof = st.sidebar.date_input("As of", value=datetime.date.today(),
                                  max_value=datetime.date.today()).isoformat()
 
-    pages = ["🔬 Stock Study", "Today's Shortlist", "Stock Detail", "Universe & Coverage",
-             "Milestone-A", "Scoring Lab"]
-    nav = st.session_state.get("nav", pages[0])
-    nav = st.sidebar.radio("Page", pages, index=pages.index(nav) if nav in pages else 0)
+    primary = ["🔬 Stock Study", "Universe & Coverage"]
+    engine = ["Today's Shortlist", "Stock Detail", "Milestone-A", "Scoring Lab"]
+    nav = st.session_state.get("nav", primary[0])
+    if nav not in primary + engine:
+        nav = primary[0]
+
+    choice = st.sidebar.radio("Page", primary,
+                              index=primary.index(nav) if nav in primary else None)
+    with st.sidebar.expander("⚙️ Engine (advanced)", expanded=nav in engine):
+        st.caption("Diagnostics for the shelved FVM timing strategy.")
+        for p in engine:
+            if st.button(("👉 " if nav == p else "") + p, key=f"nav_{p}",
+                         use_container_width=True):
+                st.session_state["nav"] = p
+                st.rerun()
+    if choice is not None:
+        nav = choice
     st.session_state["nav"] = nav
 
     st.sidebar.divider()

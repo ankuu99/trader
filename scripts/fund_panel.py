@@ -219,6 +219,16 @@ def analyze(symbol: str, asof: str, db: str, allow_fetch: bool) -> dict:
         }
     f = factors.all_factors(store, sym, asof)
     promoter_trend = _promoter_trend(store, sym, asof)
+
+    # Weekly Trendlyne snapshot overlay (tl_snapshot, if ingested): fills the pledge /
+    # promoter-trend coverage gaps and adds fields the API stack has no source for.
+    from trader.fvm.data import snapshot as snap_mod
+    snap = snap_mod.read_snapshot(store, sym, asof)
+    if snap:
+        if f.get("pledge") is None and snap.get("pledge") is not None:
+            f["pledge"] = snap["pledge"]
+        if promoter_trend is None and snap.get("promoter_chg_4q") is not None:
+            promoter_trend = snap["promoter_chg_4q"] / 4.0  # pp/quarter
     sector = store.sectors_map().get(sym)
     financial = is_financial(sector)
     panel = build_panel(f, promoter_trend, financial=financial)
@@ -232,10 +242,18 @@ def analyze(symbol: str, asof: str, db: str, allow_fetch: bool) -> dict:
     if f.get("ev_ebitda") is not None and f["ev_ebitda"] > 30:
         notes.append(f"richly valued (EV/EBITDA {f['ev_ebitda']:.0f}) — less critical for "
                      f"dip-buying than for buy-and-hold, but caps upside")
+    snapshot_read = None
+    if snap:
+        snapshot_read = {k: snap.get(k) for k in
+                         ("as_of", "durability", "valuation", "momentum", "dvm_class",
+                          "piotroski", "pledge", "mf_chg_qoq", "fii_chg_qoq",
+                          "pct_days_below_pe")}
+        for fl in snap_mod.watchlist_flags(snap):
+            notes.append(f"snapshot ({snap['as_of']}): {fl}")
     return {
         "symbol": f"NSE:{sym}", "asof": asof, "source": source,
         "sector": sector, "financial": financial,
-        **panel, "metrics": metrics, "notes": notes,
+        **panel, "snapshot": snapshot_read, "metrics": metrics, "notes": notes,
     }
 
 
@@ -257,6 +275,15 @@ def _print_human(r: dict) -> None:
         print("\n  POSITIVES:")
         for x in r["positives"]:
             print(f"    🟢 {x['factor']}: {x['detail']}")
+    s = r.get("snapshot")
+    if s:
+        def _n(v, nd=0):
+            return "—" if v is None else f"{v:.{nd}f}"
+        print(f"\n  SNAPSHOT ({s['as_of']}): D={_n(s['durability'])} V={_n(s['valuation'])} "
+              f"M={_n(s['momentum'])}  Piotroski={_n(s['piotroski'])}/9  "
+              f"pledge={_n(s['pledge'], 1)}%  MF+FII QoQ="
+              f"{_n((s['mf_chg_qoq'] or 0) + (s['fii_chg_qoq'] or 0), 2)}pp  "
+              f"[{s['dvm_class'] or '—'}]")
     for n in r.get("notes", []):
         print(f"\n  note: {n}")
 

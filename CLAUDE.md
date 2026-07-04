@@ -386,7 +386,6 @@ The screener is purely quantitative. When shortlisting, also consider:
 - **Sector momentum**: prefer stocks in sectors with broad market tailwind
 - **Liquidity**: daily average volume should be at least ₹50L turnover to ensure LIMIT orders fill without slippage
 - **Corporate events**: avoid stocks near earnings, AGM, bonus/split record dates — these create abnormal candle patterns that confuse the model
-- **Price band**: stocks in T-group or trade-to-trade (BE) segment have settlement constraints — avoid
 - **Promoter holding**: very low promoter holding stocks can be targets for pump-and-dump, generating false extrema signals
 
 ### Watchlist management

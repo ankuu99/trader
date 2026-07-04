@@ -15,6 +15,7 @@ pyotp==2.9.0
 streamlit==1.58.0
 plotly==6.7.0
 matplotlib==3.11.0
+openpyxl==3.1.5
 
 # dev / test
 pytest==9.0.3
