@@ -397,9 +397,12 @@ git push origin release-YYYY-MM-DD
 ```bash
 ./scripts/deploy.sh release-YYYY-MM-DD
 ```
-
 The script will fail loudly if no tag is provided.
 
+**Force Refresh of Kite on Remote**
+```bash
+ssh trader "sudo -u trader bash -c 'cd /opt/trader && .venv/bin/python scripts/kite_totp_refresh.py' && sudo systemctl restart trader && sleep 5 && sudo systemctl status trader --no-pager
+```
 **Rolling back** to a previous release is just:
 ```bash
 ./scripts/deploy.sh release-YYYY-MM-DD   # an earlier date
