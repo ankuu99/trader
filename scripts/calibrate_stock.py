@@ -1,27 +1,31 @@
 """
-Per-stock calibration — TF-aware grid search for one or more symbols.
+Per-stock calibration — two-stage, TF-aware, for one or more symbols.
 
-Base params for each stock are its CURRENT merged config (global strategy block
-deep-merged with per_stock_params, including `timeframe`) — so a 4hour/day stock
-is calibrated in its own aggregated regime, with all its standard overrides
-intact. Baseline = that current config as-is; each result's `delta` is the
-improvement over what the stock runs today.
+Default flow (per symbol):
+  Stage 1 — REGIME: backtest the stock under all three regimes —
+            15minute (global config), 4hour and day (standard template blocks,
+            threshold swept) — and pick the winner by P&L.
+  Stage 2 — PARAMS: calibrate within the winning regime.
+            15minute → legacy threshold × forward_label grid.
+            4hour/day → the threshold sweep from stage 1 (already done);
+            output the full standard override block with the best threshold,
+            ready to paste into per_stock_params.
 
-Grid by timeframe:
-  - 15minute (base TF):   threshold × forward_label (legacy behaviour)
-  - 4hour / day:          threshold-only sweep (forward_label is a 15m-era knob)
+`--no-compare` skips stage 1 and sweeps threshold inside the stock's CURRENT
+merged config (global + per_stock_params, including `timeframe`) — the cheap
+re-calibration path for stocks whose regime is already settled.
+
+Missing 15m history is fetched from Kite automatically (deep enough to cover
+the day-template warm-up before --from), refreshing the token via
+kite_totp_refresh.py if it has expired; pass --cache-only to skip fetching.
 
 Usage:
     python scripts/calibrate_stock.py NSE:RVNL [--from 2023-01-01]
     python scripts/calibrate_stock.py NSE:IPCALAB NSE:CUPID NSE:INDHOTEL
-    python scripts/calibrate_stock.py NSE:CUPID --thresholds 0.80 0.85 0.90
+    python scripts/calibrate_stock.py NSE:CUPID --no-compare --thresholds 0.80 0.85
 
-Prints JSON to stdout. Single symbol keeps the legacy shape; multiple symbols
-are wrapped as {"stocks": {sym: {...}}}. By default it fetches any missing 15m
-history from Kite first (deep enough to cover the aggregated-TF warm-up BEFORE
---from), refreshing the token via kite_totp_refresh.py if it has expired; pass
---cache-only to skip fetching. `coverage_warning` in the output flags a cache
-that still doesn't reach the warm-up window.
+Prints JSON to stdout. Single symbol → flat object; multiple symbols →
+{"stocks": {sym: {...}}}.
 """
 
 import argparse
@@ -38,7 +42,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env")
 
 from trader.backtest.engine import compute_metrics, run_backtest
-from trader.core.config import config
+from trader.core.config import config, flatten_strategy_params
 from trader.data.store import Store
 from trader.notifications import telegram
 telegram.disable()
@@ -46,6 +50,30 @@ telegram.disable()
 THRESHOLDS_15M = [0.88, 0.90, 0.92, 0.95]
 THRESHOLDS_AGG = [0.80, 0.82, 0.85, 0.88, 0.90, 0.92]
 MIN_RETURNS    = [1.0, 1.5, 2.0, 2.5, 3.0]
+
+# Standard per-stock override blocks for aggregated TFs (config-shaped, nested).
+# These mirror the hand-rolled blocks already in config.yaml (ACMESOLAR = 4hour,
+# SCHAEFFLER = day); `threshold` is the one knob left to calibration.
+_AGG_TEMPLATE_COMMON = {
+    "warmup_bars": 100,
+    "lookback_bars": 400,
+    "extrema_order": 5,
+    "exits": {
+        "hold_bars": 40,
+        "sell_min_pct": 7.0,
+        "hard_stop": {"stop_pct": 20},
+        "trailing": {"profit_pct": 10, "trail_pct": 4, "force_close_time": None},
+        "pattern_top": {"sell_threshold": 0.85, "min_hold_before_exit": 2},
+        "stale": {"check_bars": 5, "min_gain_pct": 0.5},
+        "stale_2": {"check_bars": 15, "min_gain_pct": -2.0},
+    },
+}
+TF_TEMPLATES = {
+    "4hour": {**_AGG_TEMPLATE_COMMON, "timeframe": "4hour", "retrain_every": 2},
+    "day":   {**_AGG_TEMPLATE_COMMON, "timeframe": "day",   "retrain_every": 1},
+}
+# Warm-up depth of the deepest template leg (day: 500 bars ≈ 725 calendar days)
+_COMPARE_WARMUP_DAYS = 725
 
 
 def _refresh_token():
@@ -71,7 +99,7 @@ def _create_kite():
         return create_kite()
 
 
-def _fetch_missing(store, symbols, from_dt, to_dt):
+def _fetch_missing(store, symbols, from_dt, to_dt, min_warmup_days: int = 0):
     """Ensure the 15m cache covers each symbol's warm-up window before --from.
     Full fetch when the cache doesn't reach far enough back (get_candles only
     extends tails, never backfills), tail fetch otherwise."""
@@ -84,7 +112,8 @@ def _fetch_missing(store, symbols, from_dt, to_dt):
         if token is None:
             print(f"  WARNING: {sym} not in NSE instruments — skipping fetch", file=sys.stderr)
             continue
-        needed_from = from_dt - datetime.timedelta(days=config.warmup_days_for(sym))
+        warmup_days = max(config.warmup_days_for(sym), min_warmup_days)
+        needed_from = from_dt - datetime.timedelta(days=warmup_days)
         with store._conn() as conn:
             oldest, latest = conn.execute(
                 "SELECT MIN(timestamp), MAX(timestamp) FROM candles "
@@ -133,18 +162,23 @@ def _run(store, symbol, params, from_dt, to_dt):
     }
 
 
-def _coverage_warning(store, symbol, from_dt) -> str | None:
-    """Aggregated TFs need (warmup+lookback) bars of 15m history BEFORE --from.
-    Cache-only mode can't backfill, so warn when warm-up will eat the window."""
+def _cache_bounds(store, symbol):
     with store._conn() as conn:
-        oldest, latest = conn.execute(
+        return conn.execute(
             "SELECT MIN(timestamp), MAX(timestamp) FROM candles "
             "WHERE instrument=? AND timeframe=?",
             (symbol, config.candle_timeframe),
         ).fetchone()
+
+
+def _coverage_warning(store, symbol, from_dt, min_warmup_days: int = 0) -> str | None:
+    """Aggregated TFs need (warmup+lookback) bars of 15m history BEFORE --from.
+    Cache-only mode can't backfill, so warn when warm-up will eat the window."""
+    oldest, _ = _cache_bounds(store, symbol)
     if oldest is None:
         return f"No cached candles for {symbol}. Run a live fetch first."
-    needed_from = from_dt - datetime.timedelta(days=config.warmup_days_for(symbol))
+    warmup_days = max(config.warmup_days_for(symbol), min_warmup_days)
+    needed_from = from_dt - datetime.timedelta(days=warmup_days)
     oldest_dt = datetime.datetime.fromisoformat(oldest)
     if oldest_dt > needed_from + datetime.timedelta(days=7):
         return (
@@ -155,7 +189,44 @@ def _coverage_warning(store, symbol, from_dt) -> str | None:
     return None
 
 
-def _calibrate_symbol(store, symbol, from_dt, to_dt, thresholds_arg):
+def _current_override(symbol):
+    return (
+        (config._data.get("per_stock_params") or {})
+        .get(symbol, {})
+        .get("lr_extrema", {})
+    )
+
+
+def _sweep_15m(store, symbol, base, from_dt, to_dt, thresholds):
+    """Legacy 15m param grid: threshold × forward_label."""
+    combos = (
+        [(False, None, th) for th in thresholds] +
+        [(True, mr, th) for mr, th in itertools.product(MIN_RETURNS, thresholds)]
+    )
+    baseline = _run(store, symbol, base, from_dt, to_dt)
+    results = []
+    for fl, mr, th in combos:
+        override = {"threshold": th}
+        if fl:
+            override["forward_label"] = {"enabled": True, "min_return_pct": mr}
+        else:
+            override["forward_label"] = {"enabled": False}
+        params = _deep_merge(base, override)
+        m = _run(store, symbol, params, from_dt, to_dt)
+        results.append({
+            "fl": fl, "min_return_pct": mr, "threshold": th,
+            "pnl": m["pnl"], "trades": m["trades"], "win_rate": m["win_rate"],
+            "delta": round(m["pnl"] - baseline["pnl"], 2),
+        })
+        print(".", file=sys.stderr, end="", flush=True)
+    print(file=sys.stderr)
+    results.sort(key=lambda x: x["pnl"], reverse=True)
+    return baseline, results
+
+
+def _calibrate_current_regime(store, symbol, from_dt, to_dt, thresholds_arg):
+    """--no-compare path: sweep threshold inside the stock's CURRENT merged
+    config (its settled regime), 15m stocks get the legacy fl grid."""
     base = config.get_strategy_params(symbol, "lr_extrema")
     tf   = base.get("timeframe", config.candle_timeframe)
     aggregated = tf != config.candle_timeframe
@@ -166,54 +237,125 @@ def _calibrate_symbol(store, symbol, from_dt, to_dt, thresholds_arg):
 
     if aggregated:
         thresholds = thresholds_arg or THRESHOLDS_AGG
-        combos = [(False, None, th) for th in thresholds]
+        print(f"{symbol} [{tf}]: {len(thresholds)} thresholds...", file=sys.stderr)
+        baseline = _run(store, symbol, base, from_dt, to_dt)
+        results = []
+        for th in thresholds:
+            m = _run(store, symbol, _deep_merge(base, {"threshold": th}), from_dt, to_dt)
+            results.append({
+                "threshold": th, "pnl": m["pnl"], "trades": m["trades"],
+                "win_rate": m["win_rate"],
+                "delta": round(m["pnl"] - baseline["pnl"], 2),
+            })
+            print(".", file=sys.stderr, end="", flush=True)
+        print(file=sys.stderr)
+        results.sort(key=lambda x: x["pnl"], reverse=True)
     else:
         thresholds = thresholds_arg or THRESHOLDS_15M
-        combos = (
-            [(False, None, th) for th in thresholds] +
-            [(True, mr, th) for mr, th in itertools.product(MIN_RETURNS, thresholds)]
-        )
-
-    print(f"{symbol} [{tf}]: {len(combos)} combinations...", file=sys.stderr)
-
-    # Baseline = the stock's current merged config, untouched
-    baseline = _run(store, symbol, base, from_dt, to_dt)
-
-    results = []
-    for fl, mr, th in combos:
-        override = {"threshold": th}
-        if not aggregated:
-            if fl:
-                override["forward_label"] = {"enabled": True, "min_return_pct": mr}
-            else:
-                override["forward_label"] = {"enabled": False}
-        params = _deep_merge(base, override)
-        m = _run(store, symbol, params, from_dt, to_dt)
-        results.append({
-            "fl": fl, "min_return_pct": mr, "threshold": th,
-            "pnl": m["pnl"], "trades": m["trades"], "win_rate": m["win_rate"],
-            "delta": round(m["pnl"] - baseline["pnl"], 2),
-        })
-        print(".", file=sys.stderr, end="", flush=True)
-    print(file=sys.stderr)
-
-    results.sort(key=lambda x: x["pnl"], reverse=True)
-
-    current_override = (
-        (config._data.get("per_stock_params") or {})
-        .get(symbol, {})
-        .get("lr_extrema", {})
-    )
+        print(f"{symbol} [{tf}]: {len(thresholds)} thresholds × fl grid...", file=sys.stderr)
+        baseline, results = _sweep_15m(store, symbol, base, from_dt, to_dt, thresholds)
 
     out = {
         "symbol":            symbol,
+        "mode":              "current_regime",
         "timeframe":         tf,
         "current_threshold": base.get("threshold"),
         "baseline":          baseline,   # current merged config, as the stock runs today
-        "current_override":  current_override,
+        "current_override":  _current_override(symbol),
         "results":           results[:10],
         "best":              results[0],
     }
+    if warning:
+        out["coverage_warning"] = warning
+    return out
+
+
+def _calibrate_full(store, symbol, from_dt, to_dt, thresholds_arg):
+    """Default two-stage flow: pick the regime (15m global vs 4hour/day standard
+    templates), then calibrate params within the winner."""
+    oldest, _ = _cache_bounds(store, symbol)
+    if oldest is None:
+        return {"symbol": symbol,
+                "error": f"No cached candles for {symbol}. Run a live fetch first."}
+
+    base_raw = config._data["strategies"].get("lr_extrema", {})
+    legs = {}
+
+    # ---- Stage 1: regime ----
+    base15 = config.strategy_config("lr_extrema")
+    print(f"{symbol} [regime] 15minute (global config)...", file=sys.stderr)
+    legs["15minute"] = {
+        "threshold": base15.get("threshold"),
+        **_run(store, symbol, base15, from_dt, to_dt),
+    }
+
+    agg_thresholds = thresholds_arg or THRESHOLDS_AGG
+    for tf in ("4hour", "day"):
+        print(f"{symbol} [regime] {tf}: {len(agg_thresholds)} thresholds...", file=sys.stderr)
+        results = []
+        for th in agg_thresholds:
+            override = _deep_merge(TF_TEMPLATES[tf], {"threshold": th})
+            params = flatten_strategy_params(_deep_merge(base_raw, override))
+            m = _run(store, symbol, params, from_dt, to_dt)
+            results.append({"threshold": th, **m})
+            print(".", file=sys.stderr, end="", flush=True)
+        print(file=sys.stderr)
+        results.sort(key=lambda x: x["pnl"], reverse=True)
+        legs[tf] = {"results": results, "best": results[0]}
+
+    # If the stock already runs a hand-tuned override, race it too — a customised
+    # block can beat the standard template (e.g. different extrema/stale values),
+    # and without this leg the compare would wrongly recommend a regime flip.
+    override = _current_override(symbol)
+    if override:
+        cur = config.get_strategy_params(symbol, "lr_extrema")
+        print(f"{symbol} [regime] current override "
+              f"({cur.get('timeframe', config.candle_timeframe)})...", file=sys.stderr)
+        legs["current"] = {
+            "timeframe": cur.get("timeframe", config.candle_timeframe),
+            "threshold": cur.get("threshold"),
+            **_run(store, symbol, cur, from_dt, to_dt),
+        }
+
+    scores = {
+        "15minute": legs["15minute"]["pnl"],
+        "4hour":    legs["4hour"]["best"]["pnl"],
+        "day":      legs["day"]["best"]["pnl"],
+    }
+    if "current" in legs:
+        scores["current"] = legs["current"]["pnl"]
+    winner = max(scores, key=scores.get)
+
+    out = {
+        "symbol":           symbol,
+        "mode":             "full",
+        "regime":           winner,
+        "legs":             legs,
+        "current_override": override,
+    }
+
+    # ---- Stage 2: params within the winner ----
+    if winner == "current":
+        # Existing hand-tuned block already wins — keep it. Threshold fine-tuning
+        # within it is the --no-compare path.
+        pass
+    elif winner == "15minute":
+        # Aggregated templates didn't beat the 15m run — calibrate the legacy grid.
+        print(f"{symbol} [params] 15minute grid...", file=sys.stderr)
+        baseline, results = _sweep_15m(
+            store, symbol, base15, from_dt, to_dt, THRESHOLDS_15M)
+        out["baseline"] = baseline
+        out["results"] = results[:10]
+        out["best"] = results[0]
+    else:
+        # Threshold sweep already ran in stage 1 — emit the paste-ready block.
+        out["best"] = legs[winner]["best"]
+        out["recommended_override"] = _deep_merge(
+            TF_TEMPLATES[winner], {"threshold": legs[winner]["best"]["threshold"]}
+        )
+
+    warning = _coverage_warning(store, symbol, from_dt,
+                                min_warmup_days=_COMPARE_WARMUP_DAYS)
     if warning:
         out["coverage_warning"] = warning
     return out
@@ -224,7 +366,11 @@ def main():
     parser.add_argument("symbols", nargs="+", help="e.g. NSE:RVNL [NSE:CUPID ...]")
     parser.add_argument("--from", dest="from_date", default="2023-01-01")
     parser.add_argument("--thresholds", nargs="+", type=float, default=None,
-                        help="Override the threshold grid (e.g. --thresholds 0.80 0.85 0.90)")
+                        help="Override the aggregated-TF threshold grid "
+                             "(e.g. --thresholds 0.80 0.85 0.90)")
+    parser.add_argument("--no-compare", action="store_true",
+                        help="Skip regime selection — sweep threshold inside the "
+                             "stock's current merged config")
     parser.add_argument("--cache-only", action="store_true",
                         help="Skip the Kite fetch — use only already-cached candles")
     args = parser.parse_args()
@@ -236,10 +382,12 @@ def main():
     to_dt   = datetime.datetime.now()
 
     if not args.cache_only:
-        _fetch_missing(store, symbols, from_dt, to_dt)
+        min_days = 0 if args.no_compare else _COMPARE_WARMUP_DAYS
+        _fetch_missing(store, symbols, from_dt, to_dt, min_warmup_days=min_days)
 
+    calibrate = _calibrate_current_regime if args.no_compare else _calibrate_full
     per_symbol = {
-        sym: _calibrate_symbol(store, sym, from_dt, to_dt, args.thresholds)
+        sym: calibrate(store, sym, from_dt, to_dt, args.thresholds)
         for sym in symbols
     }
 

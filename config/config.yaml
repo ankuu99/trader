@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 250000 
+  total: 500000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
@@ -12,15 +12,15 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
+  max_capital_per_stock_pct: 5.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
 - 
 
 watchlist:
-  - NSE:CARRARO
-  - NSE:MGEL
+#  - NSE:CARRARO        # removed 2026-07-05 — calibration: 15m −₹8.2k, no reliable regime (day "win" = lone ₹1.1k spike @33% WR)
+#  - NSE:MGEL           # removed 2026-07-05 — no longer in NSE instruments (delisted/renamed)
   - NSE:REDTAPE
   - NSE:THANGAMAYL
   - NSE:CHENNPETRO
@@ -55,7 +55,7 @@ watchlist:
   - NSE:M&MFIN         # +₹4.3k, 17t — auto finance
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
   # - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
-  - NSE:LTF            # +₹1.7k, 10t — NBFC
+#  - NSE:LTF            # removed 2026-07-05 — calibration: best leg only ₹1.9k @44% WR — churn
   - NSE:SKYGOLD        # +₹16.9k, 119t
   - NSE:QUESS
   - NSE:IPCALAB
@@ -350,8 +350,8 @@ per_stock_params:
       timeframe: 4hour
       warmup_bars: 100              # ~5 months of day bars before first training
       lookback_bars: 400            # ~19-month rolling training window
-      threshold: 0.80               # min P(local-min) to enter
-      retrain_every: 1              # retrain every day bar — replicates what the daily
+      threshold: 0.88               # calibrated 2026-07-05 (from 2026-01-01): ₹11.1k/8t/75% vs ₹5.6k @0.80
+      retrain_every: 2              # standard 4hour template cadence
       extrema_order: 5              # swing extrema = local min/max over ±3 days
       exits:
         hold_bars: 40               # ~2 months max hold
@@ -371,38 +371,281 @@ per_stock_params:
         stale_2:
           check_bars: 15            # faded-after-promise tier, just under hold_bars
           min_gain_pct: -2.0
+  # ——— Blocks below added by 2026-07-05 full-watchlist calibration (from 2026-01-01).
+  # Standard 4hour/day template; only threshold is per-stock calibrated.
+  # CHENNPETRO — 4hour ₹11.3k/15t/67% @0.80 vs 15m ₹2.9k (0.82 neighbour ₹9.0k).
+  NSE:CHENNPETRO:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.80
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
+  # SKYGOLD — 4hour ₹10.5k/9t/78% @0.85 vs 15m ₹0.7k (0.82 neighbour ₹8.5k).
+  NSE:SKYGOLD:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.85
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
+  # ADFFOODS — 4hour ₹7.6k/8t/75% @0.82 vs 15m −₹0.1k (0.80 neighbour ₹6.0k).
+  NSE:ADFFOODS:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.82
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
+  # GESHIP — day ₹9.4k/10t/70% @0.80 vs 15m ₹4.7k (0.85 neighbour ₹7.7k).
+  NSE:GESHIP:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.80
+      retrain_every: 1
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
+  # MAYURUNIQ — day ₹8.8k/9t/78% @0.82 vs 15m ₹6.4k (0.80 neighbour ₹8.8k — flat).
+  NSE:MAYURUNIQ:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.82
+      retrain_every: 1
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
+  # CUMMINSIND — day ₹7.0k/9t/78% @0.80 vs 15m −₹0.1k (0.82 neighbour ₹4.1k).
+  NSE:CUMMINSIND:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.80
+      retrain_every: 1
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
 
-  
   NSE:ATHERENERG:
     lr_extrema:
       exits:
         pattern_top:
           trend_guard: { enabled: true, lookback_bars: 10, min_slope_pct: 0.10 }
+  # CUPID — switched 15m+trend_guard → 4hour on 2026-07-05 calibration:
+  # ₹10.3k/7t @0.82 vs ₹7.7k on the old 15m+guard config. Note 0.85 leg is
+  # negative — region is narrower than the other 4hour names; watch live.
   NSE:CUPID:
     lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.82               # calibrated 2026-07-05 (from 2026-01-01)
+      retrain_every: 2
+      extrema_order: 5
       exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null    # day/4h holds must survive overnight
         pattern_top:
-          trend_guard: { enabled: true, lookback_bars: 10, min_slope_pct: 0.10 }          
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
   NSE:GOKEX:
     lr_extrema:
       forward_label:
         enabled: true
         min_return_pct: 2.0
+  # M&MFIN — switched 15m th0.92 (−₹3.3k) → day on 2026-07-05 calibration:
+  # ₹2.8k/7t/57% @0.90 (0.92 neighbour also positive). Modest — review next cycle.
   NSE:M&MFIN:
     lr_extrema:
-      threshold: 0.92
+      timeframe: day
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.90               # calibrated 2026-07-05 (from 2026-01-01)
+      retrain_every: 1
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null    # day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
   NSE:INDUSTOWER:
     lr_extrema:
       threshold: 0.88
       forward_label:
         enabled: true
         min_return_pct: 1.0
+  # RADICO — switched 15m th0.92 (₹1.0k) → 4hour on 2026-07-05 calibration:
+  # ₹5.7k/17t/65% @0.80 (0.82 identical — flat region).
   NSE:RADICO:
     lr_extrema:
-      threshold: 0.92
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.80               # calibrated 2026-07-05 (from 2026-01-01)
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null    # day/4h holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 5
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 15
+          min_gain_pct: -2.0
   NSE:TVSMOTOR:
     lr_extrema:
-      threshold: 0.90
+      threshold: 0.88               # calibrated 2026-07-05: ₹5.5k/39t/72% vs ₹2.7k on old 0.90/fl1.0
+      forward_label:
+        enabled: true
+        min_return_pct: 1.5
+  NSE:REDTAPE:
+    lr_extrema:
+      threshold: 0.88               # calibrated 2026-07-05: ₹7.3k/37t/81% vs ₹5.6k baseline
       forward_label:
         enabled: true
         min_return_pct: 1.0
