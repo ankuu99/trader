@@ -98,10 +98,10 @@ strategies:
         # ₹57k→₹110k on 2025-26, Calmar 1.13→2.63, win 50%→67%, DD 13.3%→10.7%.
         scale_out: { enabled: true, fraction: 0.5 }
       stale:                      # present = enabled (Progress gate tier 1)
-        check_bars: 20
+        check_bars: 40            # 20→40 2026-07-06 — stale-runway ×2, beat baseline 4/4 half-year windows
         min_gain_pct: 0.5         # best gain must have exceeded this % or we exit
       stale_2:                    # present = enabled (faded after early promise)
-        check_bars: 100
+        check_bars: 200           # 100→200 2026-07-06 — coincides with hold_bars, tier-2 defers to hold timeout at 15m
         min_gain_pct: -2.0        # current gain floor at tier-2 check
       # momentum_decay: { p_min_floor: 0.35, min_bars: 5 }   # absent = disabled
       # breakeven:      { trigger_pct: 1.0, buffer_pct: 0.0 } # absent = disabled
@@ -261,10 +261,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2   # days
         stale:
-          check_bars: 15            # 15 days without best gain > 0.5% → exit
+          check_bars: 30           # 15→30 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 35            # faded-after-promise tier, just under hold_bars
+          check_bars: 70           # 35→70 2026-07-06 — above hold_bars 40, tier-2 defers to hold timeout
           min_gain_pct: -2.0
       features:
         volume_ma_bars: 20          # 20-day volume normalisation
@@ -288,10 +288,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2   # days
         stale:
-          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          check_bars: 30           # 15→30 2026-07-06 — faded-after-promise tier, just under hold_bars
           min_gain_pct: -2.0
   NSE:ACMESOLAR:
     lr_extrema:
@@ -314,10 +314,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2   # days
         stale:
-          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          check_bars: 30           # 15→30 2026-07-06 — faded-after-promise tier, just under hold_bars
           min_gain_pct: -2.0
   NSE:SCHAEFFLER:
     lr_extrema:
@@ -340,10 +340,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2   # days
         stale:
-          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          check_bars: 30           # 15→30 2026-07-06 — faded-after-promise tier, just under hold_bars
           min_gain_pct: -2.0
   NSE:ENGINERSIN:
     lr_extrema:
@@ -366,10 +366,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2   # days
         stale:
-          check_bars: 5            # 15 days without best gain > 0.5% → exit
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15            # faded-after-promise tier, just under hold_bars
+          check_bars: 30           # 15→30 2026-07-06 — faded-after-promise tier, just under hold_bars
           min_gain_pct: -2.0
   # ——— Blocks below added by 2026-07-05 full-watchlist calibration (from 2026-01-01).
   # Standard 4hour/day template; only threshold is per-stock calibrated.
@@ -395,10 +395,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # SKYGOLD — 4hour ₹10.5k/9t/78% @0.85 vs 15m ₹0.7k (0.82 neighbour ₹8.5k).
   NSE:SKYGOLD:
@@ -422,10 +422,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # ADFFOODS — 4hour ₹7.6k/8t/75% @0.82 vs 15m −₹0.1k (0.80 neighbour ₹6.0k).
   NSE:ADFFOODS:
@@ -449,10 +449,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # GESHIP — day ₹9.4k/10t/70% @0.80 vs 15m ₹4.7k (0.85 neighbour ₹7.7k).
   NSE:GESHIP:
@@ -476,10 +476,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # MAYURUNIQ — day ₹8.8k/9t/78% @0.82 vs 15m ₹6.4k (0.80 neighbour ₹8.8k — flat).
   NSE:MAYURUNIQ:
@@ -503,10 +503,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # CUMMINSIND — day ₹7.0k/9t/78% @0.80 vs 15m −₹0.1k (0.82 neighbour ₹4.1k).
   NSE:CUMMINSIND:
@@ -530,10 +530,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
 
   NSE:ATHERENERG:
@@ -565,10 +565,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   NSE:GOKEX:
     lr_extrema:
@@ -598,10 +598,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   NSE:INDUSTOWER:
     lr_extrema:
@@ -632,10 +632,10 @@ per_stock_params:
           sell_threshold: 0.85
           min_hold_before_exit: 2
         stale:
-          check_bars: 5
+          check_bars: 10           # 5→10 2026-07-06 (stale-runway ×2, 4/4 windows)
           min_gain_pct: 0.5
         stale_2:
-          check_bars: 15
+          check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   NSE:TVSMOTOR:
     lr_extrema:
