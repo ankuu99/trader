@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 500000 
+  total: 400000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
@@ -12,7 +12,7 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 5.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
+  max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 interested:
