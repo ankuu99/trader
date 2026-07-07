@@ -15,9 +15,6 @@ risk:
   max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
-interested:
-- 
-
 watchlist:
 #  - NSE:CARRARO        # removed 2026-07-05 — calibration: 15m −₹8.2k, no reliable regime (day "win" = lone ₹1.1k spike @33% WR)
 #  - NSE:MGEL           # removed 2026-07-05 — no longer in NSE instruments (delisted/renamed)

@@ -47,9 +47,6 @@ watchlist:
   - NSE:RELIANCE
   - NSE:INFY
 
-interested:                 # monitored in UI but not traded
-  - NSE:TCS
-
 strategies:
   lr_extrema:
     enabled: true

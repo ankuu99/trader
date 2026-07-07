@@ -69,7 +69,6 @@ _TEST_CONFIG_DATA = {
         "lr_extrema": _STRATEGY_PARAMS,
     },
     "watchlist": [],
-    "interested": [],
     "data": {"db_path": ":memory:", "historical_cache_days": 90},
 }
 

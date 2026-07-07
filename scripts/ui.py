@@ -72,7 +72,17 @@ def _reconnect_kite():
     _connect_kite.clear()
     _get_store.clear()
     _run_signal_probe.clear()
+    _read_candles_cached.clear()
     st.rerun()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _read_candles_cached(instrument: str, timeframe: str,
+                         from_dt: datetime, to_dt: datetime) -> pd.DataFrame:
+    """SQLite candle read, cached — avoids re-querying on every widget interaction
+    (each chart click/row select reruns the script). Cleared after a backtest run
+    (which may fetch fresh candles) and on Reconnect Kite."""
+    return _get_store().read_candles(instrument, timeframe, from_dt, to_dt)
 
 
 def _cached_instruments(db_path: Path, timeframe: str) -> list[str]:
@@ -158,32 +168,44 @@ def _fetch_live_trades() -> tuple[list[dict], str | None]:
 
 
 @st.cache_data(show_spinner=False)
-def _run_signal_probe(_store, instrument: str, timeframe: str, params_json: str,
-                      from_dt_str: str, to_dt_str: str) -> list[dict]:
-    """Evaluate model probabilities on every candle without touching position state.
+def _run_signal_probe(_store, instrument: str, strategy_tf: str, params_json: str,
+                      from_dt_str: str, to_dt_str: str, warmup_days: int) -> list[dict]:
+    """Evaluate model probabilities on every strategy-TF bar without touching
+    position state.
 
     Bypasses on_candle entirely to avoid _entry_price getting stuck after the first
     signal. Directly manages candle accumulation and retraining, then calls the model
-    on every candle and logs threshold crossings within [from_dt, to_dt].
+    on every bar and logs threshold crossings within [from_dt, to_dt].
+
+    Params and strategy_tf come from config (per-stock merged); base 15m candles
+    are aggregated through the same CandleAggregator the engine and live use, so
+    a day/4hour stock is probed on the exact bars its model actually sees.
     """
     import json
+    from trader.data.aggregator import CandleAggregator
     from trader.strategies.lr_extrema import LRExtremaStrategy
 
     params = json.loads(params_json)
     from_dt = datetime.fromisoformat(from_dt_str)
     to_dt   = datetime.fromisoformat(to_dt_str)
-    probe_from = from_dt - timedelta(days=400)
+    probe_from = from_dt - timedelta(days=warmup_days)
 
-    df = _store.read_candles(instrument, timeframe, probe_from, to_dt)
+    df = _store.read_candles(instrument, config.candle_timeframe, probe_from, to_dt)
     if df.empty:
         return []
 
+    agg = (CandleAggregator(strategy_tf)
+           if strategy_tf != config.candle_timeframe else None)
     strategy = LRExtremaStrategy(instrument, params)
     candles_since_train = 0
     results = []
 
     for _, row in df.iterrows():
         candle = row.to_dict()
+        if agg is not None:
+            candle = agg.add(candle)
+            if candle is None:
+                continue
         strategy._candles.append(candle)
         candles_since_train += 1
 
@@ -263,9 +285,9 @@ with st.sidebar:
         default_instruments = [s for s in config.watchlist if s in available]
     else:
         st.success("Kite connected")
-        available = config.watchlist + config.interested
-        # Default to watchlist only — matches backtest.py; interested are selectable but opt-in
-        default_instruments = config.watchlist
+        # Filter falsy entries — a dangling "- " in the YAML list yields None
+        available = [s for s in config.watchlist if s]
+        default_instruments = available
 
     col_reconnect, _ = st.columns([1, 2])
     if col_reconnect.button("Reconnect Kite", use_container_width=True):
@@ -278,30 +300,20 @@ with st.sidebar:
         key="instruments_" + "_".join(sorted(default_instruments)),
     )
 
-    with st.expander("Strategy params", expanded=False):
-        p = config.strategy_config("lr_extrema")
-        warmup      = st.number_input("warmup_bars",    value=int(p.get("warmup_bars", 200)),     step=10)
-        lookback    = st.number_input("lookback_bars",  value=int(p.get("lookback_bars", 600)),   step=50)
-        threshold   = st.slider(      "threshold",      0.50, 0.99, float(p.get("threshold", 0.70)), 0.01)
-        profit_pct  = st.number_input("profit_pct",     value=float(p.get("profit_pct", 3.0)),    step=0.5)
-        trail_pct   = st.number_input("trail_pct",      value=float(p.get("trail_pct",  1.5)),    step=0.25)
-        stop_pct    = st.number_input("stop_pct",       value=float(p.get("stop_pct", 3.0)),      step=0.5)
-        retrain     = st.number_input("retrain_every",  value=int(p.get("retrain_every", 50)),     step=5)
-        extrema_ord = st.number_input("extrema_order",  value=int(p.get("extrema_order", 5)),      step=1)
-        tc1, tc2 = st.columns(2)
-        trading_start = tc1.text_input("trading_start", value=p.get("trading_start", "09:15"))
-        trading_end   = tc2.text_input("trading_end",   value=p.get("trading_end",   "15:30"))
-        hold_bars   = st.number_input("hold_bars",      value=int(p.get("hold_bars", 150)),        step=10, min_value=1)
-        st.caption("Dual-signal params")
-        sell_threshold       = st.slider("sell_threshold",        0.50, 0.99, float(p.get("sell_threshold", 0.65)),  0.01)
-        sell_min_pct         = st.number_input("sell_min_pct",    value=float(p.get("sell_min_pct", 2.0)),   step=0.5, min_value=0.5)
-        veto_threshold       = st.slider("veto_threshold",        0.30, 0.90, float(p.get("veto_threshold", 0.50)),  0.01)
-        min_hold_before_exit = st.number_input("min_hold_before_exit", value=int(p.get("min_hold_before_exit", 3)), step=1, min_value=1)
-        volume_ma_bars       = st.number_input("volume_ma_bars",  value=int((p.get("features") or {}).get("volume_ma_bars", 20)),    step=5, min_value=5)
-        st.caption("Entry filters")
-        entry_min_volume_ratio      = st.number_input("entry_min_volume_ratio",      value=float(p.get("entry_min_volume_ratio", 0.0)),   step=0.1,  min_value=0.0, help="Block entry if volume_ratio < this (0 = disabled)")
-        entry_min_norm_price        = st.number_input("entry_min_norm_price",        value=float(p.get("entry_min_norm_price", 0.0)),     step=0.05, min_value=0.0, max_value=1.0, help="Block entry if norm_price < this (0 = disabled)")
-        entry_require_prior_decline = st.checkbox("entry_require_prior_decline", value=bool(p.get("entry_require_prior_decline", False)), help="Block entry if 20-bar return slope is flat/rising")
+    # No param overrides in the UI — config/config.yaml is the source of truth.
+    # The run uses global strategies.lr_extrema deep-merged with per_stock_params
+    # (incl. per-stock timeframe), exactly like backtest.py.
+    with st.expander("Strategy params (read-only, from config)", expanded=False):
+        st.caption(
+            "Params come from `config/config.yaml` — global `strategies.lr_extrema` "
+            "merged with `per_stock_params`. Edit the YAML and rerun to change them."
+        )
+        _tf_rows = [
+            {"Instrument": s, "Timeframe": config.strategy_timeframe(s)}
+            for s in config.watchlist if s
+        ]
+        st.dataframe(pd.DataFrame(_tf_rows), hide_index=True,
+                     use_container_width=True, height=240)
 
     run_clicked = st.button(
         "Run Backtest",
@@ -324,28 +336,15 @@ if run_clicked:
         st.error("Select at least one instrument.")
         st.stop()
 
-    params = {
-        "enabled": True,
-        "warmup_bars":    int(warmup),
-        "lookback_bars":  int(lookback),
-        "threshold":      float(threshold),
-        "profit_pct":     float(profit_pct),
-        "trail_pct":      float(trail_pct),
-        "stop_pct":       float(stop_pct),
-        "retrain_every":       int(retrain),
-        "extrema_order":       int(extrema_ord),
-        "trading_start":       trading_start,
-        "trading_end":         trading_end,
-        "hold_bars":                   int(hold_bars),
-        "sell_threshold":              float(sell_threshold),
-        "sell_min_pct":                float(sell_min_pct),
-        "veto_threshold":              float(veto_threshold),
-        "min_hold_before_exit":        int(min_hold_before_exit),
-        "features":                    {"volume_ma_bars": int(volume_ma_bars)},
-        "entry_min_volume_ratio":      float(entry_min_volume_ratio),
-        "entry_min_norm_price":        float(entry_min_norm_price),
-        "entry_require_prior_decline": bool(entry_require_prior_decline),
-    }
+    # Mirror backtest.py exactly: global config params + per-stock deep-merged
+    # overrides (incl. aggregated timeframes). No UI-side param mutation.
+    params = config.strategy_config("lr_extrema")
+    _stock_overrides = (config._data.get("per_stock_params") or {})
+    per_symbol_params = {
+        sym: config.get_strategy_params(sym, "lr_extrema")
+        for sym in selected_instruments
+        if _stock_overrides.get(sym, {}).get("lr_extrema")
+    } or None
     from_dt = datetime.combine(from_date, datetime.min.time())
     to_dt   = datetime.combine(to_date,   datetime.min.time()).replace(hour=23, minute=59)
 
@@ -363,8 +362,10 @@ if run_clicked:
     with st.spinner("Running backtest…"):
         try:
             trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt,
-                                  progress_callback=_on_progress)
+                                  progress_callback=_on_progress,
+                                  per_symbol_params=per_symbol_params)
             _progress_bar.progress(1.0, text="Done")
+            _read_candles_cached.clear()  # run may have fetched fresh candles
             st.session_state["trades"]      = trades
             st.session_state["from_dt"]     = from_dt
             st.session_state["to_dt"]       = to_dt
@@ -417,10 +418,19 @@ with tab1:
 
     st.divider()
 
-    # ── equity curve ──
     df_t = pd.DataFrame(trades).sort_values("entry_date").reset_index(drop=True)
     df_t["cum_pnl"] = df_t["pnl"].cumsum()
+    # Compute Capital on df_t so Tab 2's df_inst (derived from df_t) also has it
+    df_t["Capital"] = config.total_capital + df_t["pnl"].cumsum().shift(1, fill_value=0)
 
+
+# Fragment: chart box-select / point-click / row-select interactions rerun only
+# this block instead of the whole script (a full rerun rebuilds Tab 2's
+# candlestick figure — the expensive part). Row selection still calls
+# st.rerun() (app scope) so the highlight syncs to the Tab 2 chart.
+@st.fragment
+def _render_tab1_trades():
+    # ── equity curve ──
     # Build a continuous step so the curve shows drawdown between trades too
     xs = df_t["entry_date"].tolist()
     ys = df_t["cum_pnl"].tolist()
@@ -534,9 +544,6 @@ with tab1:
         invested = row["entry"] * row["qty"]
         return row["pnl"] / invested * 100 if invested else 0.0
 
-    # Compute Capital on df_t so Tab 2's df_inst (derived from df_t) also has it
-    df_t["Capital"] = config.total_capital + df_t["pnl"].cumsum().shift(1, fill_value=0)
-
     df_display = df_t.copy()
     df_display["Hold (d)"] = df_t.apply(_hold_days, axis=1)
     df_display["Candles"]  = df_t["held_candles"].fillna(0).astype(int) if "held_candles" in df_t.columns else 0
@@ -602,17 +609,24 @@ with tab1:
             st.rerun()
 
 
+with tab1:
+    _render_tab1_trades()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Tab 2 — Stock Chart
 # ════════════════════════════════════════════════════════════════════════════
 
-with tab2:
+# Fragment: instrument switch, signal toggle, chart clicks and row selects rerun
+# only this block — the candlestick rebuild no longer drags Tab 1/3 along.
+@st.fragment
+def _render_tab2():
     instruments_with_trades = sorted({t["instrument"] for t in trades}) if trades else []
     chart_options = sorted(set(instruments_with_trades + bt_instruments))
 
     if not chart_options:
         st.info("Run a backtest first to populate the chart.")
-        st.stop()
+        return
 
     # Fixed persistent selection index
     current_inst_stored = st.session_state.get("selected_inst_chart", chart_options[0])
@@ -628,6 +642,8 @@ with tab2:
         key="chart_inst_selector"
     )
     st.session_state["selected_inst_chart"] = selected_inst
+    st.caption(f"Strategy timeframe: **{config.strategy_timeframe(selected_inst)}** "
+               "(chart candles stay 15m)")
 
     show_signals = st.checkbox(
         "Show model signals",
@@ -641,31 +657,50 @@ with tab2:
         ),
     )
 
-    df_candles = store.read_candles(selected_inst, config.candle_timeframe, from_dt, to_dt)
+    df_candles = _read_candles_cached(selected_inst, config.candle_timeframe, from_dt, to_dt)
 
     if df_candles.empty:
         st.warning(f"No candles cached for **{selected_inst}** in this range. "
                    "Run a backtest with Kite connected to fetch and cache candles.")
-        st.stop()
+        return
+
+    # Display-only downsample: long ranges make the 15m candlestick payload huge
+    # and the browser re-renders it on every interaction. Trades, signals and
+    # tables keep full-resolution data — only the plotted OHLCV is coarsened.
+    _span_days = (to_dt - from_dt).days
+    if _span_days > 365:
+        _ds_rule, _ds_label = "1D", "daily"
+    elif _span_days > 90:
+        _ds_rule, _ds_label = "60min", "hourly"
+    else:
+        _ds_rule, _ds_label = None, None
+    if _ds_rule:
+        df_plot = (
+            df_candles.set_index("timestamp")
+            .resample(_ds_rule, offset="15min" if _ds_rule == "60min" else None)
+            .agg({"open": "first", "high": "max", "low": "min",
+                  "close": "last", "volume": "sum"})
+            .dropna(subset=["open"])
+            .reset_index()
+        )
+        st.caption(f"Chart downsampled to {_ds_label} bars for display "
+                   f"({_span_days}-day range) — trades, signals and tables use full 15m data.")
+    else:
+        df_plot = df_candles
 
     _signal_log: list[dict] = []
     if show_signals:
         import json
-        _probe_params = {
-            "warmup_bars": int(warmup), "lookback_bars": int(lookback),
-            "threshold": float(threshold), "profit_pct": float(profit_pct),
-            "trail_pct": float(trail_pct), "stop_pct": float(stop_pct),
-            "retrain_every": int(retrain), "extrema_order": int(extrema_ord),
-            "hold_bars": int(hold_bars), "sell_threshold": float(sell_threshold),
-            "sell_min_pct": float(sell_min_pct), "veto_threshold": float(veto_threshold),
-            "min_hold_before_exit": int(min_hold_before_exit),
-            "features": {"volume_ma_bars": int(volume_ma_bars)},
-        }
+        # Config is the source of truth — per-stock merged params + timeframe,
+        # matching what the backtest run itself used.
+        _probe_params = config.get_strategy_params(selected_inst, "lr_extrema")
+        _probe_tf = config.strategy_timeframe(selected_inst)
         with st.spinner("Computing model signals…"):
             _signal_log = _run_signal_probe(
-                store, selected_inst, config.candle_timeframe,
+                store, selected_inst, _probe_tf,
                 json.dumps(_probe_params, sort_keys=True),
                 from_dt.isoformat(), to_dt.isoformat(),
+                config.warmup_days_for(selected_inst),
             )
         _sig_counts = {t: sum(1 for e in _signal_log if e["type"] == t)
                        for t in ("ENTRY", "BLOCKED", "VETOED", "PATTERN_TOP")}
@@ -709,11 +744,11 @@ with tab2:
 
     # Candlestick
     fig.add_trace(go.Candlestick(
-        x=df_candles["timestamp"],
-        open=df_candles["open"],
-        high=df_candles["high"],
-        low=df_candles["low"],
-        close=df_candles["close"],
+        x=df_plot["timestamp"],
+        open=df_plot["open"],
+        high=df_plot["high"],
+        low=df_plot["low"],
+        close=df_plot["close"],
         name="OHLC",
         increasing_line_color="#2ecc71",
         decreasing_line_color="#e74c3c",
@@ -724,11 +759,11 @@ with tab2:
     # Volume bars (colored by direction)
     vol_colors = [
         "#2ecc71" if c >= o else "#e74c3c"
-        for o, c in zip(df_candles["open"], df_candles["close"])
+        for o, c in zip(df_plot["open"], df_plot["close"])
     ]
     fig.add_trace(go.Bar(
-        x=df_candles["timestamp"],
-        y=df_candles["volume"],
+        x=df_plot["timestamp"],
+        y=df_plot["volume"],
         name="Volume",
         marker_color=vol_colors,
         showlegend=False,
@@ -883,9 +918,11 @@ with tab2:
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
     )
 
-    # Hide non-market hours and weekends so candles don't span 24 h
+    # Hide non-market hours and weekends so candles don't span 24 h.
+    # Skip the hour break when bars were downsampled to daily — those are
+    # stamped at midnight, which the hour break would hide entirely.
     _rangebreaks = [dict(bounds=["sat", "mon"])]
-    if config.candle_timeframe != "day":
+    if config.candle_timeframe != "day" and _ds_rule != "1D":
         _rangebreaks.append(dict(bounds=[15.5, 9.25], pattern="hour"))
     fig.update_xaxes(rangebreaks=_rangebreaks, rangeslider_visible=False)
 
@@ -994,6 +1031,10 @@ with tab2:
             if st.session_state.get("_hl_trade") != _new_hl:
                 st.session_state["_hl_trade"] = _new_hl
                 st.rerun()
+
+
+with tab2:
+    _render_tab2()
 
 
 # ════════════════════════════════════════════════════════════════════════════

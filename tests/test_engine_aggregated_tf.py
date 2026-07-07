@@ -32,7 +32,7 @@ _CONFIG_DATA = {
         "trading_start": "09:15", "trading_end": "15:30",
     },
     "strategies": {"lr_extrema": {}},
-    "watchlist": [], "interested": [],
+    "watchlist": [],
     "data": {"db_path": "unused.db", "historical_cache_days": 5},
 }
 

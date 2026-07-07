@@ -240,11 +240,6 @@ class Config:
     @property
     def watchlist(self) -> list[str]:
         return self._data.get("watchlist", [])
-    
-
-    @property
-    def interested(self) -> list[str]:
-        return self._data.get("interested", [])
 
     def strategy_config(self, name: str) -> dict:
         return flatten_strategy_params(self._data["strategies"].get(name, {}))

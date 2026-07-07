@@ -75,8 +75,6 @@ capital:
   daily_loss_limit_pct: 10.0
 watchlist:
   - NSE:SYMBOL
-interested:          # instruments shown in UI but not traded
-  - NSE:SYMBOL
 strategies:
   <name>:
     enabled: true | false
@@ -232,8 +230,8 @@ metrics = compute_metrics(trades, capital)
   - **Box-select on equity curve** → filters trade table to the selected date range
   - **Click on entry/exit marker** → highlights the corresponding trade row in the table
 - Tab 3 hold-duration scatter uses candles on x-axis; hours shown in hover tooltip
-- `lookback_bars` is exposed as a sidebar input (same as `warmup_bars`, `threshold`, etc.)
-- Default instrument selection is `watchlist` only (not `watchlist + interested`) — matches `backtest.py` behaviour
+- **No strategy-param inputs** — config/config.yaml is the source of truth; the run uses global params deep-merged with `per_stock_params` (incl. per-stock `timeframe`), exactly like `backtest.py`. The sidebar shows a read-only per-stock timeframe table.
+- Instrument selection defaults to the full `watchlist` — matches `backtest.py` behaviour
 
 ---
 
@@ -390,8 +388,7 @@ The screener is purely quantitative. When shortlisting, also consider:
 
 ### Watchlist management
 - `watchlist` in config.yaml — stocks actively traded by the system
-- `interested` in config.yaml — stocks shown in the UI for monitoring but not traded
-- Move a stock from `interested` to `watchlist` only after calibration + paper trading validation
+- Add a stock to `watchlist` only after calibration + paper trading validation
 
 ---
 

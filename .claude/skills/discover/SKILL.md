@@ -92,8 +92,6 @@ the screen ret/WR only in screen mode.)
 ## Step 4 — Advisory follow-up (do NOT act without confirmation)
 
 This skill never edits the watchlist. After printing the shortlist + the single best candidate:
-- Offer to add the top FIT candidate(s) to the `interested:` list in `config.yaml` (monitored,
-  **not** traded) — only if confirmed.
 - Suggest `/calibrate <SYMBOL>` then 2–4 weeks of paper trading before promoting any name to the
   traded `watchlist`.
 
