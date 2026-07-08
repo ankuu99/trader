@@ -889,20 +889,38 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     )
     _exit_reasons = _read_db(
         config.db_path,
-        "SELECT instrument, exit_reason FROM signals "
-        "WHERE signal_type='EXIT' AND exit_reason IS NOT NULL ORDER BY logged_at",
+        "SELECT instrument, logged_at, exit_reason FROM signals "
+        "WHERE signal_type='EXIT' ORDER BY logged_at",
     )
-    # Assign each instrument's exit reasons to its SELL legs in chronological order.
-    from collections import defaultdict, deque
-    _reason_q: dict[str, deque] = defaultdict(deque)
+    # Match each SELL leg to its own EXIT signal by nearest timestamp. A positional
+    # queue join drifts whenever a SELL has no recorded reason (older exits predate
+    # exit_reason logging) or a non-fill EXIT signal has no SELL — nearest-time keeps
+    # every SELL anchored to the exact signal it came from. EXIT signals still carry a
+    # NULL reason for the pre-logging exits, so those SELLs correctly show blank.
+    from collections import defaultdict
+
+    def _parse_ts(_s):
+        try:
+            return datetime.fromisoformat(_s)
+        except (TypeError, ValueError):
+            return None
+
+    _exit_sigs: dict[str, list] = defaultdict(list)
     for _r in _exit_reasons:
-        _reason_q[_r["instrument"]].append(_r["exit_reason"])
+        _dt = _parse_ts(_r["logged_at"])
+        if _dt is not None:
+            _exit_sigs[_r["instrument"]].append((_dt, _r["exit_reason"]))
     _orders_for_match = []
     for _o in _raw_orders:
         _rec = {"instrument": _o["instrument"], "direction": _o["direction"],
                 "quantity": _o["quantity"], "price": _o["price"], "ts": _o["placed_at"]}
-        if _o["direction"] == "SELL" and _reason_q[_o["instrument"]]:
-            _rec["exit_reason"] = _reason_q[_o["instrument"]].popleft()
+        if _o["direction"] == "SELL":
+            _sigs = _exit_sigs.get(_o["instrument"])
+            _odt = _parse_ts(_o["placed_at"])
+            if _sigs and _odt is not None:
+                _dt, _reason = min(_sigs, key=lambda _s: abs((_s[0] - _odt).total_seconds()))
+                if _reason is not None:
+                    _rec["exit_reason"] = _reason
         _orders_for_match.append(_rec)
     _matched = match_trades(_orders_for_match)
     # FIFO matched on the FULL order set above; NOW restrict to the date window.
