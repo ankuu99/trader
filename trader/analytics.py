@@ -183,6 +183,38 @@ def drawdown_stats(trades: list[dict], capital: float) -> dict:
     }
 
 
+def position_entry_legs(open_positions: list[dict]) -> dict[str, dict]:
+    """Scale-in lot ladder for still-open positions. For each open position with
+    at least one add-on lot (from the persisted ``addon_lots`` JSON), returns:
+        {instrument: {legs: [{qty, price, time, tier}], addon_qty, parent_qty,
+                      total_qty, avg_cost}}
+    tier 0 (the parent) is included as the first leg so the UI can render the
+    whole ladder. Positions without add-ons are omitted."""
+    out: dict[str, dict] = {}
+    for p in open_positions:
+        lots = p.get("addon_lots") or []
+        if not lots:
+            continue
+        inst = p["instrument"]
+        total_qty = int(p.get("quantity") or 0)
+        addon_qty = sum(int(l.get("qty") or 0) for l in lots)
+        parent_qty = max(total_qty - addon_qty, 0)
+        legs = [{"qty": parent_qty, "price": p.get("entry_price"),
+                 "time": p.get("entry_time"), "tier": 0}]
+        legs += [
+            {"qty": int(l.get("qty") or 0), "price": l.get("price"),
+             "time": l.get("date"), "tier": i + 1}
+            for i, l in enumerate(lots)
+        ]
+        cost = sum((l["price"] or 0.0) * l["qty"] for l in legs)
+        out[inst] = {
+            "legs": legs, "addon_qty": addon_qty, "parent_qty": parent_qty,
+            "total_qty": total_qty,
+            "avg_cost": (cost / total_qty) if total_qty else 0.0,
+        }
+    return out
+
+
 def position_exit_legs(orders: list[dict], open_positions: list[dict]) -> dict[str, dict]:
     """Scale-out lifecycle for still-open positions (#14). For each open
     position, collect the SELL legs already taken against the open lot (sells

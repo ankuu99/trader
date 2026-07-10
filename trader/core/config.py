@@ -359,6 +359,33 @@ class Config:
         pct = float(self._data["risk"].get("max_capital_per_stock_pct", 100.0))
         return self.total_capital * pct / 100
 
+    # --- Scale-in (portfolio-level geometric add-ons) ---
+
+    @property
+    def scale_in_enabled(self) -> bool:
+        return bool(self._data.get("scale_in", {}).get("enabled", False))
+
+    @property
+    def scale_in_fraction_pct(self) -> float:
+        """Add-on lot notional as % of the PREVIOUS lot's notional (geometric decay)."""
+        return float(self._data.get("scale_in", {}).get("fraction_pct", 25.0))
+
+    @property
+    def scale_in_max_addons(self) -> int:
+        return int(self._data.get("scale_in", {}).get("max_addons", 3))
+
+    @property
+    def scale_in_min_spacing_days(self) -> int:
+        """Minimum calendar days between an add-on and the last investment (entry or add-on)."""
+        return int(self._data.get("scale_in", {}).get("min_spacing_days", 1))
+
+    @property
+    def scale_in_budget(self) -> float:
+        """Scale-in pool cap in ₹ — budget_pct % of total capital, ON TOP of base capital.
+        Base entry sizing never sees this pool; add-ons never consume base capital."""
+        pct = float(self._data.get("scale_in", {}).get("budget_pct", 20.0))
+        return self.total_capital * pct / 100
+
     @property
     def product(self) -> str:
         return "CNC"

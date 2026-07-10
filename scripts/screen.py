@@ -134,6 +134,8 @@ def _run_single(job: tuple) -> dict | None:
     symbol, token, params, symbol_to_token, from_dt, to_dt, db_path, total_capital, timeframe = job
     if timeframe:
         config._data["candle_timeframe"] = timeframe
+    # Screening evaluates raw per-stock fit — always un-levered (no scale-in).
+    config._data.setdefault("scale_in", {})["enabled"] = False
     store = Store(db_path)
     try:
         trades = run_backtest(None, store, [symbol], symbol_to_token, params, from_dt, to_dt)

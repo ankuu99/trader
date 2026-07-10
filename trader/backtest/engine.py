@@ -61,6 +61,7 @@ def run_backtest(
     progress_callback=None,
     per_symbol_params: dict[str, dict] | None = None,
     strategy_cls=None,
+    model_scores: dict[str, list[dict]] | None = None,
 ) -> list[dict]:
     """
     Replay historical candles through LRExtremaStrategy and return the trades list.
@@ -76,6 +77,11 @@ def run_backtest(
         params:           LRExtremaStrategy parameter dict (bypasses registry)
         from_dt:          Backtest start datetime
         to_dt:            Backtest end datetime
+        model_scores:     Optional sink dict — when provided, the engine appends
+                          {timestamp, close, p_min, p_max} per strategy-TF bar per
+                          symbol (via strategy.score_current(), pure — no state
+                          side effects). In-memory only; the SQLite model_scores
+                          table remains live-only. No cost when omitted.
 
     Returns:
         List of trade dicts with keys:
@@ -86,6 +92,40 @@ def run_backtest(
 
     open_positions: dict[str, dict] = {}
     trades: list[dict] = []
+
+    def _consume_lots(symbol: str, pos: dict, sell_qty: int, exit_price: float,
+                      reason: str, exit_date) -> None:
+        """FIFO-consume sell_qty shares from the position's lots, appending one
+        trade record per lot slice (per-lot entry price/date → correct per-lot
+        costs and MIS/CNC detection). Mutates pos['lots'] and pos['qty'].
+        Used by every exit path: strategy SELL (full/partial), intrabar SL/target,
+        tick trailing, and OPEN@END (the caller picks exit_price/reason)."""
+        remaining = sell_qty
+        while remaining > 0 and pos["lots"]:
+            lot = pos["lots"][0]
+            take = min(remaining, lot["qty"])
+            net, cost, product = _net_pnl(
+                lot["entry"], exit_price, take, lot["entry_date"], exit_date
+            )
+            trades.append({
+                "instrument": symbol,
+                "entry": lot["entry"],
+                "exit": exit_price,
+                "qty": take,
+                "pnl": net,
+                "cost": cost,
+                "product": product,
+                "reason": reason,
+                "entry_date": lot["entry_date"],
+                "exit_date": exit_date,
+                "held_candles": lot.get("candle_count", 0),
+                "addon_tier": lot.get("tier", 0),
+            })
+            lot["qty"] -= take
+            remaining -= take
+            if lot["qty"] == 0:
+                pos["lots"].pop(0)
+        pos["qty"] = max(0, pos["qty"] - sell_qty)
     current_ts: list = [None]
     pending_exit_reasons: dict[str, str] = {}  # symbol → exit reason for next strategy EXIT fill
     # Populated after candle fetch; closure captures by reference so handle_order_update
@@ -141,26 +181,10 @@ def run_backtest(
             # remainder exits later via trailing/hold/stale/hard-stop.
             is_partial = 0 < quantity < pos["qty"]
             sold_qty = quantity if is_partial else pos["qty"]
-            net, cost, product = _net_pnl(
-                pos["entry"], fill_price, sold_qty, pos["entry_date"], current_ts[0]
-            )
             _reason = pending_exit_reasons.pop(instrument, "STRATEGY")
-            trades.append({
-                "instrument": instrument,
-                "entry": pos["entry"],
-                "exit": fill_price,
-                "qty": sold_qty,
-                "pnl": net,
-                "cost": cost,
-                "product": product,
-                "reason": _reason,
-                "entry_date": pos["entry_date"],
-                "exit_date": current_ts[0],
-                "held_candles": pos.get("candle_count", 0),
-            })
+            _consume_lots(instrument, pos, sold_qty, fill_price, _reason, current_ts[0])
             s = strategy_map.get(instrument)
             if is_partial:
-                pos["qty"] -= sold_qty
                 risk.reduce_position(instrument, sold_qty, fill_price)
                 if s:
                     s.on_order_update({**update, "partial": True})
@@ -169,6 +193,23 @@ def run_backtest(
                 risk.close_position(instrument, fill_price)
                 if s:
                     s.on_order_update(update)
+            return
+
+        # BUY fill — scale-in add-on lot on an existing position: append the lot,
+        # grow the blended qty, leave entry/SL/target and the parent candle_count
+        # untouched (all exit anchors stay on the original entry).
+        if update.get("addon") and instrument in open_positions:
+            pos = open_positions[instrument]
+            pos["lots"].append({
+                "entry": fill_price, "qty": quantity, "entry_date": current_ts[0],
+                "tier": len(pos["lots"]), "candle_count": 0,
+            })
+            pos["qty"] += quantity
+            risk.on_order_filled(instrument, fill_price, quantity,
+                                 addon=True, fill_ts=current_ts[0])
+            s = strategy_map.get(instrument)
+            if s:
+                s.on_order_update(update)  # no-op for addon fills (state stays parent-anchored)
             return
 
         # BUY fill — open new position
@@ -204,8 +245,12 @@ def run_backtest(
             "qty": quantity,
             "entry_date": current_ts[0],
             "candle_count": 0,
+            # lots[0] = parent; scale-in add-ons append here. All exit paths emit
+            # one trade record per lot via _consume_lots.
+            "lots": [{"entry": fill_price, "qty": quantity,
+                      "entry_date": current_ts[0], "tier": 0, "candle_count": 0}],
         }
-        risk.on_order_filled(instrument, fill_price, quantity)
+        risk.on_order_filled(instrument, fill_price, quantity, fill_ts=current_ts[0])
         s = strategy_map.get(instrument)
         if s:
             s.on_order_update(update)
@@ -473,6 +518,19 @@ def run_backtest(
         if strategy is None:
             return
         signal = strategy.on_candle(bar)
+        # Per-candle model-score collection (UI explainability). score_current is
+        # pure and position-independent, so this reflects the exact model the run
+        # traded with — including its retrain cadence and warmup carry-over.
+        if model_scores is not None:
+            _score_fn = getattr(strategy, "score_current", None)
+            _score = _score_fn() if _score_fn is not None else None
+            if _score is not None:
+                model_scores.setdefault(symbol, []).append({
+                    "timestamp": bar.get("timestamp"),
+                    "close": bar.get("close"),
+                    "p_min": _score[0],
+                    "p_max": _score[1],
+                })
         if signal is None:
             return
         if signal.signal_type == "EXIT":
@@ -534,6 +592,8 @@ def run_backtest(
         # Done after order fill so the entry candle itself counts as 1.
         if symbol in open_positions:
             open_positions[symbol]["candle_count"] += 1
+            for _lot in open_positions[symbol]["lots"]:
+                _lot["candle_count"] += 1
 
         # Intrabar SL/target simulation — always active in backtest.
         # Checks candle low/high against stored SL/target prices so exits fire
@@ -564,23 +624,8 @@ def run_backtest(
                     exit_price = min(pos["sl"], candle["open"])
                 else:
                     exit_price = max(pos["target"], candle["open"])
-                net, cost, product = _net_pnl(
-                    pos["entry"], exit_price, pos["qty"],
-                    pos["entry_date"], candle["timestamp"]
-                )
-                trades.append({
-                    "instrument": symbol,
-                    "entry": pos["entry"],
-                    "exit": exit_price,
-                    "qty": pos["qty"],
-                    "pnl": net,
-                    "cost": cost,
-                    "product": product,
-                    "reason": reason,
-                    "entry_date": pos["entry_date"],
-                    "exit_date": candle["timestamp"],
-                    "held_candles": pos.get("candle_count", 0),
-                })
+                _full_qty = pos["qty"]
+                _consume_lots(symbol, pos, _full_qty, exit_price, reason, candle["timestamp"])
                 del open_positions[symbol]
                 risk.close_position(symbol, exit_price)
                 # Sync strategy state so it doesn't attempt a duplicate exit
@@ -592,7 +637,7 @@ def run_backtest(
                         "direction": "SELL",
                         "signal_type": "EXIT",
                         "exit_reason": reason,  # "SL" or "TARGET" — used by strategy for cooldown
-                        "quantity": pos["qty"],
+                        "quantity": _full_qty,
                         "price": exit_price,
                         "fill_price": exit_price,
                     })
@@ -631,30 +676,16 @@ def run_backtest(
                     # fills at the closing price (the last tradeable price of the day).
                     exit_price = candle["close"] if _is_eod_tick else min(tick_price, candle["open"])
                     tick_reason = getattr(tick_signal, "exit_reason", None) or "TRAILING"
-                    net, cost, product = _net_pnl(
-                        pos["entry"], exit_price, pos["qty"],
-                        pos["entry_date"], candle["timestamp"]
-                    )
-                    trades.append({
-                        "instrument": symbol,
-                        "entry": pos["entry"],
-                        "exit": exit_price,
-                        "qty": pos["qty"],
-                        "pnl": net,
-                        "cost": cost,
-                        "product": product,
-                        "reason": tick_reason,
-                        "entry_date": pos["entry_date"],
-                        "exit_date": candle["timestamp"],
-                        "held_candles": pos.get("candle_count", 0),
-                    })
+                    _full_qty = pos["qty"]
+                    _consume_lots(symbol, pos, _full_qty, exit_price, tick_reason,
+                                  candle["timestamp"])
                     risk.close_position(symbol, exit_price)
                     strategy.on_order_update({
                         "status": "COMPLETE",
                         "instrument": symbol,
                         "direction": "SELL",
                         "signal_type": "EXIT",
-                        "quantity": pos["qty"],
+                        "quantity": _full_qty,
                         "price": exit_price,
                         "fill_price": exit_price,
                     })
@@ -675,23 +706,8 @@ def run_backtest(
 
     # Close any remaining open positions at last known price
     for symbol, pos in list(open_positions.items()):
-        last_close = pos["entry"]  # conservative: assume no price change
-        net, cost, product = _net_pnl(
-            pos["entry"], last_close, pos["qty"], pos["entry_date"], to_dt
-        )
-        trades.append({
-            "instrument": symbol,
-            "entry": pos["entry"],
-            "exit": last_close,
-            "qty": pos["qty"],
-            "pnl": net,
-            "cost": cost,
-            "product": product,
-            "reason": "OPEN@END",
-            "entry_date": pos["entry_date"],
-            "exit_date": to_dt,
-            "held_candles": pos.get("candle_count", 0),
-        })
+        last_close = pos["entry"]  # conservative: assume no price change from parent entry
+        _consume_lots(symbol, pos, pos["qty"], last_close, "OPEN@END", to_dt)
 
     logger.info(
         "Backtest complete | total=%.1fs | %d trades | symbols=%d",

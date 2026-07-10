@@ -86,10 +86,53 @@ risk:
   default_sl_pct: 2               # fallback SL% when signal has no stop_loss_hint
   risk_reward: 4                  # fallback target multiplier when signal has no target_price
   max_capital_per_stock_pct: 25.0
+scale_in:                         # portfolio-level geometric add-ons (see Scale-in section)
+  enabled: true | false
+  fraction_pct: 25                # add-on notional = % of the PREVIOUS lot's notional
+  max_addons: 3                   # max add-on lots per position
+  min_spacing_days: 1             # calendar days between investments in the same position
+  budget_pct: 20                  # add-on pool = % of capital.total, ON TOP of base capital
 data:
   db_path: data/market.db
   historical_cache_days: 90
 ```
+
+---
+
+## Scale-in (geometric add-ons)
+
+Portfolio-level feature (validated by the 2020–2026 counterfactual, 2026-07-07): while in a
+position, an in-position ENTRY signal that would fill ≥`min_spacing_days` after the last
+investment buys an add-on lot sized `fraction_pct`% of the **previous** lot's notional
+(geometric decay), up to `max_addons` tiers. All exits sell the entire blended position.
+
+- **Signal source** — `lr_extrema` already emits stateless in-position ENTRY signals;
+  `RiskManager.validate()` routes them to `_validate_addon()` when `scale_in.enabled`
+  (otherwise rejects `already_in_position` as before). Add-ons bypass `max_open_positions`
+  (not a new position) but honour halt/pause/pending checks. Reject reasons:
+  `addon_limit_reached`, `addon_spacing`, `addon_budget_exhausted`, `addon_qty_zero`,
+  `addon_no_state`.
+- **Budget pool on top of base capital** — add-on cost basis is tracked in
+  `RiskManager._scale_in_deployed` (capped at `budget_pct`% × total capital, including
+  in-flight add-on pendings) and never touches `_capital_deployed`, so base entry sizing is
+  unaffected. The cap is enforced at order approval on the signal price — next-open fill
+  gaps can overshoot it slightly (observed ~9% peak in the 2020–2026 validation run). In
+  live mode the account must actually hold the extra cash (startup logs a warning if not).
+- **STALE ANCHOR IS PARENT-FROZEN (critical invariant)** — add-on fills carry
+  `addon: True` through OrderManager dispatch; `lr_extrema.on_order_update` returns
+  immediately for them, so `_entry_price`, `_held_bars`, `_peak_close`, `_trailing_active`
+  never re-anchor to the blended entry. Re-anchoring would restart the stale runway on
+  falling-knife positions — the one failure mode that turns the brake into an enabler.
+  `pct_change` in the UI stays parent-anchored; unrealised P&L uses blended avg cost.
+- **Engine** — positions carry a `lots` list (lots[0] = parent); every exit path emits one
+  trade record per lot via `_consume_lots` (FIFO for partial scale-outs), with per-lot
+  costs/MIS-CNC detection and the `addon_tier` key (0 = parent).
+- **Persistence** — add-on lots live in the `open_positions.addon_lots` JSON column
+  (`store.add_position_lot`); parent entry_price/entry_time untouched. Restart seeding:
+  `risk.seed_position(parent)` + `risk.seed_scale_in(addon_lots)`.
+- **calibrate.py / screen.py force `scale_in.enabled=false`** — per-stock param search and
+  screening stay un-levered; validate scale-in via backtest.py / backtest_rolling.py.
+- No GTT is ever placed for add-on lots.
 
 ---
 
@@ -179,7 +222,8 @@ Key rules:
 - `seed_cumulative_pnl(pnl)` — called on startup in live mode to restore cumulative P&L from the `state` table
 - `cumulative_pnl` property — read-only access to `_cumulative_pnl`
 - `on_order_filled()` records deployed capital; `close_position()` frees it and adds to `_cumulative_pnl`
-- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`); surfaced in UI signals table
+- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`, plus the `addon_*` reasons); surfaced in UI signals table
+- **Scale-in**: when `scale_in.enabled`, an ENTRY on an already-held instrument routes to `_validate_addon()` — geometric sizing off the previous lot, separate budget pool (`_scale_in_deployed`, on top of base capital), daily spacing, tier cap. See the Scale-in section
 
 ---
 
@@ -189,7 +233,7 @@ Key rules:
 - **Live mode**: places order via `kite.place_order()` with `order_type=MARKET` (uses `market_protection=-1`) or `order_type=LIMIT` (uses `price=limit_price`); optionally places GTT OCO after BUY fill confirmation
 - **EOD cancellation (LIMIT mode)**: unfilled LIMIT orders are cancelled at day boundary — `clear_pending()` dispatches CANCELLED for each so strategy clears `_entry_price` and risk releases capital
 - GTT only placed on BUY/ENTRY orders, never on SELL/EXIT orders
-- Dispatched fill records include `signal_type` and `target_price` from the original Order so callbacks can distinguish entry vs exit fills
+- Dispatched fill records include `signal_type`, `target_price`, `partial` and `addon` from the original Order so callbacks can distinguish entry vs exit vs scale-out vs add-on fills (CANCELLED/REJECTED dispatches carry `addon` too — a cancelled add-on must never reset the parent position's strategy state)
 
 ---
 
@@ -210,7 +254,7 @@ metrics = compute_metrics(trades, capital)
 - **Daily loss limit is per-day** — `risk.reset_day()` is called at every day boundary, so a daily-loss-limit halt on one day does not carry over to subsequent days
 - SL/target prices come from the signal's `stop_loss_hint` / `target_price` (strategy-supplied), falling back to `trigger_price` / RR computation
 - `hold_bars` exits fire at candle close (time-based, actual close price used)
-- `store.clear_backtest_data()` — called by `backtest.py` only, not by engine
+- `store.clear_backtest_data()` — called at startup by `backtest.py`, `backtest_rolling.py` and `walk_forward.py` (never by the engine). **It wipes the entire local candle cache** — the next run re-fetches from Kite, so a valid access token is required after any of these scripts run
 
 **`compute_metrics` returns:** `total_trades, wins, losses, win_rate, money_weighted_win_rate, total_pnl, return_pct, avg_win, avg_loss, sharpe_proxy, max_drawdown, max_drawdown_pct`
 - `sharpe_proxy = mean(pnl) / std(pnl)` — relative ranking only, labelled "Sharpe*" in output
@@ -218,9 +262,11 @@ metrics = compute_metrics(trades, capital)
 - `max_drawdown` — largest peak-to-trough decline on the cumulative P&L equity curve (absolute ₹)
 - `max_drawdown_pct` — max_drawdown as % of capital
 - `kite=None` is supported — workers pass `kite=None` after candles are pre-fetched; engine operates in cache-only mode
+- `model_scores` (optional sink dict) — when passed, the engine appends `{timestamp, close, p_min, p_max}` per strategy-TF decision bar per symbol via `strategy.score_current()` (pure, position-independent — the exact model the run traded with, same retrain cadence). In-memory only: the SQLite `model_scores` table stays live-only; zero cost when omitted (backtest.py/calibrate.py don't pass it; scripts/ui.py does)
 
-**Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles`
-- `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END)
+**Trade record keys:** `instrument, entry, exit, qty, pnl, cost, product, reason, entry_date, exit_date, held_candles, addon_tier`
+- `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END); per-lot when scale-in add-ons exist
+- `addon_tier` — 0 = parent lot; 1..N = scale-in add-on lots (one record per lot, shared exit)
 
 **Reason values in trade records:** `SL`, `TARGET` (intrabar), `TRAILING` (trailing stop via on_tick), `STRATEGY` (strategy EXIT signal — hold_bars timeout), `PATTERN_TOP` (model detected local maximum while profitable), `OPEN@END`
 
@@ -229,6 +275,7 @@ metrics = compute_metrics(trades, capital)
 - Tab 2 (per-instrument) also has the `Capital` column; both tabs support chart interaction:
   - **Box-select on equity curve** → filters trade table to the selected date range
   - **Click on entry/exit marker** → highlights the corresponding trade row in the table
+- Tab 2 "Show model signals" adds a **per-candle P(min)/P(max) pane** (fixed 0..1 axis, threshold/veto/sell guides) plus crossing markers on the price chart. Scores prefer the backtest run's own `model_scores` sink (exact model output); the standalone `_run_signal_probe` (independent retrain, approximate) is the fallback when no run covers the instrument. Classification (`ENTRY`/`VETOED`/`PATTERN_TOP`) happens UI-side in `_classify_scores`
 - Tab 3 hold-duration scatter uses candles on x-axis; hours shown in hover tooltip
 - **No strategy-param inputs** — config/config.yaml is the source of truth; the run uses global params deep-merged with `per_stock_params` (incl. per-stock `timeframe`), exactly like `backtest.py`. The sidebar shows a read-only per-stock timeframe table.
 - Instrument selection defaults to the full `watchlist` — matches `backtest.py` behaviour

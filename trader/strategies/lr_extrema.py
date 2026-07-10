@@ -416,6 +416,14 @@ class LRExtremaStrategy(Strategy):
         self._pos.reset()
 
     def on_order_update(self, order: dict) -> None:
+        # Scale-in add-on fills change only quantity (tracked by RiskManager) — the
+        # staleness clock (_held_bars), gain anchor (_entry_price) and trailing state
+        # MUST stay frozen on the original entry. Re-anchoring to the blended (lower)
+        # entry would restart the stale runway exactly on falling-knife positions,
+        # turning the disaster brake into an enabler. Cancel/reject of an add-on is
+        # equally a no-op: the parent position state is untouched.
+        if order.get("addon"):
+            return
         super().on_order_update(order)
         status = order.get("status", "")
         signal_type = order.get("signal_type", "")

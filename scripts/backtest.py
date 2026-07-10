@@ -164,6 +164,7 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
             f"{t['entry']:>8.2f} {t['exit']:>8.2f} {t['qty']:>5} "
             f"₹{t.get('cost', 0.0):>7,.2f} ₹{t['pnl']:>9,.2f} {pnl_pct_str:>7} {cap_str:>10}  "
             f"{t.get('product','CNC'):<4}  {t['reason']}"
+            + (f" [addon T{t['addon_tier']}]" if t.get("addon_tier") else "")
         )
 
     # ANSI style definitions
@@ -292,6 +293,23 @@ def _print_summary(trades: list[dict], from_date: str, to_date: str):
         shown += s["count"]
         print(f"    {reason:<{name_w}} {s['count']:>3}t  wr:{wr:4.0f}%  ₹{s['pnl']:>9,.0f}  {bar:<20}  {avg_bars:>5.0f}b")
     print(f"    {'TOTAL':<{name_w}} {shown:>3}t")
+
+    # Scale-in summary — only when add-on lots exist in the trade list
+    addons = [t for t in trades if t.get("addon_tier")]
+    if addons:
+        parents = [t for t in trades if not t.get("addon_tier")]
+        print(f"  {'─'*W}")
+        print(f"  Scale-in (add-on lots): {len(addons)} lots on top of {len(parents)} parent records")
+        for tier in sorted({t["addon_tier"] for t in addons}):
+            tl = [t for t in addons if t["addon_tier"] == tier]
+            _wr = sum(1 for t in tl if t["pnl"] > 0) / len(tl) * 100
+            _avg_lot = sum(t["entry"] * t["qty"] for t in tl) / len(tl)
+            print(f"    tier {tier}: {len(tl):>4} lots  wr:{_wr:4.0f}%  "
+                  f"P&L ₹{sum(t['pnl'] for t in tl):>10,.0f}  avg lot ₹{_avg_lot:>8,.0f}")
+        addon_pnl = sum(t["pnl"] for t in addons)
+        parent_pnl = sum(t["pnl"] for t in parents)
+        uplift = f"  (uplift {addon_pnl / abs(parent_pnl) * 100:+.1f}%)" if parent_pnl else ""
+        print(f"    add-on P&L ₹{addon_pnl:,.0f}  vs parent P&L ₹{parent_pnl:,.0f}{uplift}")
 
     # Per-stock exit breakdown — one line per instrument
     _REASON_ABBREV = {

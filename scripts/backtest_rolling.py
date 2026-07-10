@@ -147,7 +147,8 @@ def main():
         for t in trades:
             t["window"] = label
         all_trades.extend(trades)
-        window_results.append({"window": label, **m})
+        addon_pnl = sum(t["pnl"] for t in trades if t.get("addon_tier"))
+        window_results.append({"window": label, "addon_pnl": addon_pnl, **m})
 
         print(
             f"{m['total_trades']:>3} trades | "
@@ -170,22 +171,25 @@ def _print_consolidated(results: list[dict], window: int, step: int):
         print("  No windows produced results.")
         return
 
+    _show_addons = any(r.get("addon_pnl") for r in results)
+    _addon_hdr = f" {'AddonP&L':>10}" if _show_addons else ""
     print(
         f"  {'Window':<25} {'Trades':>6} {'Win%':>6} "
-        f"{'AvgWin':>9} {'AvgLoss':>9} {'Net P&L':>11} {'Return%':>8} {'Sharpe*':>7}"
+        f"{'AvgWin':>9} {'AvgLoss':>9} {'Net P&L':>11} {'Return%':>8} {'Sharpe*':>7}{_addon_hdr}"
     )
     print(
         f"  {'-'*25} {'-'*6} {'-'*6} "
-        f"{'-'*9} {'-'*9} {'-'*11} {'-'*8} {'-'*7}"
+        f"{'-'*9} {'-'*9} {'-'*11} {'-'*8} {'-'*7}" + (f" {'-'*10}" if _show_addons else "")
     )
 
     for r in results:
         sign = "+" if r["total_pnl"] >= 0 else "-"
+        _addon_col = f" {r.get('addon_pnl', 0.0):>+10,.0f}" if _show_addons else ""
         print(
             f"  {r['window']:<25} {r['total_trades']:>6} {r['money_weighted_win_rate']:>5.1f}% "
             f"{r['avg_win']:>9,.0f} {r['avg_loss']:>9,.0f} "
             f" {sign}₹{abs(r['total_pnl']):>8,.0f} {r['return_pct']:>8.2f}% "
-            f"{r['sharpe_proxy']:>7.2f}"
+            f"{r['sharpe_proxy']:>7.2f}{_addon_col}"
         )
 
     profitable = [r for r in results if r["total_pnl"] > 0]
@@ -221,6 +225,7 @@ def _dump_csv(
     fields = [
         "window", "instrument", "entry_date", "exit_date",
         "entry", "exit", "qty", "cost", "pnl", "product", "reason", "held_candles",
+        "addon_tier",
     ]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")

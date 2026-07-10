@@ -853,9 +853,12 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         config.db_path,
         "SELECT instrument, entry_price, quantity, held_bars, entry_time, "
         "current_price, pct_change, unrealised_pnl, peak_close, trailing_active, low_since_entry, "
-        "pattern_top_trailing "
+        "pattern_top_trailing, addon_lots "
         "FROM open_positions ORDER BY entry_time ASC",
     )
+    import json as _json
+    for _p in positions:
+        _p["addon_lots"] = _json.loads(_p["addon_lots"]) if _p.get("addon_lots") else []
     pending_orders = list(risk._pending_orders.keys())
 
     # ── orders in range (defaults to most-recent 20 when all-time) ─────────────
@@ -880,7 +883,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # dropped the remainder leg. match_trades does proper FIFO lot accounting.
     from trader.analytics import (match_trades, compute_utilisation,
                                   exit_reason_breakdown, per_stock_scorecard,
-                                  drawdown_stats, position_exit_legs)
+                                  drawdown_stats, position_exit_legs,
+                                  position_entry_legs)
 
     _raw_orders = _read_db(
         config.db_path,
@@ -1030,6 +1034,18 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         {range_controls}
     </div>"""
 
+    # Scale-in pool row — shown only when the feature is on (or money is still parked)
+    _si_deployed = getattr(risk, "scale_in_deployed", 0.0)
+    _si_budget = config.scale_in_budget if getattr(config, "scale_in_enabled", False) else 0.0
+    if _si_budget or _si_deployed:
+        _si_pct = (_si_deployed / _si_budget * 100) if _si_budget else 100.0
+        scale_in_row = (
+            f'<tr><td class="dim">Scale-in pool</td><td class="val">&#8377; {_si_deployed:,.0f}'
+            f' <span class="dim">/ &#8377;{_si_budget:,.0f} ({_si_pct:.0f}%)</span></td></tr>'
+        )
+    else:
+        scale_in_row = ""
+
     capital_card = f"""
     <div class="card">
         <h2>Capital</h2>
@@ -1039,6 +1055,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 <span class="dim">({deploy_pct:.0f}%)</span></td></tr>
             <tr><td class="dim">Pending lock</td><td class="val">&#8377; {pending_amt:,.0f}</td></tr>
             <tr><td class="dim">Available</td><td class="val green">&#8377; {available:,.0f}</td></tr>
+            {scale_in_row}
         </table>
         <div class="bar-bg"><div class="bar-fill {bar_danger}" style="width:{bar_w}%"></div></div>
     </div>"""
@@ -1195,6 +1212,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     _trail_pct = float(_lr_cfg.get("trail_pct", 1.5))
     _hold_bars_max = int(_lr_cfg.get("hold_bars", 200))
     _pos_legs = position_exit_legs(_orders_for_match, positions)  # #14 scale-out lifecycle
+    _entry_legs = position_entry_legs(positions)  # scale-in lot ladder
 
     if positions or pending_orders:
         rows_html = ""
@@ -1316,11 +1334,30 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                     f"entry {_li['original_qty']} → {_leg_strs} · holding {_li['open_qty']}</span>"
                 )
 
+            # Scale-in lot ladder sub-line + qty badge (parent + add-on lots)
+            addon_badge = ""
+            ladder_html = ""
+            _el = _entry_legs.get(p["instrument"])
+            if _el:
+                _n_addons = len(_el["legs"]) - 1
+                addon_badge = (
+                    f" <span class='badge badge-dim' title='scale-in add-on lots'>"
+                    f"+{_n_addons} addon</span>"
+                )
+                _lot_strs = " · ".join(
+                    f"T{l['tier']}: {l['qty']} @ &#8377;{(l['price'] or 0):.2f}"
+                    for l in _el["legs"]
+                )
+                ladder_html = (
+                    f"<br><span class='dim' style='font-size:10px'>"
+                    f"{_lot_strs} · avg &#8377;{_el['avg_cost']:.2f}</span>"
+                )
+
             rows_html += (
                 f"<tr>"
                 f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
-                f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}</td>"
-                f"<td>{p['quantity']}</td>"
+                f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}{ladder_html}</td>"
+                f"<td>{p['quantity']}{addon_badge}</td>"
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
                 f"<td>&#8377; {cur:.2f} <span class='{pct_class}'>({pct_sign}{pct:.2f}%)</span></td>"
                 f"<td class='{pct_class}'>&#8377; {upnl_sign}{upnl:,.2f}</td>"

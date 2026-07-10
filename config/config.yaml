@@ -15,6 +15,12 @@ risk:
   max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
+scale_in:                     # portfolio-level geometric add-ons (validated 2026-07-07 counterfactual)
+  enabled: false                # master switch — enable in paper first
+  fraction_pct: 50            # add-on notional = this % of the PREVIOUS lot's notional
+  max_addons: 2               # max add-on lots per position
+  min_spacing_days: 1         # add-on must fill >= this many calendar days after last investment
+  budget_pct: 10              # scale-in pool = this % of capital.total, ON TOP of base capital
 watchlist:
 #  - NSE:CARRARO        # removed 2026-07-05 — calibration: 15m −₹8.2k, no reliable regime (day "win" = lone ₹1.1k spike @33% WR)
 #  - NSE:MGEL           # removed 2026-07-05 — no longer in NSE instruments (delisted/renamed)

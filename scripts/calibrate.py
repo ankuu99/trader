@@ -98,6 +98,10 @@ def _run_single(job: tuple) -> dict:
     params, symbols, symbol_to_token, from_dt, to_dt, db_path, total_capital, timeframe = job
     if timeframe:
         config._data["candle_timeframe"] = timeframe
+    # Calibration always runs WITHOUT scale-in: per-stock param search must stay
+    # comparable and un-levered. Scale-in is portfolio-level; validate it via
+    # backtest.py / backtest_rolling.py instead.
+    config._data.setdefault("scale_in", {})["enabled"] = False
     store = Store(db_path)
     trades = run_backtest(None, store, symbols, symbol_to_token, params, from_dt, to_dt)
     metrics = compute_metrics(trades, total_capital)

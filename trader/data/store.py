@@ -9,6 +9,7 @@ trades         : filled trade records linked to orders
 open_positions : paper-mode positions that survive restarts
 """
 
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -117,7 +118,8 @@ class Store:
                     peak_close           REAL    DEFAULT 0,
                     trailing_active      INTEGER DEFAULT 0,
                     low_since_entry      REAL    DEFAULT 0,
-                    pattern_top_trailing INTEGER DEFAULT 0
+                    pattern_top_trailing INTEGER DEFAULT 0,
+                    addon_lots           TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -155,6 +157,7 @@ class Store:
                 ("trailing_active",      "INTEGER DEFAULT 0"),
                 ("low_since_entry",      "REAL DEFAULT 0"),
                 ("pattern_top_trailing", "INTEGER DEFAULT 0"),
+                ("addon_lots",           "TEXT"),  # scale-in add-on lots (JSON list)
             ]:
                 try:
                     conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
@@ -465,6 +468,29 @@ class Store:
                  int(pattern_top_trailing), instrument),
             )
 
+    def add_position_lot(self, instrument: str, fill_price: float, quantity: int,
+                         fill_time: datetime):
+        """Record a scale-in add-on lot: append to the addon_lots JSON list and bump
+        the blended quantity. Parent entry_price / entry_time / trailing state are
+        deliberately untouched — all exit anchors and UI sparklines stay on the
+        original entry."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT quantity, addon_lots FROM open_positions WHERE instrument = ?",
+                (instrument,),
+            ).fetchone()
+            if row is None:
+                return
+            lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
+            lots.append({
+                "price": fill_price, "qty": quantity,
+                "date": self._to_naive(fill_time).isoformat(),
+            })
+            conn.execute(
+                "UPDATE open_positions SET quantity = ?, addon_lots = ? WHERE instrument = ?",
+                (int(row["quantity"]) + quantity, json.dumps(lots), instrument),
+            )
+
     def update_position_quantity(self, instrument: str, quantity: int):
         """Adjust the tracked quantity of an open position after a scale-out
         (partial SELL), leaving entry_price / entry_time / trailing state intact."""
@@ -474,6 +500,36 @@ class Store:
                 (quantity, instrument),
             )
 
+    def consume_position_lots(self, instrument: str, sold_qty: int):
+        """Partial SELL on a (possibly scaled-in) position: reduce quantity and
+        consume lots FIFO — parent shares first, then add-on lots in fill order
+        (same convention as the backtest engine and analytics.match_trades).
+        Keeps addon_lots consistent with quantity so restart seeding
+        (parent_qty = quantity − Σ addon lots) can never go negative."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT quantity, addon_lots FROM open_positions WHERE instrument = ?",
+                (instrument,),
+            ).fetchone()
+            if row is None:
+                return
+            qty = int(row["quantity"])
+            lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
+            sold = min(max(int(sold_qty), 0), qty)
+            parent_qty = max(qty - sum(int(l["qty"]) for l in lots), 0)
+            remaining = sold - min(parent_qty, sold)  # parent absorbs first
+            new_lots = []
+            for lot in lots:
+                lot_qty = int(lot["qty"])
+                take = min(lot_qty, remaining)
+                remaining -= take
+                if lot_qty - take > 0:
+                    new_lots.append({**lot, "qty": lot_qty - take})
+            conn.execute(
+                "UPDATE open_positions SET quantity = ?, addon_lots = ? WHERE instrument = ?",
+                (qty - sold, json.dumps(new_lots) if new_lots else None, instrument),
+            )
+
     def delete_open_position(self, instrument: str):
         with self._conn() as conn:
             conn.execute("DELETE FROM open_positions WHERE instrument = ?", (instrument,))
@@ -481,9 +537,15 @@ class Store:
     def read_open_positions(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT instrument, entry_price, quantity, held_bars, entry_time, low_since_entry FROM open_positions"
+                "SELECT instrument, entry_price, quantity, held_bars, entry_time,"
+                " low_since_entry, addon_lots FROM open_positions"
             ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["addon_lots"] = json.loads(d["addon_lots"]) if d.get("addon_lots") else []
+            out.append(d)
+        return out
 
     def read_pending_live_orders(self) -> list[dict]:
         """Return today's live BUY orders still in PENDING state (unfilled on restart)."""

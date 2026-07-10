@@ -81,6 +81,7 @@ class OrderManager:
                 "mode": "paper",
                 "strategy": order.strategy,
                 "signal_type": order.signal_type,
+                "addon": getattr(order, "addon", False),
             })
         self._pending_paper.clear()
 
@@ -134,7 +135,8 @@ class OrderManager:
             self._dispatch({**record, "fill_price": fill_price,
                             "signal_type": order.signal_type,
                             "target_price": order.target_price,
-                            "partial": getattr(order, "partial", False)})
+                            "partial": getattr(order, "partial", False),
+                            "addon": getattr(order, "addon", False)})
 
     def on_kite_order_update(self, kite_update: dict):
         """
@@ -219,6 +221,8 @@ class OrderManager:
             # Scale-out: only an in-app partial SELL carries the flag. GTT/external
             # SELLs recover the ENTRY order (partial=False) → always full close.
             "partial": getattr(original, "partial", False) if original else False,
+            # Scale-in: BUY fills for add-on lots must not re-anchor strategy state.
+            "addon": getattr(original, "addon", False) if original else False,
         }
         self._store.upsert_order(record)
         logger.info(
@@ -235,7 +239,9 @@ class OrderManager:
             if status in ("REJECTED", "CANCELLED") and direction == "BUY":
                 self._instrument_orders.pop(instrument, None)  # R6-4: prevent stale GTT context
         # Place GTT only after BUY fill is confirmed (L5 fix: not at order submission time)
-        if status == "COMPLETE" and direction == "BUY" and config.gtt_enabled and original is not None:
+        if (status == "COMPLETE" and direction == "BUY" and config.gtt_enabled
+                and original is not None and not getattr(original, "addon", False)):
+            # Add-on lots never get their own GTT — exits sell the blended position.
             self._place_gtt_sl(original, symbol, last_price=fill_price)
 
     # ------------------------------------------------------------------ #
@@ -341,6 +347,7 @@ class OrderManager:
                 "mode": "live",
                 "strategy": order.strategy,
                 "signal_type": order.signal_type,
+                "addon": getattr(order, "addon", False),
                 "status_message": str(e),
             })
             raise

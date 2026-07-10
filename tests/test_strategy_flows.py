@@ -186,16 +186,23 @@ def test_fill_sets_entry_price_from_actual_fill():
     assert strat.position == Direction.BUY
 
 
-def test_no_new_entry_while_in_position():
-    """Strategy must not emit an ENTRY signal when already holding a position."""
+def test_in_position_entry_is_stateless():
+    """An in-position ENTRY signal is allowed (it is the scale-in add-on
+    candidate — RiskManager decides whether to act on it), but emitting it must
+    NEVER mutate position state: the entry anchor and staleness clock stay on
+    the original entry."""
     strat = _ready_strategy(entry_price=100.0)  # in position
+    held_before = strat._held_bars
+    entry_before = strat._entry_price
 
-    # Price is flat — no exit trigger, no entry trigger
     signal = strat.on_candle(_candle(100.5))
 
-    # Either None or an EXIT — never an ENTRY
-    if signal is not None:
-        assert signal.signal_type == SignalType.EXIT
+    if signal is not None and signal.signal_type == SignalType.ENTRY:
+        # signal emitted stateless — nothing re-anchored
+        assert strat._entry_price == entry_before
+    # held_bars advanced by exactly the one candle processed
+    assert strat._held_bars == held_before + 1
+    assert strat.position == Direction.BUY
 
 
 # ---------------------------------------------------------------------------

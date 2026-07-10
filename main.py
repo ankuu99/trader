@@ -290,7 +290,21 @@ def main():
             for strat in strats_for_instrument:
                 strat.on_order_update(synthetic_fill)
                 strat.seed_position_state(_peak_close, _max_gain_pct)
-            risk.on_order_filled(instrument, pos["entry_price"], pos["quantity"])
+            # Scale-in: DB quantity is blended (parent + add-ons). Seed risk with the
+            # parent lot first, then layer the add-on lots so the pool/tier state and
+            # blended qty are restored exactly.
+            _addon_lots = pos.get("addon_lots") or []
+            _parent_qty = pos["quantity"] - sum(int(l["qty"]) for l in _addon_lots)
+            if _parent_qty < 0:  # inconsistent row (legacy partial exit) — defensive
+                logger.warning(
+                    "addon_lots inconsistent with quantity | %s | qty=%d lots=%s — seeding blended as parent",
+                    instrument, pos["quantity"], _addon_lots,
+                )
+                _parent_qty, _addon_lots = pos["quantity"], []
+            risk.on_order_filled(instrument, pos["entry_price"], _parent_qty,
+                                 fill_ts=entry_time_dt)
+            if _addon_lots:
+                risk.seed_scale_in(instrument, _addon_lots)
             restored.append(pos)
             logger.info(
                 "Paper position restored | %s | entry=%.2f qty=%d held_bars=%d peak=%.2f max_gain=%.2f%%",
@@ -349,7 +363,21 @@ def main():
 
             qty = pos["quantity"]
             avg = pos["entry_price"]
-            risk.seed_position(instrument, qty, avg)
+            # Scale-in: DB quantity is blended — seed the parent lot, then layer
+            # add-on lots (rebuilds tier count, pool usage, spacing date).
+            _addon_lots = pos.get("addon_lots") or []
+            _parent_qty = qty - sum(int(l["qty"]) for l in _addon_lots)
+            if _parent_qty < 0:  # inconsistent row (legacy partial exit) — defensive
+                logger.warning(
+                    "addon_lots inconsistent with quantity | %s | qty=%d lots=%s — seeding blended as parent",
+                    instrument, qty, _addon_lots,
+                )
+                _parent_qty, _addon_lots = qty, []
+            _entry_ts = (datetime.fromisoformat(pos["entry_time"])
+                         if pos.get("entry_time") else None)
+            risk.seed_position(instrument, _parent_qty, avg, entry_ts=_entry_ts)
+            if _addon_lots:
+                risk.seed_scale_in(instrument, _addon_lots)
             open_instruments.add(instrument)
 
             entry_time_str = pos.get("entry_time")
@@ -416,6 +444,14 @@ def main():
                 config_ceiling, account_equity, _kite_cash,
                 risk.capital_deployed, effective,
             )
+            # Scale-in budget sits ON TOP of base capital — warn if the account
+            # can't actually cover base + budget (add-on orders would fail at Kite).
+            if config.scale_in_enabled and account_equity < effective + config.scale_in_budget:
+                logger.warning(
+                    "Scale-in budget not fully covered by account equity | "
+                    "equity=%.0f < base=%.0f + budget=%.0f — add-ons may be rejected by broker",
+                    account_equity, effective, config.scale_in_budget,
+                )
 
     # Dashboard (read-only UI)
     if config.ui_enabled:
@@ -450,9 +486,19 @@ def main():
         quantity = update["quantity"]
         strategy = update.get("strategy", "")
         if direction == "BUY":
-            risk.on_order_filled(instrument, fill_price, quantity)
-            if config.env in ("paper", "live"):
-                store.upsert_open_position(instrument, fill_price, quantity, 0, datetime.now())
+            if update.get("addon"):
+                # Scale-in add-on lot: grow the blended position in risk + DB.
+                # Parent entry_price/entry_time stay untouched (exit anchors and
+                # UI sparklines remain on the original entry).
+                risk.on_order_filled(instrument, fill_price, quantity,
+                                     addon=True, fill_ts=datetime.now())
+                if config.env in ("paper", "live"):
+                    store.add_position_lot(instrument, fill_price, quantity, datetime.now())
+            else:
+                risk.on_order_filled(instrument, fill_price, quantity,
+                                     fill_ts=datetime.now())
+                if config.env in ("paper", "live"):
+                    store.upsert_open_position(instrument, fill_price, quantity, 0, datetime.now())
         elif update.get("partial"):
             # Scale-out: sell part, keep the remainder open. Reduce tracked qty
             # pro-rata (capital + realised P&L) and leave entry/trailing state
@@ -460,7 +506,9 @@ def main():
             # on_order_update sees the partial flag and does NOT reset position.
             risk.reduce_position(instrument, quantity, fill_price)
             if config.env in ("paper", "live"):
-                store.update_position_quantity(instrument, risk._open_positions.get(instrument, 0))
+                # Consumes lots FIFO (parent first, then add-ons) so addon_lots
+                # stays consistent with quantity for restart seeding.
+                store.consume_position_lots(instrument, quantity)
             if config.env == "live":
                 store.set_state("cumulative_pnl", risk.cumulative_pnl)
         else:
@@ -541,8 +589,12 @@ def main():
         _entry = getattr(strategy, "_entry_price", None) or 0.0
         _close = candle["close"]
         _qty = risk._open_positions[strategy.instrument]
+        # pct_change stays parent-anchored (matches the strategy's own exit gates);
+        # unrealised P&L uses the blended avg cost so add-on lots are priced right.
         _pct = (_close - _entry) / _entry * 100.0 if _entry else 0.0
-        _upnl = (_close - _entry) * _qty if _entry else 0.0
+        _avg_cost = (risk._position_values.get(strategy.instrument, 0.0) / _qty
+                     if _qty else 0.0) or _entry
+        _upnl = (_close - _avg_cost) * _qty if _avg_cost else 0.0
         _peak = getattr(strategy, "_peak_close", None) or _close
         _trail = getattr(strategy, "_trailing_active", False)
         store.update_position_metrics(

@@ -10,7 +10,7 @@ Sizing: fixed % stop-loss, quantity = max_risk_per_trade / sl_distance
 """
 
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from trader.core.config import config
@@ -52,6 +52,7 @@ class Order:
     mode: str
     signal_type: SignalType = SignalType.ENTRY
     partial: bool = False  # EXIT only: True = scale-out (remainder stays open)
+    addon: bool = False    # ENTRY only: True = scale-in add-on lot on an open position
 
 
 class RiskManager:
@@ -65,6 +66,16 @@ class RiskManager:
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
         self._paused: set[str] = set()   # instruments paused from NEW entries (exits still allowed)
+        # Scale-in (geometric add-ons) — per-instrument lot state + a separate budget pool.
+        # The pool sits ON TOP of base capital: add-on deployments never touch
+        # _capital_deployed, so capital_available for base entries is unaffected.
+        # inst → {addon_count, last_invest_date (date), last_lot_notional, addon_value}
+        self._scale_in: dict[str, dict] = {}
+        self._scale_in_deployed: float = 0.0  # add-on cost basis currently open (pool usage)
+        # Instruments whose entry in _pending_orders is an ADD-ON lot. Such pendings
+        # draw from the scale-in pool, so they are excluded from capital_available
+        # and from the max_open_positions count (the instrument is already open).
+        self._pending_addons: set[str] = set()
 
     # --- Per-stock pause (UI-toggled; blocks new entries, never exits) ---
     def pause(self, instrument: str) -> None:
@@ -83,8 +94,14 @@ class RiskManager:
 
     @property
     def capital_available(self) -> float:
-        pending = sum(self._pending_orders.values())
+        # Add-on pendings draw from the scale-in pool, not base capital.
+        pending = sum(v for k, v in self._pending_orders.items() if k not in self._pending_addons)
         return max(0.0, config.total_capital + self._cumulative_pnl - self._capital_deployed - pending)
+
+    @property
+    def scale_in_deployed(self) -> float:
+        """Add-on cost basis currently open (scale-in pool usage, ₹)."""
+        return self._scale_in_deployed
 
     @property
     def cumulative_pnl(self) -> float:
@@ -133,14 +150,20 @@ class RiskManager:
             self._last_reject_reason = "outside_trading_window"
             return None
 
-        if len(self._open_positions) + len(self._pending_orders) >= config.max_open_positions:
-            logger.warning("Signal rejected — max open positions | %s", signal.instrument)
-            self._last_reject_reason = "max_positions"
-            return None
-
+        # Scale-in: an ENTRY signal on an instrument we already hold is an add-on
+        # candidate. It does not open a NEW position, so it is routed before the
+        # max_open_positions check (which would otherwise block it spuriously).
         if signal.instrument in self._open_positions:
+            if config.scale_in_enabled:
+                return self._validate_addon(signal)
             logger.warning("Signal rejected — already in position | %s", signal.instrument)
             self._last_reject_reason = "already_in_position"
+            return None
+
+        _pending_new = sum(1 for k in self._pending_orders if k not in self._pending_addons)
+        if len(self._open_positions) + _pending_new >= config.max_open_positions:
+            logger.warning("Signal rejected — max open positions | %s", signal.instrument)
+            self._last_reject_reason = "max_positions"
             return None
 
         if signal.instrument in self._pending_orders:
@@ -268,41 +291,209 @@ class RiskManager:
             partial=is_partial,
         )
 
+    def _validate_addon(self, signal: Signal) -> Order | None:
+        """Validate a scale-in add-on ENTRY on an already-open position.
+
+        Geometric sizing: lot notional = previous lot's notional × fraction_pct.
+        The lot draws from the separate scale-in budget pool (ON TOP of base
+        capital) and never counts against max_open_positions or the per-stock cap.
+        Staleness/trailing anchors are untouched — the strategy ignores add-on
+        fills entirely (see lr_extrema.on_order_update).
+        """
+        inst = signal.instrument
+
+        if inst in self._pending_orders:
+            logger.debug("Add-on rejected — pending order exists | %s", inst)
+            self._last_reject_reason = "pending_order_exists"
+            return None
+
+        if inst in self._paused:
+            logger.info("Add-on rejected — stock paused | %s", inst)
+            self._last_reject_reason = "stock_paused"
+            return None
+
+        state = self._scale_in.get(inst)
+        if state is None:
+            # Position predates scale-in tracking (e.g. seeded before feature enabled
+            # or restart without lot state) — no reference lot to size from.
+            logger.debug("Add-on rejected — no scale-in state | %s", inst)
+            self._last_reject_reason = "addon_no_state"
+            return None
+
+        if state["addon_count"] >= config.scale_in_max_addons:
+            logger.debug("Add-on rejected — tier limit | %s | count=%d", inst, state["addon_count"])
+            self._last_reject_reason = "addon_limit_reached"
+            return None
+
+        sig_date = getattr(signal.timestamp, "date", lambda: None)()
+        last_date = state.get("last_invest_date")
+        if sig_date is None or last_date is None:
+            self._last_reject_reason = "addon_spacing"
+            return None
+        if (sig_date - last_date).days < config.scale_in_min_spacing_days:
+            logger.debug(
+                "Add-on rejected — spacing | %s | last=%s signal=%s", inst, last_date, sig_date,
+            )
+            self._last_reject_reason = "addon_spacing"
+            return None
+
+        price = signal.price_hint
+        lot_notional = state["last_lot_notional"] * config.scale_in_fraction_pct / 100
+        quantity = int(lot_notional // price) if price > 0 else 0
+        if quantity < 1:
+            logger.debug(
+                "Add-on rejected — lot too small | %s | lot=%.0f price=%.2f", inst, lot_notional, price,
+            )
+            self._last_reject_reason = "addon_qty_zero"
+            return None
+
+        expected_cost = price * quantity
+        _addon_pending = sum(
+            v for k, v in self._pending_orders.items() if k in self._pending_addons
+        )
+        if self._scale_in_deployed + _addon_pending + expected_cost > config.scale_in_budget:
+            logger.info(
+                "Add-on rejected — budget exhausted | %s | deployed=%.0f + pending=%.0f + %.0f > budget=%.0f",
+                inst, self._scale_in_deployed, _addon_pending, expected_cost, config.scale_in_budget,
+            )
+            self._last_reject_reason = "addon_budget_exhausted"
+            return None
+
+        if signal.stop_loss_hint is not None:
+            sl_price = round(signal.stop_loss_hint, 2)
+        else:
+            sl_price = round(price * (1 - config.default_sl_pct / 100), 2)
+
+        self._pending_orders[inst] = expected_cost
+        self._pending_addons.add(inst)
+        logger.info(
+            "Add-on approved | %s x%d @ ~%.2f (tier %d, lot=%.0f, pool=%.0f/%.0f)",
+            inst, quantity, price, state["addon_count"] + 1,
+            expected_cost, self._scale_in_deployed, config.scale_in_budget,
+        )
+        return Order(
+            instrument=inst,
+            direction=signal.direction,
+            quantity=quantity,
+            price_hint=price,
+            stop_loss=sl_price,
+            target_price=0.0,
+            strategy=signal.strategy,
+            mode=config.env,
+            signal_type=signal.signal_type,
+            addon=True,
+        )
+
     def on_order_cancelled(self, instrument: str):
         """Release capital locked for a pending order that was cancelled or rejected."""
         released = self._pending_orders.pop(instrument, None)
+        self._pending_addons.discard(instrument)
         if released is not None:
             logger.info(
                 "Pending capital released | %s | ₹%.0f | available=%.0f",
                 instrument, released, self.capital_available,
             )
 
-    def on_order_filled(self, instrument: str, fill_price: float, quantity: int):
+    def on_order_filled(self, instrument: str, fill_price: float, quantity: int,
+                        addon: bool = False, fill_ts=None):
         self._pending_orders.pop(instrument, None)  # release pending lock, fill takes over
+        self._pending_addons.discard(instrument)
         if fill_price <= 0:
             logger.error(
                 "BUY fill with price=0 for %s qty=%d — skipping capital tracking",
                 instrument, quantity,
             )
             return
+        fill_date = getattr(fill_ts, "date", lambda: None)() or datetime.now(_IST).date()
+        lot_value = fill_price * quantity
+
+        if addon and instrument in self._open_positions:
+            # Scale-in add-on: grow the blended position; the lot's cost basis goes
+            # to the scale-in pool, NOT _capital_deployed (budget is on top of base).
+            # _position_values includes it so blended avg-entry P&L on close is right.
+            self._open_positions[instrument] += quantity
+            self._position_values[instrument] = (
+                self._position_values.get(instrument, 0.0) + lot_value
+            )
+            self._scale_in_deployed += lot_value
+            state = self._scale_in.setdefault(
+                instrument,
+                {"addon_count": 0, "last_invest_date": fill_date,
+                 "last_lot_notional": lot_value, "addon_value": 0.0},
+            )
+            state["addon_count"] += 1
+            state["last_invest_date"] = fill_date
+            state["last_lot_notional"] = lot_value
+            state["addon_value"] += lot_value
+            logger.info(
+                "Add-on filled | %s x%d @ %.2f | tier=%d total_qty=%d pool=%.0f/%.0f",
+                instrument, quantity, fill_price, state["addon_count"],
+                self._open_positions[instrument],
+                self._scale_in_deployed, config.scale_in_budget,
+            )
+            return
+
         self._open_positions[instrument] = quantity
-        deployed = fill_price * quantity
-        self._position_values[instrument] = deployed
-        self._capital_deployed += deployed
+        self._position_values[instrument] = lot_value
+        self._capital_deployed += lot_value
+        # Seed scale-in lot state so future add-ons can size off this parent lot.
+        self._scale_in[instrument] = {
+            "addon_count": 0, "last_invest_date": fill_date,
+            "last_lot_notional": lot_value, "addon_value": 0.0,
+        }
         logger.info(
             "Position opened | %s x%d @ %.2f | deployed=%.0f available=%.0f",
             instrument, quantity, fill_price,
             self._capital_deployed, self.capital_available,
         )
 
-    def seed_position(self, instrument: str, qty: int, avg_price: float):
-        """Seed a single position into risk state (called from startup reconciliation)."""
+    def seed_position(self, instrument: str, qty: int, avg_price: float, entry_ts=None):
+        """Seed a single position into risk state (called from startup reconciliation).
+        qty/avg_price describe the PARENT lot; add-on lots are layered on afterwards
+        via seed_scale_in()."""
         self._open_positions[instrument] = qty
         self._position_values[instrument] = avg_price * qty
         self._capital_deployed += avg_price * qty
+        entry_date = getattr(entry_ts, "date", lambda: None)() or datetime.now(_IST).date()
+        self._scale_in[instrument] = {
+            "addon_count": 0, "last_invest_date": entry_date,
+            "last_lot_notional": avg_price * qty, "addon_value": 0.0,
+        }
         logger.info(
             "Seeded position | %s x%d @ %.2f | deployed=%.0f",
             instrument, qty, avg_price, self._capital_deployed,
+        )
+
+    def seed_scale_in(self, instrument: str, addon_lots: list[dict]):
+        """Restore scale-in lot state on startup from persisted addon lots.
+
+        addon_lots: [{"price": float, "qty": int, "date": "YYYY-MM-DD..."}] — parent
+        lot excluded. Must run AFTER seed_position (which seeds the PARENT lot only).
+        Layers each add-on lot onto the blended quantity / cost basis, charges the
+        scale-in pool, and rebuilds addon_count / last_lot_notional / last_invest_date.
+        """
+        state = self._scale_in.get(instrument)
+        if state is None or not addon_lots:
+            return
+        addon_value = 0.0
+        addon_qty = 0
+        for lot in addon_lots:
+            lot_qty = int(lot["qty"])
+            lot_value = float(lot["price"]) * lot_qty
+            addon_value += lot_value
+            addon_qty += lot_qty
+            state["addon_count"] += 1
+            state["last_lot_notional"] = lot_value
+            _d = str(lot.get("date") or "")[:10]
+            if _d:
+                state["last_invest_date"] = datetime.fromisoformat(_d).date()
+        state["addon_value"] = addon_value
+        self._open_positions[instrument] = self._open_positions.get(instrument, 0) + addon_qty
+        self._position_values[instrument] = self._position_values.get(instrument, 0.0) + addon_value
+        self._scale_in_deployed += addon_value
+        logger.info(
+            "Seeded scale-in state | %s | addons=%d addon_value=%.0f pool=%.0f",
+            instrument, state["addon_count"], addon_value, self._scale_in_deployed,
         )
 
     def seed_pending_order(self, instrument: str, estimated_cost: float):
@@ -337,7 +528,13 @@ class RiskManager:
         """Remove a position from tracking and accumulate realised P&L."""
         qty = self._open_positions.pop(instrument, None)
         freed = self._position_values.pop(instrument, 0.0)
-        self._capital_deployed = max(0.0, self._capital_deployed - freed)
+        # Split the freed cost basis: add-on portion returns to the scale-in pool,
+        # the remainder (parent lot) to base capital.
+        _si = self._scale_in.pop(instrument, None)
+        _addon_freed = min(_si["addon_value"], freed) if _si else 0.0
+        self._scale_in_deployed = max(0.0, self._scale_in_deployed - _addon_freed)
+        freed_base = freed - _addon_freed
+        self._capital_deployed = max(0.0, self._capital_deployed - freed_base)
         if qty and freed and not exit_price:
             logger.warning(
                 "close_position called with exit_price=0 for %s — P&L and halt check skipped",
@@ -377,7 +574,16 @@ class RiskManager:
         freed = entry_price * qty
         self._open_positions[instrument] = held - qty
         self._position_values[instrument] = deployed - freed
-        self._capital_deployed = max(0.0, self._capital_deployed - freed)
+        # Pro-rata split of the freed cost basis between the scale-in pool and base
+        # capital (risk accounting is avg-entry; per-lot attribution lives in the
+        # backtest engine / order history).
+        _si = self._scale_in.get(instrument)
+        _addon_freed = 0.0
+        if _si and _si["addon_value"] > 0 and deployed > 0:
+            _addon_freed = min(_si["addon_value"], freed * (_si["addon_value"] / deployed))
+            _si["addon_value"] -= _addon_freed
+            self._scale_in_deployed = max(0.0, self._scale_in_deployed - _addon_freed)
+        self._capital_deployed = max(0.0, self._capital_deployed - (freed - _addon_freed))
         if exit_price and entry_price:
             pnl = (exit_price - entry_price) * qty
             self._realised_pnl += pnl

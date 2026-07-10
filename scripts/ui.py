@@ -175,7 +175,12 @@ def _run_signal_probe(_store, instrument: str, strategy_tf: str, params_json: st
 
     Bypasses on_candle entirely to avoid _entry_price getting stuck after the first
     signal. Directly manages candle accumulation and retraining, then calls the model
-    on every bar and logs threshold crossings within [from_dt, to_dt].
+    on EVERY bar within [from_dt, to_dt] and returns the full per-candle
+    (p_min, p_max) series — threshold classification is done by the caller.
+
+    Fallback path only: when a backtest has been run, the UI prefers the scores
+    collected by the engine itself (exact model the run traded with). This probe
+    is an independent re-train and can drift slightly from the run.
 
     Params and strategy_tf come from config (per-stock merged); base 15m candles
     are aggregated through the same CandleAggregator the engine and live use, so
@@ -240,28 +245,33 @@ def _run_signal_probe(_store, instrument: str, strategy_tf: str, params_json: st
 
         p_min, p_max = strategy._model.predict_proba(x)
 
-        is_min = p_min >= strategy._threshold
-        is_max = p_max >= strategy._sell_threshold
-
-        if not is_min and not is_max:
-            continue
-
-        if is_min and p_max >= strategy._veto_threshold:
-            sig_type = "VETOED"
-        elif is_min:
-            sig_type = "ENTRY"
-        else:
-            sig_type = "PATTERN_TOP"
-
         results.append({
             "timestamp": ts,
             "close": candle.get("close"),
             "p_min": p_min,
             "p_max": p_max,
-            "type": sig_type,
         })
 
     return results
+
+
+def _classify_scores(rows: list[dict], params: dict) -> list[dict]:
+    """Tag each per-candle score row with the threshold crossing it represents
+    (None = no crossing). Same gate logic as the strategy's entry/exit checks."""
+    thr  = float(params.get("threshold", 0.70))
+    veto = float(params.get("veto_threshold", 0.50))
+    sell = float(params.get("sell_threshold", 0.65))
+    out = []
+    for r in rows:
+        p_min, p_max = r["p_min"], r["p_max"]
+        if p_min >= thr:
+            sig_type = "VETOED" if p_max >= veto else "ENTRY"
+        elif p_max >= sell:
+            sig_type = "PATTERN_TOP"
+        else:
+            sig_type = None
+        out.append({**r, "type": sig_type})
+    return out
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -314,6 +324,15 @@ with st.sidebar:
         ]
         st.dataframe(pd.DataFrame(_tf_rows), hide_index=True,
                      use_container_width=True, height=240)
+        if config.scale_in_enabled:
+            st.caption(
+                f"**Scale-in ON** — {config.scale_in_fraction_pct:.0f}% of previous lot, "
+                f"max {config.scale_in_max_addons} add-ons, "
+                f"{config.scale_in_min_spacing_days}d spacing, "
+                f"budget ₹{config.scale_in_budget:,.0f} (on top of base capital)"
+            )
+        else:
+            st.caption("Scale-in OFF (`scale_in.enabled: false`)")
 
     run_clicked = st.button(
         "Run Backtest",
@@ -361,15 +380,20 @@ if run_clicked:
 
     with st.spinner("Running backtest…"):
         try:
+            # Sink for per-candle model scores — filled by the engine with the
+            # exact (p_min, p_max) the run's model produced on every strategy-TF bar.
+            _model_scores: dict[str, list[dict]] = {}
             trades = run_backtest(kite, store, selected_instruments, s2t, params, from_dt, to_dt,
                                   progress_callback=_on_progress,
-                                  per_symbol_params=per_symbol_params)
+                                  per_symbol_params=per_symbol_params,
+                                  model_scores=_model_scores)
             _progress_bar.progress(1.0, text="Done")
             _read_candles_cached.clear()  # run may have fetched fresh candles
-            st.session_state["trades"]      = trades
-            st.session_state["from_dt"]     = from_dt
-            st.session_state["to_dt"]       = to_dt
-            st.session_state["instruments"] = selected_instruments
+            st.session_state["trades"]       = trades
+            st.session_state["from_dt"]      = from_dt
+            st.session_state["to_dt"]        = to_dt
+            st.session_state["instruments"]  = selected_instruments
+            st.session_state["model_scores"] = _model_scores
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
         finally:
@@ -550,10 +574,15 @@ def _render_tab1_trades():
     df_display["P&L%"] = df_t.apply(_pnl_pct, axis=1)
     df_display["entry_date"] = df_display["entry_date"].astype(str).str[:19]
     df_display["exit_date"]  = df_display["exit_date"].astype(str).str[:19]
+    # Scale-in: tier 0 = parent lot, 1..N = add-on lots (one record per lot)
+    if "addon_tier" in df_t.columns:
+        df_display["Tier"] = df_t["addon_tier"].fillna(0).astype(int)
+    else:
+        df_display["Tier"] = 0
 
     df_display = df_display[[
         "entry_date", "exit_date", "Hold (d)", "Candles", "instrument",
-        "entry", "exit", "qty", "cost", "pnl", "P&L%", "Capital", "product", "reason",
+        "entry", "exit", "qty", "cost", "pnl", "P&L%", "Capital", "product", "reason", "Tier",
     ]].rename(columns={
         "entry_date": "Entry",
         "exit_date":  "Exit",
@@ -649,11 +678,13 @@ def _render_tab2():
         "Show model signals",
         value=False,
         help=(
-            "Overlay every candle where the model crossed a threshold:\n"
-            "🟢 ENTRY — P(min)≥threshold, all filters passed\n"
-            "🟠 BLOCKED — P(min)≥threshold, hard filter blocked\n"
+            "Adds a P(min)/P(max) pane showing the model's output at EVERY candle "
+            "(with threshold/veto/sell guides), plus crossing markers on the price chart:\n"
+            "🟢 ENTRY — P(min)≥threshold, veto clear\n"
             "🟡 VETOED — P(min)≥threshold but P(max)≥veto\n"
-            "🟣 PATTERN TOP — P(max)≥sell_threshold (in position)"
+            "🟣 PATTERN TOP — P(max)≥sell_threshold\n\n"
+            "Scores come from the backtest run itself when one has been run "
+            "(exact model, same retrain cadence); otherwise a standalone probe."
         ),
     )
 
@@ -688,25 +719,33 @@ def _render_tab2():
     else:
         df_plot = df_candles
 
-    _signal_log: list[dict] = []
+    _signal_log: list[dict] = []   # per-candle scores, classified (type=None = no crossing)
     if show_signals:
-        import json
-        # Config is the source of truth — per-stock merged params + timeframe,
-        # matching what the backtest run itself used.
         _probe_params = config.get_strategy_params(selected_inst, "lr_extrema")
-        _probe_tf = config.strategy_timeframe(selected_inst)
-        with st.spinner("Computing model signals…"):
-            _signal_log = _run_signal_probe(
-                store, selected_inst, _probe_tf,
-                json.dumps(_probe_params, sort_keys=True),
-                from_dt.isoformat(), to_dt.isoformat(),
-                config.warmup_days_for(selected_inst),
-            )
+        # Prefer the scores the backtest engine itself collected — the exact model
+        # the run traded with. Fall back to the standalone probe (independent
+        # retrain, close but not identical) when no run covers this instrument.
+        _bt_scores = st.session_state.get("model_scores", {}).get(selected_inst, [])
+        if _bt_scores:
+            _signal_log = _classify_scores(_bt_scores, _probe_params)
+            _score_src = "backtest run (exact per-candle model output)"
+        else:
+            import json
+            _probe_tf = config.strategy_timeframe(selected_inst)
+            with st.spinner("Computing model signals…"):
+                _probe_rows = _run_signal_probe(
+                    store, selected_inst, _probe_tf,
+                    json.dumps(_probe_params, sort_keys=True),
+                    from_dt.isoformat(), to_dt.isoformat(),
+                    config.warmup_days_for(selected_inst),
+                )
+            _signal_log = _classify_scores(_probe_rows, _probe_params)
+            _score_src = "standalone probe (no backtest run for this instrument)"
         _sig_counts = {t: sum(1 for e in _signal_log if e["type"] == t)
-                       for t in ("ENTRY", "BLOCKED", "VETOED", "PATTERN_TOP")}
-        st.caption(f"Signals found: {len(_signal_log)} — "
-                   + "  ".join(f"{t}:{n}" for t, n in _sig_counts.items() if n)
-                   or "none")
+                       for t in ("ENTRY", "VETOED", "PATTERN_TOP")}
+        _crossings = " ".join(f"{t}:{n}" for t, n in _sig_counts.items() if n) or "none"
+        st.caption(f"Model scored {len(_signal_log)} candles — crossings: {_crossings} "
+                   f"· source: {_score_src}")
 
     inst_trades = [t for t in trades if t["instrument"] == selected_inst]
 
@@ -729,10 +768,22 @@ def _render_tab2():
         mc2[3].metric("Win Rate",      f"{im['win_rate']:.1f}%")
         st.divider()
 
-    # Build subplots: price | volume | (per-stock equity if trades exist)
-    n_rows = 3 if inst_trades else 2
-    row_heights = [0.55, 0.20, 0.25] if n_rows == 3 else [0.75, 0.25]
-    subtitles   = ["Price", "Volume", "Cumulative P&L"] if n_rows == 3 else ["Price", "Volume"]
+    # Build subplots: price | volume | (per-stock equity) | (model probabilities)
+    _model_row = None
+    if inst_trades and _signal_log:
+        n_rows, row_heights = 4, [0.42, 0.13, 0.20, 0.25]
+        subtitles = ["Price", "Volume", "Cumulative P&L", "Model P(min) / P(max)"]
+        _model_row = 4
+    elif inst_trades:
+        n_rows, row_heights = 3, [0.55, 0.20, 0.25]
+        subtitles = ["Price", "Volume", "Cumulative P&L"]
+    elif _signal_log:
+        n_rows, row_heights = 3, [0.50, 0.18, 0.32]
+        subtitles = ["Price", "Volume", "Model P(min) / P(max)"]
+        _model_row = 3
+    else:
+        n_rows, row_heights = 2, [0.75, 0.25]
+        subtitles = ["Price", "Volume"]
 
     fig = make_subplots(
         rows=n_rows, cols=1,
@@ -841,7 +892,7 @@ def _render_tab2():
                     hoverinfo="skip",
                 ), row=1, col=1)
 
-    # ── model signal overlay ──
+    # ── model signal overlay: crossing markers on price + full per-candle pane ──
     if _signal_log:
         _sig_style = {
             "ENTRY":       ("#27ae60", "circle",      "Model: Local Min (entry)"),
@@ -867,6 +918,33 @@ def _render_tab2():
                     "<extra></extra>"
                 ),
             ), row=1, col=1)
+
+        # Per-candle probability pane — the model's raw output on every bar,
+        # with the per-stock decision guides. A P(min) line pinned at 1.0 is the
+        # stale-model saturation failure mode, not conviction.
+        _sig_x = [e["timestamp"] for e in _signal_log]
+        fig.add_trace(go.Scatter(
+            x=_sig_x, y=[e["p_min"] for e in _signal_log],
+            mode="lines", name="P(min) — buy",
+            line=dict(color="#2ecc71", width=1.5),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>P(min)=%{y:.3f}<extra></extra>",
+        ), row=_model_row, col=1)
+        fig.add_trace(go.Scatter(
+            x=_sig_x, y=[e["p_max"] for e in _signal_log],
+            mode="lines", name="P(max) — sell",
+            line=dict(color="#e74c3c", width=1.5),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>P(max)=%{y:.3f}<extra></extra>",
+        ), row=_model_row, col=1)
+        for _lvl, _color, _dash, _lbl in (
+            (float(_probe_params.get("threshold", 0.70)),      "#2ecc71", "dash", "threshold"),
+            (float(_probe_params.get("veto_threshold", 0.50)), "#f1c40f", "dot",  "veto"),
+            (float(_probe_params.get("sell_threshold", 0.65)), "#e74c3c", "dash", "sell"),
+        ):
+            fig.add_hline(y=_lvl, line_dash=_dash, line_width=1,
+                          line_color=_color, opacity=0.55,
+                          annotation_text=_lbl, annotation_font_size=10,
+                          annotation_font_color=_color,
+                          row=_model_row, col=1)
 
     # ── live trades overlay ──
     if st.session_state.get("load_live", False):
@@ -911,7 +989,7 @@ def _render_tab2():
                 ), row=1, col=1)
 
     fig.update_layout(
-        height=700,
+        height=880 if _model_row is not None else 700,
         margin=dict(l=10, r=10, t=60, b=10),
         hovermode="x unified",
         showlegend=True,
@@ -930,6 +1008,9 @@ def _render_tab2():
     fig.update_yaxes(title_text="Vol", row=2, col=1)
     if inst_trades:
         fig.update_yaxes(title_text="P&L ₹", row=3, col=1)
+    if _model_row is not None:
+        # Fixed 0..1 axis — saturation reads as saturation, not autoscaled drama
+        fig.update_yaxes(title_text="P", range=[0, 1.02], row=_model_row, col=1)
 
     chart_event = st.plotly_chart(
         fig, on_select="rerun",
