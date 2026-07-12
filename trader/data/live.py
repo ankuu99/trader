@@ -60,6 +60,9 @@ class LiveFeed:
         self._stopping = False
         self._suspended = False  # True between market close disconnect and next-day reconnect
 
+        self._bind_ticker_callbacks()
+
+    def _bind_ticker_callbacks(self):
         self._ticker.on_connect = self._on_connect
         self._ticker.on_ticks = self._on_ticks
         self._ticker.on_order_update = self._on_order_update
@@ -116,6 +119,24 @@ class LiveFeed:
         self._suspended = False
         self._ticker.connect(threaded=True)
         logger.info("Live feed reconnecting for market open")
+
+    def update_access_token(self, api_key: str, access_token: str):
+        """Adopt a fresh Kite access token by rebuilding the underlying KiteTicker.
+
+        The ws URL embeds the token at construction, so mutation isn't enough — a
+        new ticker is built and all callbacks re-bound. Intended for the overnight
+        window (between market-close disconnect and pre-market reconnect); if the
+        old socket is still up it is closed first. Subscriptions, handlers and
+        candle state live on this object and carry over untouched."""
+        try:
+            if self._ticker.is_connected():
+                logger.warning("update_access_token called while connected — closing old socket")
+                self._ticker.close()
+        except Exception:
+            logger.exception("Error closing old ticker during token update")
+        self._ticker = KiteTicker(api_key, access_token)
+        self._bind_ticker_callbacks()
+        logger.info("Live feed access token updated (ticker rebuilt)")
 
     # ------------------------------------------------------------------ #
     # KiteTicker callbacks                                                 #

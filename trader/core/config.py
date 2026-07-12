@@ -193,6 +193,13 @@ class Config:
         self._data = data
         self._base_capital = float(data["capital"]["total"])
 
+    def reload_env(self) -> str | None:
+        """Re-source config/.env with override so a KITE_ACCESS_TOKEN written by
+        the TOTP refresh cron is adopted without a process restart (weekly-restart
+        operation). Returns the (possibly unchanged) access token."""
+        load_dotenv(ENV_FILE, override=True)
+        return self.kite_access_token
+
     @property
     def env(self) -> str:
         return self._data["env"]

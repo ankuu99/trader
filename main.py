@@ -731,7 +731,27 @@ def main():
     # Scheduler
     scheduler = Scheduler()
 
+    def _reload_kite_token():
+        """Adopt a fresh access token written to config/.env by the TOTP cron
+        (08:15 IST) without a process restart — the enabler for weekly-restart
+        operation. Runs while the feed is disconnected overnight, and must run
+        BEFORE warm_up: the old token expired at midnight, so every REST call
+        this morning needs the new one."""
+        old = config.kite_access_token
+        new = config.reload_env()
+        if not new or new == old:
+            return
+        kite.set_access_token(new)
+        feed.update_access_token(config.kite_api_key, new)
+        try:
+            profile = kite.profile()
+            logger.info("Kite token hot-reloaded | user=%s", profile.get("user_id"))
+        except Exception as e:
+            logger.error("Hot-reloaded Kite token failed validation: %s", e)
+            telegram.notify_error(f"Kite token hot-reload failed validation: {e}")
+
     def pre_market():
+        _reload_kite_token()
         logger.info("Pre-market: warming up candle cache")
         for symbol in valid_watchlist:
             token = symbol_to_token[symbol]

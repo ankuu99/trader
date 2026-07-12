@@ -169,6 +169,12 @@ def _notify(success: bool, user_id: str = "", detail: str = ""):
 
 
 def main():
+    # --no-restart: write the token but leave the trader service running — the
+    # bot's pre-market job hot-reloads config/.env itself (weekly-restart ops).
+    # Default remains restart so the existing daily cron keeps working until
+    # the cron line is updated on the server.
+    restart = "--no-restart" not in sys.argv
+
     print("Kite TOTP auto-refresh starting...")
     try:
         _check_env()
@@ -185,9 +191,13 @@ def main():
         user_id = kite_session.get("user_id", "")
         logger.info("Session OK | user=%s (%s)", user_name, user_id)
 
-        print("Saving token and restarting service...")
-        _save_token(access_token)
-        _restart_service()
+        if restart:
+            print("Saving token and restarting service...")
+            _save_token(access_token)
+            _restart_service()
+        else:
+            print("Saving token (no service restart — bot hot-reloads at pre-market)...")
+            _save_token(access_token)
 
         print(f"\nDone. Token valid until midnight IST.")
         print(f"User: {user_name} ({user_id})")

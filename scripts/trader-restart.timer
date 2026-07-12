@@ -1,0 +1,12 @@
+# Weekly hygiene restart — Sunday 08:00 IST (market closed, before Monday's
+# token refresh). See trader-restart.service for install steps.
+
+[Unit]
+Description=Weekly trader bot restart timer
+
+[Timer]
+OnCalendar=Sun *-*-* 08:00:00 Asia/Kolkata
+Persistent=true
+
+[Install]
+WantedBy=timers.target
