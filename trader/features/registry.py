@@ -13,10 +13,12 @@ multi-channel price window (WindowFeaturePipeline, Plan 5) for use with model.ty
 
 from trader.features.base import FeaturePipeline
 from trader.features.extrema_features import ExtremaFeaturePipeline
+from trader.features.regime_features import ExtremaRegimeFeaturePipeline
 from trader.features.window_features import WindowFeaturePipeline
 
 _REGISTRY = {
     "extrema": ExtremaFeaturePipeline,
+    "extrema_regime": ExtremaRegimeFeaturePipeline,
     "window": WindowFeaturePipeline,
 }
 

@@ -12,10 +12,12 @@ kNN/GBM remain unregistered (overfit on per-stock data — see todo_revamp.md St
 """
 
 from trader.models.base import ExtremaModel
+from trader.models.gbdt import GBDTModel
 from trader.models.logistic import LogisticModel
 from trader.models.mlp import MLPModel
 
 _REGISTRY = {
+    "gbdt": GBDTModel,
     "logistic": LogisticModel,
     "mlp": MLPModel,
 }

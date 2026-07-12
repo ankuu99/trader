@@ -24,6 +24,25 @@ logger = get_logger(__name__)
 MIN_SAMPLES_PER_CLASS = 2
 
 
+def collapse_clusters(indices: list[int], max_gap: int) -> list[int]:
+    """Collapse runs of nearby indices (gap <= max_gap) to the cluster centre.
+
+    Flat price plateaus make every tied bar qualify as a geometric extremum,
+    double-labelling the same turning point; the lab measured labeler precision
+    at 0.5 on zero-noise data purely from this."""
+    if not indices:
+        return []
+    out, cluster = [], [indices[0]]
+    for idx in indices[1:]:
+        if idx - cluster[-1] <= max_gap:
+            cluster.append(idx)
+        else:
+            out.append(cluster[len(cluster) // 2])
+            cluster = [idx]
+    out.append(cluster[len(cluster) // 2])
+    return out
+
+
 class Labeler(ABC):
     @abstractmethod
     def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
@@ -47,6 +66,10 @@ class ExtremaLabeler(Labeler):
     def __init__(self, instrument: str, params: dict):
         self._instrument = instrument
         self._extrema_order: int = int(params.get("extrema_order", 5))
+        # labels.collapse_ties: merge tied/adjacent extrema runs to one sample.
+        # Default OFF to preserve the live golden-parity behaviour.
+        self._collapse_ties: bool = bool(
+            (params.get("labels") or {}).get("collapse_ties", False))
         _fl = params.get("forward_label") or {}
         self._fl_enabled: bool = bool(_fl.get("enabled", False))
         self._fl_bars: int = int(_fl.get("forward_bars", 150))
@@ -62,6 +85,9 @@ class ExtremaLabeler(Labeler):
     def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
         closes = [c["close"] for c in candles]
         minima, maxima = find_local_extrema(closes, self._extrema_order)
+        if self._collapse_ties:
+            minima = collapse_clusters(minima, self._extrema_order)
+            maxima = collapse_clusters(maxima, self._extrema_order)
 
         if len(minima) < MIN_SAMPLES_PER_CLASS or len(maxima) < MIN_SAMPLES_PER_CLASS:
             logger.warning(
@@ -110,22 +136,26 @@ class ExtremaLabeler(Labeler):
     def _sample_neutrals(
         self, n_candles: int, minima: set, maxima: set, n_extrema: int
     ) -> list[int]:
-        """Evenly-spaced candle indices ≥ margin bars from every extremum.
-        Deterministic — no RNG — so successive retrains on the same window
-        produce the same labels. Index 20 onward only (feature min_history=21;
-        keeps sample counts honest rather than silently dropped downstream)."""
-        excluded = set()
-        for e in minima | maxima:
-            excluded.update(range(e - self._neutral_margin, e + self._neutral_margin + 1))
-        candidates = [i for i in range(20, n_candles) if i not in excluded]
-        target = round(self._neutral_ratio * n_extrema)
-        if target <= 0 or not candidates:
-            return []
-        if target >= len(candidates):
-            return candidates
-        step = len(candidates) / target
-        picked = {candidates[int(k * step)] for k in range(target)}
-        return sorted(picked)
+        return sample_neutrals(n_candles, minima | maxima, self._neutral_margin,
+                               round(self._neutral_ratio * n_extrema))
+
+
+def sample_neutrals(n_candles: int, extrema: set, margin: int, target: int) -> list[int]:
+    """Evenly-spaced candle indices ≥ margin bars from every extremum.
+    Deterministic — no RNG — so successive retrains on the same window
+    produce the same labels. Index 20 onward only (feature min_history=21;
+    keeps sample counts honest rather than silently dropped downstream)."""
+    excluded = set()
+    for e in extrema:
+        excluded.update(range(e - margin, e + margin + 1))
+    candidates = [i for i in range(20, n_candles) if i not in excluded]
+    if target <= 0 or not candidates:
+        return []
+    if target >= len(candidates):
+        return candidates
+    step = len(candidates) / target
+    picked = {candidates[int(k * step)] for k in range(target)}
+    return sorted(picked)
 
 
 class TrendScanningLabeler(Labeler):
@@ -185,6 +215,92 @@ class TrendScanningLabeler(Labeler):
         return indices, classes
 
 
+def zigzag_pivots(closes: list[float], reversal_pct: float) -> tuple[list[int], list[int]]:
+    """Swing pivots by minimum-percent reversal (classic zigzag, no ATR).
+
+    A pivot low is confirmed when price rises >= reversal_pct% off the running
+    minimum; a pivot high when it falls >= reversal_pct% off the running maximum.
+    Returns (low_indices, high_indices).
+
+    Key property vs the fixed ±order neighbourhood: reversals are measured in %,
+    so a dip on a rising baseline is still a dip — trend does not hide it."""
+    n = len(closes)
+    if n < 3:
+        return [], []
+    r = reversal_pct / 100.0
+    lows: list[int] = []
+    highs: list[int] = []
+    trend = 0  # 0 unknown, +1 up (seeking high), -1 down (seeking low)
+    min_i, min_p = 0, closes[0]
+    max_i, max_p = 0, closes[0]
+    for i in range(1, n):
+        c = closes[i]
+        if trend == 0:
+            if c < min_p:
+                min_i, min_p = i, c
+            if c > max_p:
+                max_i, max_p = i, c
+            if min_p > 0 and c >= min_p * (1 + r):
+                lows.append(min_i)
+                trend, max_i, max_p = 1, i, c
+            elif max_p > 0 and c <= max_p * (1 - r):
+                highs.append(max_i)
+                trend, min_i, min_p = -1, i, c
+        elif trend > 0:  # uptrend: ratchet the max, confirm a high on -r reversal
+            if c > max_p:
+                max_i, max_p = i, c
+            elif max_p > 0 and c <= max_p * (1 - r):
+                highs.append(max_i)
+                trend, min_i, min_p = -1, i, c
+        else:  # downtrend: ratchet the min, confirm a low on +r reversal
+            if c < min_p:
+                min_i, min_p = i, c
+            elif min_p > 0 and c >= min_p * (1 + r):
+                lows.append(min_i)
+                trend, max_i, max_p = 1, i, c
+    return lows, highs
+
+
+class ZigZagLabeler(Labeler):
+    """Zigzag swing-pivot labels (`labels.type: zigzag`).
+
+    Pivot lows -> class 0 (buy candidate), pivot highs -> class 1. Like the other
+    labelers, confirmation uses forward candles — fine for *training* labels; the
+    model still predicts from past-only features at inference.
+
+    Config: labels.zigzag.reversal_pct (minimum % reversal to confirm a pivot)."""
+
+    def __init__(self, instrument: str, params: dict):
+        self._instrument = instrument
+        _labels = params.get("labels") or {}
+        _zz = _labels.get("zigzag") or {}
+        self._reversal_pct: float = float(_zz.get("reversal_pct", 2.0))
+        _nc = _labels.get("neutral") or {}
+        self._neutral_enabled: bool = bool(_nc.get("enabled", False))
+        self._neutral_ratio: float = float(_nc.get("ratio", 1.0))
+        _margin = _nc.get("margin_bars")
+        self._neutral_margin: int = int(_margin) if _margin is not None else 10
+
+    def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
+        closes = [c["close"] for c in candles]
+        lows, highs = zigzag_pivots(closes, self._reversal_pct)
+        if len(lows) < MIN_SAMPLES_PER_CLASS or len(highs) < MIN_SAMPLES_PER_CLASS:
+            logger.warning(
+                "ZigZag | %s | not enough pivots to train (low=%d high=%d)",
+                self._instrument, len(lows), len(highs),
+            )
+            return [], []
+        indices = lows + highs
+        classes = [0] * len(lows) + [1] * len(highs)
+        if self._neutral_enabled:
+            neutrals = sample_neutrals(
+                len(candles), set(indices), self._neutral_margin,
+                round(self._neutral_ratio * len(indices)))
+            indices += neutrals
+            classes += [2] * len(neutrals)
+        return indices, classes
+
+
 def triple_barrier_label(
     candles: list[dict], entry_idx: int, profit_pct: float, stop_pct: float, max_bars: int,
     atr: float | None = None, atr_mult_pt: float | None = None, atr_mult_sl: float | None = None,
@@ -240,4 +356,7 @@ def build_labeler(instrument: str, params: dict) -> Labeler:
         return ExtremaLabeler(instrument, params)
     if ltype == "trend_scan":
         return TrendScanningLabeler(instrument, params)
-    raise ValueError(f"Unknown labeler type {ltype!r}. Available: ['extrema', 'trend_scan']")
+    if ltype == "zigzag":
+        return ZigZagLabeler(instrument, params)
+    raise ValueError(
+        f"Unknown labeler type {ltype!r}. Available: ['extrema', 'trend_scan', 'zigzag']")
