@@ -354,6 +354,18 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 | `min_hold_before_exit` | 3 | Min held_bars before pattern-top exit can fire — prevents immediate U-turn after entry |
 | `volume_ma_bars` | 20 | Rolling window for volume normalisation (volume_ratio = current / mean). Not sensitive; calibration not needed. |
 
+### Alternative detection stack (config-gated, default-off — 2026-07 regime campaign)
+
+Swappable components behind nested config blocks; production defaults unchanged unless enabled:
+
+- `labels.type: zigzag` — swing-pivot training labels by minimum-%-reversal (`labels.zigzag.reversal_pct`), no ATR. **`labels.zigzag.vol_scaled: {enabled, k, min_pct, max_pct}`** replaces the fixed percentage with `k × σ` (σ = std of bar-to-bar % returns over the training window) — label scale adapts per stock and per retrain window. Fixed percentages proved fragile (spike, not plateau); vol-scaled k∈[2.0, 2.5] is a plateau.
+- `labels.neutral: {enabled, ratio}` — class-2 "neither" samples; fixes the forced P(min)+P(max)=1 split. Thresholds must be recalibrated when enabled (gbdt recipe uses 0.65/0.60).
+- `features.type: extrema_regime` + `features.regime.horizons: [...]` — appends efficiency-ratio / variance-ratio / slope-t-stat per horizon (`trader/features/regime.py`) so the model separates "dip in uptrend" from "falling knife" directly. Horizons are bar-counts — scale to the strategy TF (15m: 100/400/1600; day: 20/60/250).
+- `model.type: gbdt` — HistGradientBoosting (depth 3). With clean sparse zigzag labels + long windows it beats logistic on trend scenarios (the old "GBM overfits" note was an artifact of noisy labels).
+- `exits.trailing.regime_widening: {lookback_bars, min_slope_pct, trail_wide}` — widens the trail during a close-level uptrend. **Falsified at 15m** (EOD force-close binds first; overnight holds hurt) — dormant, do not enable at 15m.
+
+Validated combination (see `reviews/dayw_candidate_proposal_20260713.md` and the lab in `scripts/lab/`): zigzag vol-scaled k=2.0 + neutral 2.0 + extrema_regime [20,60,250] + gbdt @ 0.65/0.60 on **day timeframe** for all names — Calmar 2.11, DD 10.8%, 6/7 rolling windows profitable incl. the 2025-H1 correction. Not deployed.
+
 ### What makes this strategy work (and when it fails)
 
 **Works well on stocks that:**
