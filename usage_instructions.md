@@ -85,13 +85,36 @@ logging:
 
 ### Token Refresh (automated on EC2)
 
-On EC2 the TOTP refresh runs automatically at **08:15 IST** every weekday via cron:
+On EC2 the TOTP refresh runs automatically at **08:15 IST** every weekday via cron
+(the `trader` user's crontab):
 
 ```bash
-45 2 * * 1-5 /home/trader/.venv/bin/python /opt/trader/scripts/kite_totp_refresh.py >> /opt/trader/logs/totp_refresh.log 2>&1
+45 2 * * 1-5 /opt/trader/.venv/bin/python /opt/trader/scripts/kite_totp_refresh.py --no-restart >> /opt/trader/logs/totp_refresh.log 2>&1
 ```
 
-This logs in headlessly using TOTP, saves the new token to `config/.env`, and restarts the trader service. A Telegram notification confirms success.
+This logs in headlessly using TOTP and saves the new token to `config/.env`. A Telegram
+notification confirms success. **The bot is NOT restarted** (`--no-restart`): the running
+process adopts the new token itself at the 09:00 pre-market job (hot-reload — new token
+into the REST client + a rebuilt KiteTicker, validated via `kite.profile()`, Telegram
+alert if validation fails).
+
+**Weekly restart (hygiene)** — the bot restarts once a week, Monday **08:40 IST**
+(after the token refresh, before pre-market), via a systemd timer:
+
+```bash
+systemctl list-timers trader-restart.timer     # next/last fire
+# units live in scripts/trader-restart.{service,timer}; install steps in the .service comments
+```
+
+The service itself is `Restart=always` with no start limit — if it ever restarts into the
+token-dead window (token expires at midnight IST; weekends have no refresh) it crash-loops
+harmlessly at 60s intervals and self-heals as soon as a valid token appears in `.env`.
+
+**Token status on the dashboard** — the Persistent State card shows a *Kite token* block:
+VALID/INVALID badge, user, last check time and source (startup / hot-reload / 30-min
+heartbeat probe / ui-reload). The **"Reload token from .env"** button forces the running
+bot to adopt whatever token is currently in `.env` — use it after a manual refresh instead
+of waiting for pre-market.
 
 **Manual fallback** (if TOTP refresh fails):
 
@@ -378,7 +401,9 @@ logs/                   — rotating log files (auto-created)
 - **Instance**: t2.micro, Ubuntu 24.04 LTS, ap-south-1 (Mumbai)
 - **Elastic IP**: `13.202.187.191` — whitelist in Zerodha API settings
 - **SSH port**: 9654
-- **Process manager**: systemd (`trader.service`) — auto-starts on boot, restarts on crash within 10s
+- **Process manager**: systemd (`trader.service`) — auto-starts on boot, `Restart=always`
+  (60s backoff, no start limit — survives the token-dead window); weekly hygiene restart
+  Monday 08:40 IST via `trader-restart.timer`
 
 ### Deploying Code Changes
 
@@ -396,10 +421,13 @@ git push origin release-YYYY-MM-DD
 ```
 The script will fail loudly if no tag is provided.
 
-**Force Refresh of Kite on Remote**
+**Force Refresh of Kite on Remote** (no service restart needed — then click
+"Reload token from .env" on the dashboard, or wait for the next pre-market/heartbeat):
 ```bash
-ssh trader "sudo -u trader bash -c 'cd /opt/trader && .venv/bin/python scripts/kite_totp_refresh.py' && sudo systemctl restart trader && sleep 5 && sudo systemctl status trader --no-pager
+ssh trader "sudo -u trader bash -c 'cd /opt/trader && .venv/bin/python scripts/kite_totp_refresh.py --no-restart'"
 ```
+If the bot is stuck in a crash-loop (started while the token was dead), it self-heals
+within ~60s of the refresh — no manual restart required.
 **Rolling back** to a previous release is just:
 ```bash
 ./scripts/deploy.sh release-YYYY-MM-DD   # an earlier date

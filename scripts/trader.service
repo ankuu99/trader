@@ -9,10 +9,12 @@ User=trader
 Group=trader
 WorkingDirectory=/opt/trader
 ExecStart=/opt/trader/.venv/bin/python main.py
-Restart=on-failure
-RestartSec=30
-StartLimitIntervalSec=300
-StartLimitBurst=3
+# Always restart, forever: the token dies at midnight IST, so a restart in the
+# token-dead window (e.g. weekend) crash-loops until the next TOTP refresh —
+# the service must keep retrying and self-heal rather than hit a start limit.
+Restart=always
+RestartSec=60
+StartLimitIntervalSec=0
 
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=Asia/Kolkata

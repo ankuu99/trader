@@ -1,11 +1,13 @@
-# Weekly hygiene restart — Sunday 08:00 IST (market closed, before Monday's
-# token refresh). See trader-restart.service for install steps.
+# Weekly hygiene restart — Monday 08:40 IST: right AFTER the 08:15 TOTP token
+# refresh and before the 09:00 pre-market job, so the restart always has a
+# fresh token. (A weekend slot would restart into the token-dead window and
+# crash-loop until Monday.) See trader-restart.service for install steps.
 
 [Unit]
 Description=Weekly trader bot restart timer
 
 [Timer]
-OnCalendar=Sun *-*-* 08:00:00 Asia/Kolkata
+OnCalendar=Mon *-*-* 08:40:00 Asia/Kolkata
 Persistent=true
 
 [Install]
