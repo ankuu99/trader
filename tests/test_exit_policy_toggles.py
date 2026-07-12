@@ -96,3 +96,63 @@ def test_reduce_position_keeps_remainder():
     # reducing the rest closes it out
     risk.reduce_position("NSE:TEST", 30, 110.0)
     assert "NSE:TEST" not in risk._open_positions
+
+
+# --- Regime-widened trailing (ride the leg in a close-level uptrend) ---
+
+def _ramp_candles(n, start=100.0, step=0.5):
+    return [{"close": start + i * step} for i in range(n)]
+
+
+def _flat_candles(n, price=100.0):
+    return [{"close": price} for _ in range(n)]
+
+
+def test_flatten_resolves_regime_widening():
+    p = flatten_strategy_params({
+        "exits": {"trailing": {"regime_widening": {
+            "enabled": True, "lookback_bars": 100, "min_slope_pct": 0.05, "trail_wide": 5}}}
+    })
+    assert p["trail_regime_enabled"] is True
+    assert p["trail_regime_lookback"] == 100
+    assert p["trail_regime_min_slope_pct"] == 0.05
+    assert p["trail_wide"] == 5
+
+
+def test_regime_widening_default_off_preserves_legacy():
+    pol = _policy()
+    assert pol._trail_regime_enabled is False
+    strat = SimpleNamespace(_last_p_max=0.0, _candles=_ramp_candles(200))
+    assert pol._effective_trail_pct(strat) == 2  # static trail, no widening
+
+
+def test_regime_widening_widens_in_uptrend_and_reverts_when_flat():
+    pol = _policy(trailing={"regime_widening": {
+        "enabled": True, "lookback_bars": 50, "min_slope_pct": 0.05, "trail_wide": 5}})
+    strat = SimpleNamespace(_last_p_max=0.0, _pos=SimpleNamespace(held_bars=0),
+                            _candles=_ramp_candles(60))
+
+    # uptrend ramp: per-candle cache update sets the flag; trail widens to 5
+    pol._regime_uptrend = pol._uptrend_slope(strat._candles, 50, 0.05)
+    assert pol._regime_uptrend is True
+    assert pol._effective_trail_pct(strat) == 5
+
+    # flat tape: flag drops, trail reverts to the static 2
+    strat._candles = _flat_candles(60)
+    pol._regime_uptrend = pol._uptrend_slope(strat._candles, 50, 0.05)
+    assert pol._regime_uptrend is False
+    assert pol._effective_trail_pct(strat) == 2
+
+
+def test_regime_widening_never_tightens():
+    # trail_wide below the base trail must not tighten the trail (max() semantics)
+    pol = _policy(trailing={"regime_widening": {
+        "enabled": True, "lookback_bars": 50, "min_slope_pct": 0.05, "trail_wide": 1}})
+    pol._regime_uptrend = True
+    assert pol._effective_trail_pct(SimpleNamespace(_last_p_max=0.0)) == 2
+
+
+def test_regime_widening_insufficient_history_is_safe():
+    pol = _policy(trailing={"regime_widening": {
+        "enabled": True, "lookback_bars": 100, "min_slope_pct": 0.05, "trail_wide": 5}})
+    assert pol._uptrend_slope(_ramp_candles(10), 100, 0.05) is False

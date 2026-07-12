@@ -75,6 +75,15 @@ def flatten_strategy_params(params: dict) -> dict:
             _set(p, "trail_tight", cs, "trail_tight")
             _set(p, "trail_conf_p_lo", cs, "p_lo")
             _set(p, "trail_conf_p_hi", cs, "p_hi")
+        # Regime-widened trailing: widen the trail while the close-level trend is
+        # strongly up (ride the leg instead of harvesting a few % and re-buying
+        # higher); reverts to the normal trail when the trend fades.
+        if "regime_widening" in trailing:
+            rw = trailing["regime_widening"] or {}
+            p["trail_regime_enabled"] = bool(rw.get("enabled", True))
+            _set(p, "trail_regime_lookback", rw, "lookback_bars")
+            _set(p, "trail_regime_min_slope_pct", rw, "min_slope_pct")
+            _set(p, "trail_wide", rw, "trail_wide")
 
         pattern_top = exits.get("pattern_top") or {}
         _set(p, "sell_threshold", pattern_top, "sell_threshold")

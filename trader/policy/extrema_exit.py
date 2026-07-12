@@ -55,6 +55,18 @@ class ExtremaExitPolicy:
         self._trail_tight: float = float(params.get("trail_tight", self._trail_pct))
         self._trail_conf_p_lo: float = float(params.get("trail_conf_p_lo", 0.5))
         self._trail_conf_p_hi: float = float(params.get("trail_conf_p_hi", 0.9))
+        # Regime-widened trailing: while the close-level trend is strongly up, widen
+        # the trail to trail_wide so the position rides the leg instead of being
+        # harvested a few % up and re-bought higher (the trend-cycling failure mode).
+        # Same scale-invariant OLS read as the pattern-top trend guard but with its
+        # own lookback/threshold; recomputed once per candle, cached for tick checks.
+        self._trail_regime_enabled: bool = bool(params.get("trail_regime_enabled", False))
+        self._trail_regime_lookback: int = int(params.get("trail_regime_lookback", 100))
+        self._trail_regime_min_slope_pct: float = float(
+            params.get("trail_regime_min_slope_pct", 0.05)
+        )
+        self._trail_wide: float = float(params.get("trail_wide", self._trail_pct))
+        self._regime_uptrend: bool = False
         # Scale-out (Step 2): on a pattern-top, sell a fraction and trail the rest.
         self._scale_out_enabled: bool = bool(params.get("pattern_top_scale_out_enabled", False))
         self._scale_out_fraction: float = float(params.get("pattern_top_scale_out_fraction", 0.5))
@@ -91,31 +103,43 @@ class ExtremaExitPolicy:
         """Trailing distance for the current bar. Static (trail_pct) unless
         confidence-sizing is enabled, in which case it interpolates between
         trail_loose (at/below p_lo) and trail_tight (at/above p_hi) using the
-        model's latest P(max) — a firming top tightens the trail to lock gains."""
+        model's latest P(max) — a firming top tightens the trail to lock gains.
+        Regime widening (if enabled) then takes the max with trail_wide while the
+        cached close-level uptrend flag holds — riding a leg never uses a trail
+        tighter than trail_wide, and the normal distance resumes when it fades."""
         if not self._trail_conf_enabled:
-            return self._trail_pct
-        p_max = getattr(strat, "_last_p_max", 0.0) or 0.0
-        lo, hi = self._trail_conf_p_lo, self._trail_conf_p_hi
-        f = 0.0 if hi <= lo else (p_max - lo) / (hi - lo)
-        f = max(0.0, min(1.0, f))
-        return self._trail_loose - (self._trail_loose - self._trail_tight) * f
+            base = self._trail_pct
+        else:
+            p_max = getattr(strat, "_last_p_max", 0.0) or 0.0
+            lo, hi = self._trail_conf_p_lo, self._trail_conf_p_hi
+            f = 0.0 if hi <= lo else (p_max - lo) / (hi - lo)
+            f = max(0.0, min(1.0, f))
+            base = self._trail_loose - (self._trail_loose - self._trail_tight) * f
+        if self._trail_regime_enabled and self._regime_uptrend:
+            return max(base, self._trail_wide)
+        return base
 
-    def _in_uptrend(self, candles) -> bool:
-        """True when the recent *absolute* close trend is strongly positive — used to
-        suppress pattern-top exits on a clean uptrend leg. The slope features the model
-        trains on are slopes-of-returns (acceleration), which mean-revert through a trend
-        and keep flagging tops; this guard instead reads the level trend directly. OLS
-        slope of the last `lookback` closes (price vs index), normalised to %/bar by the
-        window mean so the threshold is scale-invariant across price levels and stocks."""
-        n = self._trend_guard_lookback
-        if n < 3 or len(candles) < n:
+    @staticmethod
+    def _uptrend_slope(candles, lookback: int, min_slope_pct: float) -> bool:
+        """True when the recent *absolute* close trend is strongly positive. The slope
+        features the model trains on are slopes-of-returns (acceleration), which
+        mean-revert through a trend and keep flagging tops; this reads the level trend
+        directly. OLS slope of the last `lookback` closes (price vs index), normalised
+        to %/bar by the window mean so the threshold is scale-invariant across price
+        levels and stocks."""
+        if lookback < 3 or len(candles) < lookback:
             return False
-        closes = [c["close"] for c in list(candles)[-n:]]
+        closes = [c["close"] for c in list(candles)[-lookback:]]
         mean = sum(closes) / len(closes)
         if mean <= 0:
             return False
         slope_pct = linreg_slope(closes) / mean * 100.0  # %/bar
-        return slope_pct >= self._trend_guard_min_slope_pct
+        return slope_pct >= min_slope_pct
+
+    def _in_uptrend(self, candles) -> bool:
+        """Pattern-top trend guard's read (suppresses pattern-top on a clean leg)."""
+        return self._uptrend_slope(candles, self._trend_guard_lookback,
+                                   self._trend_guard_min_slope_pct)
 
     # ------------------------------------------------------------------
     # Candle-speed exits
@@ -126,6 +150,14 @@ class ExtremaExitPolicy:
         exit, or None (possibly after mutating pattern-top trailing state)."""
         pos = strat._pos
         ts = candle.get("timestamp")
+
+        # Refresh the regime-widened-trailing flag once per candle (tick_exit
+        # reads the cached value — an OLS fit per tick would be wasteful).
+        if self._trail_regime_enabled:
+            self._regime_uptrend = self._uptrend_slope(
+                strat._candles, self._trail_regime_lookback,
+                self._trail_regime_min_slope_pct,
+            )
 
         # --- Hold-bars timeout (candle-granularity time cap) ---
         if not strat.is_flat() and pos.held_bars >= self._hold_bars:
