@@ -63,6 +63,18 @@ def build_app(bot_state, risk, store, config) -> Flask:
         store.set_state("cumulative_pnl", value)
         return redirect(request.referrer or "/", code=303)
 
+    @app.route("/token/reload", methods=["POST"])
+    def token_reload():
+        # Re-read config/.env and hot-swap the Kite token (weekly-restart ops).
+        # The heavy lifting lives in main.py's _reload_kite_token closure.
+        fn = getattr(bot_state, "reload_token", None)
+        if callable(fn):
+            try:
+                fn("ui-reload")
+            except Exception:
+                logging.getLogger(__name__).exception("UI token reload failed")
+        return redirect(request.referrer or "/", code=303)
+
     @app.route("/healthz")
     def healthz():
         return "ok"

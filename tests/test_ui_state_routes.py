@@ -49,3 +49,40 @@ def test_reset_pnl_ignores_garbage(ctx):
     assert resp.status_code == 303
     assert risk.cumulative_pnl == -100.0                    # unchanged
     assert store.get_state("cumulative_pnl") == -100.0
+
+
+def test_token_reload_invokes_bot_state_callback(tmp_path):
+    from trader.ui.state import BotState
+
+    store = Store(tmp_path / "ui2.db")
+    bot_state = BotState()
+    calls = []
+    bot_state.reload_token = lambda source: calls.append(source)
+    app = build_app(bot_state=bot_state, risk=RiskManager(), store=store, config=None)
+    app.config.update(TESTING=True)
+
+    resp = app.test_client().post("/token/reload")
+
+    assert resp.status_code == 303
+    assert calls == ["ui-reload"]
+
+
+def test_token_reload_safe_without_callback(ctx):
+    client, _, _ = ctx  # bot_state=None in the fixture
+    resp = client.post("/token/reload")
+    assert resp.status_code == 303
+
+
+def test_token_reload_survives_callback_exception(tmp_path):
+    from trader.ui.state import BotState
+
+    store = Store(tmp_path / "ui3.db")
+    bot_state = BotState()
+    def boom(source):
+        raise RuntimeError("kite down")
+    bot_state.reload_token = boom
+    app = build_app(bot_state=bot_state, risk=RiskManager(), store=store, config=None)
+    app.config.update(TESTING=True)
+
+    resp = app.test_client().post("/token/reload")
+    assert resp.status_code == 303  # never 500s the dashboard

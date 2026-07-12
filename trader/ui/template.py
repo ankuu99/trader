@@ -1173,6 +1173,30 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
     _pos_body = "".join(_pos_rows) or "<tr><td class='dim' colspan='2'>—</td></tr>"
     _ctrl_body = "".join(_ctrl_rows) or "<tr><td class='dim' colspan='2'>none paused</td></tr>"
+
+    # Kite token status (published by main.py: startup / heartbeat / hot-reload)
+    _tok = getattr(bot_state, "token_status", None) or {}
+    if _tok:
+        _tok_badge = _badge("VALID", "green") if _tok.get("valid") else _badge("INVALID", "red")
+        _tok_checked = _tok.get("checked_at")
+        _tok_when = _tok_checked.strftime("%H:%M:%S") if _tok_checked else "—"
+        _tok_detail = (f"{_tok.get('user_id') or '—'} · checked {_tok_when}"
+                       f" · {_tok.get('source', '')}")
+    else:
+        _tok_badge, _tok_detail = _badge("UNKNOWN", "orange"), "no check recorded yet"
+    token_block = f"""
+            <div style="min-width:220px">
+                <h3 style="font-size:13px;margin:4px 0">Kite token</h3>
+                <table>
+                    <tr><td class="dim">status</td><td class="val">{_tok_badge}</td></tr>
+                    <tr><td class="dim" colspan="2" style="font-size:11px">{_tok_detail}</td></tr>
+                </table>
+                <form method="POST" action="/token/reload" style="margin-top:6px">
+                    <button type="submit" style="font-size:11px;padding:3px 9px;border-radius:3px;
+                            border:1px solid #58a6ff;background:#21262d;color:#58a6ff;cursor:pointer">
+                        Reload token from .env</button>
+                </form>
+            </div>"""
     state_section = f"""
     <div class="card full">
         <h2>Persistent State (carried day-to-day)</h2>
@@ -1203,6 +1227,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 <h3 style="font-size:13px;margin:4px 0">Controls</h3>
                 <table>{_ctrl_body}</table>
             </div>
+            {token_block}
         </div>
     </div>"""
 

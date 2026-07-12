@@ -82,6 +82,9 @@ def main():
     )
     portfolio = PortfolioTracker(kite=kite, mode=config.env)
     bot_state = BotState()
+    # create_kite() just validated the token via kite.profile()
+    bot_state.token_status = {"valid": True, "user_id": "",
+                              "checked_at": datetime.now(), "source": "startup"}
 
     # Resolve instrument tokens
     instruments = kite.instruments("NSE")
@@ -731,24 +734,41 @@ def main():
     # Scheduler
     scheduler = Scheduler()
 
-    def _reload_kite_token():
+    def _check_token(source: str) -> bool:
+        """Validate the current token with a lightweight profile() call and
+        publish the result to the dashboard's token card."""
+        try:
+            profile = kite.profile()
+            bot_state.token_status = {"valid": True, "user_id": profile.get("user_id", ""),
+                                      "checked_at": datetime.now(), "source": source}
+            return True
+        except Exception as e:
+            bot_state.token_status = {"valid": False, "user_id": "",
+                                      "checked_at": datetime.now(), "source": source}
+            logger.error("Kite token validation failed (%s): %s", source, e)
+            return False
+
+    def _reload_kite_token(source: str = "hot-reload"):
         """Adopt a fresh access token written to config/.env by the TOTP cron
         (08:15 IST) without a process restart — the enabler for weekly-restart
         operation. Runs while the feed is disconnected overnight, and must run
         BEFORE warm_up: the old token expired at midnight, so every REST call
-        this morning needs the new one."""
+        this morning needs the new one. Also invoked from the dashboard's
+        "Reload token" button (POST /token/reload)."""
         old = config.kite_access_token
         new = config.reload_env()
         if not new or new == old:
+            _check_token(source)  # unchanged token — still refresh the validity card
             return
         kite.set_access_token(new)
         feed.update_access_token(config.kite_api_key, new)
-        try:
-            profile = kite.profile()
-            logger.info("Kite token hot-reloaded | user=%s", profile.get("user_id"))
-        except Exception as e:
-            logger.error("Hot-reloaded Kite token failed validation: %s", e)
-            telegram.notify_error(f"Kite token hot-reload failed validation: {e}")
+        if _check_token(source):
+            logger.info("Kite token hot-reloaded | user=%s",
+                        bot_state.token_status.get("user_id"))
+        else:
+            telegram.notify_error("token_hot_reload", "Kite token hot-reload failed validation")
+
+    bot_state.reload_token = _reload_kite_token
 
     def pre_market():
         _reload_kite_token()
@@ -819,6 +839,7 @@ def main():
         feed.disconnect()
 
     def heartbeat():
+        _check_token("heartbeat")  # keep the dashboard's token card current
         open_pos = list(risk._open_positions.keys())
         logger.info(
             "Heartbeat | mode=%s | open_positions=%d %s | capital_available=%.0f",
