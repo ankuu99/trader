@@ -268,22 +268,46 @@ class ZigZagLabeler(Labeler):
     labelers, confirmation uses forward candles — fine for *training* labels; the
     model still predicts from past-only features at inference.
 
-    Config: labels.zigzag.reversal_pct (minimum % reversal to confirm a pivot)."""
+    Config: labels.zigzag.reversal_pct (minimum % reversal to confirm a pivot).
+
+    Volatility-scaled reversal (labels.zigzag.vol_scaled): instead of one fixed
+    percentage across stocks with very different volatilities, the reversal is
+    k × σ where σ is the std of bar-to-bar % returns over the training window
+    (close-only — deliberately NOT ATR), clamped to [min_pct, max_pct]. The label
+    scale then adapts per stock AND per retrain window, removing the fragile
+    reversal_pct magic number (the fixed 5% was a spike, not a plateau —
+    neighbours 4%/6% scored 33-52% worse on the 2025-26 day-TF sweep)."""
 
     def __init__(self, instrument: str, params: dict):
         self._instrument = instrument
         _labels = params.get("labels") or {}
         _zz = _labels.get("zigzag") or {}
         self._reversal_pct: float = float(_zz.get("reversal_pct", 2.0))
+        _vs = _zz.get("vol_scaled") or {}
+        self._vol_scaled: bool = bool(_vs.get("enabled", False))
+        self._vol_k: float = float(_vs.get("k", 2.5))
+        self._vol_min_pct: float = float(_vs.get("min_pct", 1.0))
+        self._vol_max_pct: float = float(_vs.get("max_pct", 10.0))
         _nc = _labels.get("neutral") or {}
         self._neutral_enabled: bool = bool(_nc.get("enabled", False))
         self._neutral_ratio: float = float(_nc.get("ratio", 1.0))
         _margin = _nc.get("margin_bars")
         self._neutral_margin: int = int(_margin) if _margin is not None else 10
 
+    def _effective_reversal_pct(self, closes: list[float]) -> float:
+        if not self._vol_scaled or len(closes) < 20:
+            return self._reversal_pct
+        rets = [(b - a) / a * 100.0 for a, b in zip(closes[:-1], closes[1:]) if a > 0]
+        if len(rets) < 19:
+            return self._reversal_pct
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        sigma = var ** 0.5
+        return max(self._vol_min_pct, min(self._vol_max_pct, self._vol_k * sigma))
+
     def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
         closes = [c["close"] for c in candles]
-        lows, highs = zigzag_pivots(closes, self._reversal_pct)
+        lows, highs = zigzag_pivots(closes, self._effective_reversal_pct(closes))
         if len(lows) < MIN_SAMPLES_PER_CLASS or len(highs) < MIN_SAMPLES_PER_CLASS:
             logger.warning(
                 "ZigZag | %s | not enough pivots to train (low=%d high=%d)",

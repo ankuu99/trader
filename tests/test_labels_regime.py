@@ -143,3 +143,60 @@ class TestRegimeMeasures:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- Volatility-scaled zigzag reversal ---
+
+def _sine_candles(n=300, amp_pct=6.0, period=60, base=100.0, seed=7):
+    import math, random
+    rng = random.Random(seed)
+    out = []
+    for i in range(n):
+        px = base * (1 + amp_pct / 100 * math.sin(2 * math.pi * i / period))
+        out.append({"close": px + rng.gauss(0, 0.1), "high": px, "low": px,
+                    "open": px, "volume": 1000, "timestamp": i})
+    return out
+
+
+def test_vol_scaled_reversal_tracks_volatility():
+    from trader.features.labels import ZigZagLabeler
+    lab = ZigZagLabeler("T", {"labels": {"zigzag": {
+        "reversal_pct": 5.0, "vol_scaled": {"enabled": True, "k": 2.5}}}})
+    quiet = [100 * (1 + 0.001) ** i for i in range(100)]          # ~0.1%/bar drift, no noise
+    wild = []
+    px = 100.0
+    import random
+    rng = random.Random(3)
+    for _ in range(100):
+        px *= 1 + rng.gauss(0, 0.03)                              # σ ≈ 3%/bar
+        wild.append(px)
+    r_quiet = lab._effective_reversal_pct(quiet)
+    r_wild = lab._effective_reversal_pct(wild)
+    assert r_quiet < r_wild
+    assert r_quiet >= 1.0           # min clamp
+    assert r_wild <= 10.0           # max clamp
+    assert 5.0 < r_wild             # 2.5 × ~3% ≈ 7.5
+
+
+def test_vol_scaled_disabled_uses_fixed():
+    from trader.features.labels import ZigZagLabeler
+    lab = ZigZagLabeler("T", {"labels": {"zigzag": {"reversal_pct": 4.0}}})
+    assert lab._effective_reversal_pct([100.0] * 50) == 4.0
+
+
+def test_vol_scaled_short_history_falls_back():
+    from trader.features.labels import ZigZagLabeler
+    lab = ZigZagLabeler("T", {"labels": {"zigzag": {
+        "reversal_pct": 4.0, "vol_scaled": {"enabled": True, "k": 2.0}}}})
+    assert lab._effective_reversal_pct([100.0, 101.0]) == 4.0
+
+
+def test_vol_scaled_labeler_still_labels():
+    from trader.features.labels import ZigZagLabeler
+    lab = ZigZagLabeler("T", {"labels": {"zigzag": {
+        "reversal_pct": 99.0,   # fixed value would find nothing
+        "vol_scaled": {"enabled": True, "k": 1.5}},
+        "neutral": {"enabled": True, "ratio": 2.0}}})
+    idx, cls = lab.label(_sine_candles())
+    assert len(idx) > 10
+    assert {0, 1, 2} == set(cls)
