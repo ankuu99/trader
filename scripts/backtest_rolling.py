@@ -83,7 +83,11 @@ def main():
                         help="Candle timeframe (default: from config)")
     parser.add_argument("--cache-only", action="store_true",
                         help="Skip Kite authentication and use only locally cached candle data")
+    parser.add_argument("--config", dest="config_path", default=None,
+                        help="Path to alternate config.yaml (default: config/config.yaml)")
     args = parser.parse_args()
+    if args.config_path:
+        config.reload(Path(args.config_path).resolve())
     if args.timeframe:
         config._data["candle_timeframe"] = args.timeframe
 
