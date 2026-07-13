@@ -144,6 +144,29 @@ At **09:00** pre-market warm-up runs. At **15:35** post-market logs P&L summary,
 
 Press **Ctrl+C** to stop cleanly.
 
+### Local paper trading — day-TF winner candidate
+
+The validated day-timeframe candidate (see `reviews/dayw_candidate_proposal_20260713.md`)
+can be paper-traded locally, fully independent of the EC2 live bot:
+
+```bash
+# make sure the local token is fresh (local and EC2 tokens never collide)
+python scripts/kite_totp_refresh.py --no-restart
+
+# run the candidate in paper mode via main.py
+python main.py --config config/config_paper_dayw.yaml
+```
+
+- **Own database** (`data/paper_dayw.db`) — backtest cache wipes never touch it; first
+  startup fetches ~2.2 years of 15m history for the day-TF warm-up (~10 min).
+- **Own dashboard** on **http://localhost:8081** (8080 stays free for the EC2 SSH tunnel).
+- Paper state is in-memory — a restart re-warms and starts flat (standard paper behaviour).
+- Run it during market hours (long-running foreground process, Ctrl+C to stop; or
+  `nohup python main.py --config config/config_paper_dayw.yaml > logs/paper_dayw.out 2>&1 &`).
+- Telegram messages from this bot are tagged `paper` — they share the same chat as live.
+- To compare against expectation: the same config runs through the backtest engine with
+  `python scripts/backtest.py --from <paper-start-date> --cache-only --config config/config_paper_dayw.yaml`.
+
 ---
 
 ## How Orders Work
