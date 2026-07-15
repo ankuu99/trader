@@ -117,8 +117,26 @@ class LiveFeed:
         if not self._suspended:
             return
         self._suspended = False
-        self._ticker.connect(threaded=True)
+        self._connect_ticker()
         logger.info("Live feed reconnecting for market open")
+
+    def _connect_ticker(self):
+        """Connect the ticker, safe against an already-running Twisted reactor.
+
+        KiteTicker.connect() issues connectWS() from the calling thread and only
+        spawns the reactor `if not reactor.running`. On the first connect of the
+        process that's fine. But on a cross-day reconnect (long-lived process:
+        15:35 disconnect → next-day 09:00 reconnect) the reactor thread from the
+        first connect is still running, so connectWS() runs on the scheduler
+        thread against a live reactor — not thread-safe in Twisted, and the
+        connection attempt is silently never processed (feed goes dark with no
+        error; observed 2026-07-14/15). Hand the call to the reactor thread
+        instead."""
+        from twisted.internet import reactor
+        if reactor.running:
+            reactor.callFromThread(self._ticker.connect, threaded=True)
+        else:
+            self._ticker.connect(threaded=True)
 
     def update_access_token(self, api_key: str, access_token: str):
         """Adopt a fresh Kite access token by rebuilding the underlying KiteTicker.
