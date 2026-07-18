@@ -782,10 +782,17 @@ def main():
         feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
 
     def eod_flush():
-        # 15:16 IST — fallback for aggregated-TF stocks whose last-member candle
-        # never completed (no ticks after 15:15): emit the in-progress bar so
+        # 15:16 IST. First: deliver the already-complete 15:00–15:15 base candle
+        # out of LiveFeed so each aggregator completes its FULL day/4h bar via
+        # handle_candle and the order is placed now (market still open), not at
+        # the 15:30 flush. This runs the normal on_candle → validate → place path
+        # with the exact bar shape the backtest sees. cutoff=15:15 leaves the
+        # open 15:15–15:30 partial alone, so 15-minute stocks are unaffected.
+        feed.flush_closed_partials(dtime(15, 15))
+        # Fallback for aggregated-TF stocks whose last-member candle never formed
+        # (no ticks in 15:00–15:15): emit the in-progress bar (through 14:45) so
         # the day/4h decision still fires before close. Normal days are a no-op
-        # (the bar already emitted on its last member).
+        # (the bar already emitted above on its last member).
         for symbol, _agg in aggregator_map.items():
             if _agg is None:
                 continue
@@ -812,12 +819,26 @@ def main():
         portfolio.refresh()  # fetch live P&L from Kite before summarising
         # Evict phantom positions from risk tracker that were closed by GTT
         # but whose order updates were never received (known edge case).
+        #
+        # A position is only genuinely gone if it appears in NEITHER the intraday
+        # day-book (kite.positions()["net"], qty>0) NOR holdings. This is a CNC /
+        # delivery system: a stock bought and carried overnight LEAVES positions()
+        # and lives in kite.holdings() (t1_quantity>0 pre-settlement, quantity>0
+        # after). Checking only positions() classifies every overnight holding as
+        # "stale" and evicts it with a phantom exit_price=0 close — which drops the
+        # risk tracker's "already in position" guard and lets the strategy re-fire
+        # ENTRY the next session (duplicate buys). Mirror the startup reconcile,
+        # which reads all three states (see R6-1 above).
         if config.env == "live":
             try:
                 kite_pos = kite.positions()
                 live_instruments = {
                     f"NSE:{p['tradingsymbol']}" for p in kite_pos.get("net", [])
-                    if p["quantity"] > 0
+                    if int(p.get("quantity", 0)) > 0
+                }
+                live_instruments |= {
+                    f"NSE:{h['tradingsymbol']}" for h in kite.holdings()
+                    if int(h.get("quantity", 0)) > 0 or int(h.get("t1_quantity", 0)) > 0
                 }
                 stale = set(risk._open_positions.keys()) - live_instruments
                 for inst in stale:

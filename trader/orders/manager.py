@@ -168,6 +168,7 @@ class OrderManager:
         fill_price = float(kite_update.get("average_price") or 0)
         quantity = int(kite_update.get("filled_quantity") or 0)
         trigger_price = float(kite_update.get("trigger_price") or 0)
+        status_message = kite_update.get("status_message") or kite_update.get("status_message_raw") or ""
 
         # Layer 1 — cross-exchange / external SELL reconciliation.
         # An equity held on NSE can be sold on BSE (or vice-versa), and manual /
@@ -225,11 +226,18 @@ class OrderManager:
             "addon": getattr(original, "addon", False) if original else False,
         }
         self._store.upsert_order(record)
-        logger.info(
-            "Live fill | %s %s x%d @ %.2f | status=%s | strategy=%s",
-            direction, instrument, quantity, fill_price, status,
-            record["strategy"],
-        )
+        if status == "REJECTED":
+            logger.warning(
+                "Live fill | %s %s x%d @ %.2f | status=%s | strategy=%s | reason=%s",
+                direction, instrument, quantity, fill_price, status,
+                record["strategy"], status_message or "(no message from Kite)",
+            )
+        else:
+            logger.info(
+                "Live fill | %s %s x%d @ %.2f | status=%s | strategy=%s",
+                direction, instrument, quantity, fill_price, status,
+                record["strategy"],
+            )
         self._dispatch(record)
         # Clean up completed/terminal orders from in-flight maps
         if status in ("COMPLETE", "REJECTED", "CANCELLED"):
