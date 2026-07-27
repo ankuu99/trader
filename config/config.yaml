@@ -675,7 +675,34 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 3.0
-  
+  NSE:STYLAMIND:
+    lr_extrema:
+      timeframe: day                # calibrated 2026-07-26: day ₹27.7k/24t/70.8% vs
+                                    # 15m ₹16.3k/211t, 4hour ₹15.2k/58t
+      warmup_bars: 100              # ~5 months of day bars before first training
+      lookback_bars: 400            # ~19-month rolling training window
+      threshold: 0.85               # mid-plateau (0.82/0.85/0.88 all profitable)
+      retrain_every: 1              # retrain every day bar
+      extrema_order: 5              # swing extrema = local min/max over ±5 days
+      exits:
+        hold_bars: 40               # ~2 months max hold
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20              # black-swan circuit breaker
+        trailing:
+          profit_pct: 10            # trailing arms at +10%
+          trail_pct: 4              # 2% would exit on ordinary daily noise
+          force_close_time: null    # day-TF holds must survive overnight
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2   # days
+        stale:
+          check_bars: 5             # NB: pre-×2 values — the calibration sweep ran
+          min_gain_pct: 0.5         # with these, so config matches the backtest.
+        stale_2:                    # Other day/4h blocks use the ×2 values (2026-07-06).
+          check_bars: 15
+          min_gain_pct: -2.0
+
 data:
   db_path: data/market.db
   historical_cache_days: 400
