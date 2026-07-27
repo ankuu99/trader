@@ -9,7 +9,7 @@ Responsibilities:
 """
 
 import time as _sys_time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from threading import Lock
 
 _IST_OFFSET = timedelta(hours=5, minutes=30)
@@ -292,6 +292,30 @@ class LiveFeed:
                 logger.info("Force-flushing partial candle at market close | token=%d", token)
                 self._emit_candle(token, partial)
             self._partials.clear()
+
+    def flush_closed_partials(self, cutoff: time):
+        """Emit (and drop) partials whose candle bucket has fully closed by
+        `cutoff` — i.e. candle_start < cutoff — leaving still-open partials in
+        place.
+
+        Called at the 15:16 EOD flush with cutoff=15:15 to deliver the
+        already-complete 15:00–15:15 base candle early, so aggregated (day/4h)
+        bars complete and their orders are placed while the market is still open
+        rather than at the 15:30 flush. That candle is already fully formed (all
+        its ticks belong to the 15:00 bucket; a tick >= 15:15 only triggers its
+        emission), so emitting it now is lossless. The 15:15–15:30 partial is NOT
+        flushed (its bucket is still open), so regular 15-minute stocks see no
+        premature/double emission of their final candle.
+
+        Compares on the candle's own IST-normalised timestamp — not the server
+        wall clock — so it is correct regardless of the host timezone."""
+        with self._lock:
+            for token, partial in list(self._partials.items()):
+                if partial["candle_start"].time() < cutoff:
+                    logger.info("EOD early-flush closed partial | token=%d | %s",
+                                token, partial["candle_start"])
+                    self._emit_candle(token, partial)
+                    del self._partials[token]
 
     def _candle_bucket(self, ts: datetime) -> datetime:
         """Round a timestamp down to the nearest candle boundary, aligned to 9:15 IST.
