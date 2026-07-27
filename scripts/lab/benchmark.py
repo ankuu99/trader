@@ -197,6 +197,82 @@ ARMS: dict[str, dict] = {
                    "model": {"type": "gbdt"}},
         "thr": {"type": "fixed", "min": 0.65, "max": 0.60},
     },
+    # --- Stage 5: Bruni et al. 2026 ideas (see avg_trend_paper_plan.md) ---
+    # 5a: averaged 10v10 directional labels — dense Up/Down regime classifier;
+    # the P(min) threshold crossing is the Down→Up confidence flip. Dense
+    # balanced labels keep P near 0.5, so thresholds are swept lower than the
+    # sparse-label arms.
+    "avgtrend_n10_t70": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 10}}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    "avgtrend_n25_t70": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    "avgtrend_n50_t70": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 50}}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    "avgtrend_n25_t60": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}}},
+        "thr": {"type": "fixed", "min": 0.60, "max": 0.60},
+    },
+    "avgtrend_n25_t80": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}}},
+        "thr": {"type": "fixed", "min": 0.80, "max": 0.75},
+    },
+    "avgtrend_n25_q": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}}},
+        "thr": {"type": "quantile", "window": 1000, "q": 0.98, "floor": 0.5},
+    },
+    "avgtrend_n25_db025_t70": {
+        "params": {"labels": {"type": "avg_trend",
+                              "avg_trend": {"window": 25, "deadband_pct": 0.25}}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    "avgtrend_gbdt_t70": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}},
+                   "features": {"type": "extrema_regime"},
+                   "model": {"type": "gbdt"}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    "avgtrend_smooth_t70": {
+        "params": {"labels": {"type": "avg_trend", "avg_trend": {"window": 25}},
+                   "features": {"smoothing": {"enabled": True, "window": 21}}},
+        "thr": {"type": "fixed", "min": 0.70, "max": 0.65},
+    },
+    # 5b: causal Gaussian smoothing layered on the validated winner recipe —
+    # the orthogonal test: does the paper's preprocessing improve our best arm?
+    "smooth_on_winner": {
+        "params": {"labels": {"type": "zigzag", "zigzag": {"reversal_pct": 1.5},
+                              "neutral": {"enabled": True, "ratio": 2.0}},
+                   "lookback_bars": 6000, "warmup_bars": 1000,
+                   "features": {"type": "extrema_regime",
+                                "smoothing": {"enabled": True, "window": 21}},
+                   "model": {"type": "gbdt"}},
+        "thr": {"type": "fixed", "min": 0.65, "max": 0.60},
+    },
+    "smooth_edge_const": {
+        "params": {"labels": {"type": "zigzag", "zigzag": {"reversal_pct": 1.5},
+                              "neutral": {"enabled": True, "ratio": 2.0}},
+                   "lookback_bars": 6000, "warmup_bars": 1000,
+                   "features": {"type": "extrema_regime",
+                                "smoothing": {"enabled": True, "window": 21,
+                                              "edge": "constant"}},
+                   "model": {"type": "gbdt"}},
+        "thr": {"type": "fixed", "min": 0.65, "max": 0.60},
+    },
+    "smooth_edge_linear": {
+        "params": {"labels": {"type": "zigzag", "zigzag": {"reversal_pct": 1.5},
+                              "neutral": {"enabled": True, "ratio": 2.0}},
+                   "lookback_bars": 6000, "warmup_bars": 1000,
+                   "features": {"type": "extrema_regime",
+                                "smoothing": {"enabled": True, "window": 21,
+                                              "edge": "linear"}},
+                   "model": {"type": "gbdt"}},
+        "thr": {"type": "fixed", "min": 0.65, "max": 0.60},
+    },
 }
 
 

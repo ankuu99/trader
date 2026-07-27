@@ -16,12 +16,19 @@ Config (the nested `features:` block under strategies.lr_extrema):
 Base vector (always): [volume_ratio, norm_price, slope3, slope5, slope10, slope20]
 Slopes are over % returns (stationary); volume is a ratio to its rolling mean —
 both scale-invariant across stocks and price levels.
+
+Optional `smoothing:` block (see trader/features/smoothing.py): the return-slope
+features are computed over causally-smoothed closes instead of raw ones.
+norm_price and volume_ratio stay raw (they describe the bar itself, not the
+trend), as do the optional depth/macd/curvature features (default-off; kept out
+of the smoothing blast radius deliberately).
 """
 
 import numpy as np
 
 from trader.features.base import FeaturePipeline
 from trader.features.indicators import ema_series, linreg_slope
+from trader.features.smoothing import build_smoother
 
 _BASE_NAMES = ["volume_ratio", "norm_price", "slope3", "slope5", "slope10", "slope20"]
 
@@ -45,6 +52,8 @@ class ExtremaFeaturePipeline(FeaturePipeline):
         _curv = cfg.get("curvature") or {}
         self._curv_enabled: bool = bool(_curv.get("enabled", False))
         self._curv_lookback: int = int(_curv.get("lookback_bars", 50))
+
+        self._smoother = build_smoother(cfg)
 
     @property
     def min_history(self) -> int:
@@ -79,9 +88,11 @@ class ExtremaFeaturePipeline(FeaturePipeline):
         volume_ratio = float(last.get("volume", 0)) / vol_mean if vol_mean > 0 else 1.0
 
         # % returns over last 21 closes → 20 return values
+        slope_closes = (self._smoother.series(candles, 21)
+                        if self._smoother else closes[-21:])
         returns = [
-            (closes[i] - closes[i - 1]) / closes[i - 1]
-            for i in range(len(closes) - 20, len(closes))
+            (slope_closes[i] - slope_closes[i - 1]) / slope_closes[i - 1]
+            for i in range(1, len(slope_closes))
         ]
 
         slope3 = linreg_slope(returns[-3:])

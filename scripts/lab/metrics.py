@@ -128,6 +128,24 @@ def match_events(pred_idx: list[int], truth_idx: list[int], tol_bars: int,
 # Higher-level evaluation
 # ---------------------------------------------------------------------------
 
+def transition_indices(indices: list[int], classes: list[int]) -> tuple[list[int], list[int]]:
+    """Event indices for DENSE directional labelers (labeler.dense == True).
+
+    A dense labeler classifies every bar Up/Down, so its raw class-0 indices are
+    the whole of every uptrend — meaningless as events. The events are the label
+    *flips*: 1→0 marks a bottom (dip), 0→1 marks a top (peak). Returns
+    (dip_indices, peak_indices). Class-2 (neutral) samples are ignored."""
+    pairs = sorted((i, c) for i, c in zip(indices, classes) if c in (0, 1))
+    dips: list[int] = []
+    peaks: list[int] = []
+    prev: int | None = None
+    for i, c in pairs:
+        if prev is not None and c != prev:
+            (dips if c == 0 else peaks).append(i)
+        prev = c
+    return dips, peaks
+
+
 def truth_positions(truth: pd.DataFrame, index: pd.Series) -> dict[str, list[int]]:
     """Map hand labels (timestamp, kind) to positional indices in the candle index.
     Labels whose timestamp isn't in the index are dropped."""
@@ -165,8 +183,11 @@ def label_quality(candles: list[dict], params: dict, truth: pd.DataFrame,
     flat = flatten_strategy_params(params)
     labeler = build_labeler("LAB", flat)
     indices, classes = labeler.label(candles)
-    lab_min = [i for i, c in zip(indices, classes) if c == 0]
-    lab_max = [i for i, c in zip(indices, classes) if c == 1]
+    if labeler.dense:
+        lab_min, lab_max = transition_indices(indices, classes)
+    else:
+        lab_min = [i for i, c in zip(indices, classes) if c == 0]
+        lab_max = [i for i, c in zip(indices, classes) if c == 1]
 
     ts = pd.Series([c["timestamp"] for c in candles])
     tpos = truth_positions(truth, ts)

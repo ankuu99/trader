@@ -35,5 +35,9 @@ class ExtremaRegimeFeaturePipeline(ExtremaFeaturePipeline):
         base = super().compute(candles)
         if base is None:
             return None
-        closes = [c["close"] for c in candles]
+        if self._smoother:
+            # regime context reads the smoothed trend too (features.smoothing)
+            closes = self._smoother.series(candles, max(self._horizons) + 1)
+        else:
+            closes = [c["close"] for c in candles]
         return np.concatenate([base, np.asarray(regime_vector_at(closes, self._horizons))])

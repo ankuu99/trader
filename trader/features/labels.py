@@ -44,6 +44,11 @@ def collapse_clusters(indices: list[int], max_gap: int) -> list[int]:
 
 
 class Labeler(ABC):
+    #: Dense labelers classify (nearly) every bar rather than sparse turning
+    #: points. Event-based metrics must score their class *transitions*, not the
+    #: raw sample indices (see scripts/lab/metrics.py).
+    dense: bool = False
+
     @abstractmethod
     def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
         """Return (indices, classes): the candle indices to use as training samples
@@ -325,6 +330,75 @@ class ZigZagLabeler(Labeler):
         return indices, classes
 
 
+class AvgTrendLabeler(Labeler):
+    """Averaged directional labels (`labels.type: avg_trend`) — Bruni et al. 2026.
+
+    For each bar t: class 0 (up / buy regime) if the mean close over the next
+    `window` bars exceeds the mean close over the trailing `window` bars, else
+    class 1 (down / sell regime). DENSE: every eligible bar is a training sample,
+    so the model becomes an Up/Down regime classifier whose Down→Up confidence
+    flip is the tradeable "bottom" event (scored as such in the lab).
+
+    Averaging both sides of the comparison is the paper's noise-robustness trick:
+    a single-point forward label flips on one bad candle; a 10v10 mean comparison
+    only flips when the medium-term drift actually changes.
+
+    Config (labels.avg_trend):
+        window        bars per mean, both sides (default 10)
+        deadband_pct  drop bars where |μ_future/μ_past − 1| < this % — borderline
+                      labels are coin flips (default 0 = keep everything, paper-faithful)
+        stride        keep every k-th eligible bar (default 1). Runtime lever for
+                      the lab's dense-label arms; 1 is the paper-faithful setting.
+
+    The last `window` bars of the training window have unresolved futures and are
+    excluded (same truncation guard as triple_barrier_label). Labels start at bar
+    max(20, window−1) so sample counts stay honest vs the feature min_history."""
+
+    dense = True
+
+    def __init__(self, instrument: str, params: dict):
+        self._instrument = instrument
+        _at = (params.get("labels") or {}).get("avg_trend") or {}
+        self._window: int = int(_at.get("window", 10))
+        self._deadband_pct: float = float(_at.get("deadband_pct", 0.0))
+        self._stride: int = max(1, int(_at.get("stride", 1)))
+
+    def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
+        n = len(candles)
+        w = self._window
+        closes = [c["close"] for c in candles]
+        first = max(20, w - 1)
+        last = n - 1 - w  # μ_future needs w fully-resolved forward bars
+        if last < first:
+            return [], []
+
+        prefix = [0.0]
+        for c in closes:
+            prefix.append(prefix[-1] + c)
+
+        indices: list[int] = []
+        classes: list[int] = []
+        for t in range(first, last + 1, self._stride):
+            mu_past = (prefix[t + 1] - prefix[t + 1 - w]) / w
+            mu_future = (prefix[t + 1 + w] - prefix[t + 1]) / w
+            if mu_past <= 0:
+                continue
+            if self._deadband_pct > 0 and \
+                    abs(mu_future / mu_past - 1) * 100.0 < self._deadband_pct:
+                continue
+            indices.append(t)
+            classes.append(0 if mu_future > mu_past else 1)
+
+        if classes.count(0) < MIN_SAMPLES_PER_CLASS or \
+                classes.count(1) < MIN_SAMPLES_PER_CLASS:
+            logger.warning(
+                "AvgTrend | %s | not enough labels to train (up=%d down=%d)",
+                self._instrument, classes.count(0), classes.count(1),
+            )
+            return [], []
+        return indices, classes
+
+
 def triple_barrier_label(
     candles: list[dict], entry_idx: int, profit_pct: float, stop_pct: float, max_bars: int,
     atr: float | None = None, atr_mult_pt: float | None = None, atr_mult_sl: float | None = None,
@@ -382,5 +456,8 @@ def build_labeler(instrument: str, params: dict) -> Labeler:
         return TrendScanningLabeler(instrument, params)
     if ltype == "zigzag":
         return ZigZagLabeler(instrument, params)
+    if ltype == "avg_trend":
+        return AvgTrendLabeler(instrument, params)
     raise ValueError(
-        f"Unknown labeler type {ltype!r}. Available: ['extrema', 'trend_scan', 'zigzag']")
+        f"Unknown labeler type {ltype!r}. Available: "
+        f"['extrema', 'trend_scan', 'zigzag', 'avg_trend']")
