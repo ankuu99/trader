@@ -59,7 +59,8 @@ watchlist:
   - NSE:CGPOWER        # +₹3.2k, 10t — transformers
   # - NSE:INDUSTOWER     # +₹3.1k, 13t — telecom towers
 #  - NSE:LTF            # removed 2026-07-05 — calibration: best leg only ₹1.9k @44% WR — churn
-  - NSE:SKYGOLD        # +₹16.9k, 119t
+#  - NSE:SKYGOLD       # removed 2026-07-28 — watchlist review: full −₹9.2k @28.6% WR (7t),
+                       # SPIKE guard (+34.6% 1m), and ₹10.7cr subsidiary fraud disclosed 2026-07-15
   - NSE:QUESS
   - NSE:IPCALAB
 
@@ -404,6 +405,8 @@ per_stock_params:
           check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # SKYGOLD — 4hour ₹10.5k/9t/78% @0.85 vs 15m ₹0.7k (0.82 neighbour ₹8.5k).
+  # NOTE: de-listed from the watchlist 2026-07-28 (fraud disclosure). Block kept dormant —
+  # it is inert while the symbol is not in `watchlist`. Delete if the removal becomes permanent.
   NSE:SKYGOLD:
     lr_extrema:
       timeframe: 4hour
@@ -458,12 +461,15 @@ per_stock_params:
           check_bars: 30           # 15→30 2026-07-06
           min_gain_pct: -2.0
   # GESHIP — day ₹9.4k/10t/70% @0.80 vs 15m ₹4.7k (0.85 neighbour ₹7.7k).
+  # 2026-07-28 recalibration (in-regime sweep, stale 10/30): day regime re-confirmed as the
+  # winner (₹50.2k/40t vs 4hour ₹49.3k, 15m ₹19.1k). threshold 0.80→0.82 = ₹56.7k/39t/84.6%
+  # (+₹6.5k, +4.6pp WR); 0.80 neighbour ₹50.2k, falls off a cliff at 0.85 (₹26.5k).
   NSE:GESHIP:
     lr_extrema:
       timeframe: day
       warmup_bars: 100
       lookback_bars: 400
-      threshold: 0.80
+      threshold: 0.82          # 0.80→0.82 2026-07-28
       retrain_every: 1
       extrema_order: 5
       exits:
