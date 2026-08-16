@@ -62,7 +62,7 @@ def _fetch_remote_db() -> Path:
     tmp = Path(tempfile.mktemp(suffix=".db"))
     result = subprocess.run(
         ["ssh", _SSH_ALIAS, f"sudo cat {_REMOTE_DB}"],
-        capture_output=True, timeout=30,
+        capture_output=True, timeout=300,
     )
     if result.returncode != 0:
         err = result.stderr.decode(errors="replace").strip()

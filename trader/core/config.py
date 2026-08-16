@@ -109,6 +109,11 @@ def flatten_strategy_params(params: dict) -> dict:
             st = exits["stale"] or {}
             _set(p, "stale_check_bars", st, "check_bars")
             _set(p, "stale_min_gain_pct", st, "min_gain_pct")
+            # Presence does NOT enable — `enabled` must be true (like trend_guard).
+            if "rearm" in st:
+                ra = st["rearm"] or {}
+                p["stale_rearm_enabled"] = bool(ra.get("enabled", False))
+                _set(p, "stale_rearm_cur_floor_pct", ra, "cur_floor_pct")
         if "stale_2" in exits:
             p["stale_exit_2_enabled"] = True
             st = exits["stale_2"] or {}
@@ -343,6 +348,21 @@ class Config:
     @property
     def gtt_enabled(self) -> bool:
         return bool(self._data["risk"].get("gtt_enabled", True))
+
+    @property
+    def reentry_cooldown_enabled(self) -> bool:
+        """Block re-entry into an instrument for the rest of the session after a full exit."""
+        return bool(self._data["risk"].get("reentry_cooldown_enabled", False))
+
+    @property
+    def loss_reentry_block_enabled(self) -> bool:
+        """Block re-entry into an instrument for N sessions after a LOSING full exit."""
+        return bool((self._data["risk"].get("loss_reentry_block") or {}).get("enabled", False))
+
+    @property
+    def loss_reentry_block_sessions(self) -> int:
+        """Sessions the loss re-entry block lasts (earliest re-entry = Nth session after exit)."""
+        return int((self._data["risk"].get("loss_reentry_block") or {}).get("sessions", 3))
 
     @property
     def order_type(self) -> str:

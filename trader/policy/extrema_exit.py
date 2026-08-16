@@ -82,6 +82,18 @@ class ExtremaExitPolicy:
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
         self._stale_min_gain_pct: float = float(params.get("stale_min_gain_pct", 0.5))
+        # Stale re-arm: tier-1's best-gain-since-entry check is one-shot — any early
+        # pop >= min_gain disarms it for the life of the position (the GESHIP/REDTAPE
+        # unguarded-runway failure, 2026-08). When enabled, the progress check re-runs
+        # at every check_bars multiple: exit if the best gain over the LAST check_bars
+        # bars is < min_gain AND the position is currently below cur_floor_pct. The
+        # current-loss condition is what spares dip-then-recover winners — firing on
+        # any negative gain was net-negative in the 2025-26 counterfactual (-6.8k),
+        # the < -2% variant was +8.1k with a broad plateau at [-2,-3] x [0.3,0.75].
+        self._stale_rearm_enabled: bool = bool(params.get("stale_rearm_enabled", False))
+        self._stale_rearm_cur_floor_pct: float = float(
+            params.get("stale_rearm_cur_floor_pct", -2.0)
+        )
         self._stale_exit_2_enabled: bool = bool(params.get("stale_exit_2_enabled", False))
         self._stale_check_bars_2: int = int(params.get("stale_check_bars_2", 80))
         self._stale_min_gain_pct_2: float = float(params.get("stale_min_gain_pct_2", 0.0))
@@ -189,6 +201,32 @@ class ExtremaExitPolicy:
             )
             pos.reset()
             return ExitDecision(price_hint=close, exit_reason="STALE", timestamp=ts)
+
+        # Stale re-arm: repeat tier-1's progress check at every check_bars multiple
+        # (2x, 3x, ...) over a ROLLING window, but only exit while currently below
+        # cur_floor_pct — above it the position keeps its recovery chance.
+        if (self._stale_rearm_enabled
+                and self._stale_exit_enabled
+                and not strat.is_flat()
+                and pos.entry_price is not None
+                and pos.held_bars >= 2 * self._stale_check_bars
+                and pos.held_bars % self._stale_check_bars == 0
+                and _pct_gain < self._stale_rearm_cur_floor_pct):
+            recent = list(strat._candles)[-self._stale_check_bars:]
+            if recent:
+                rolling_best = (
+                    (max(c["close"] for c in recent) - pos.entry_price)
+                    / pos.entry_price * 100.0
+                )
+                if rolling_best < self._stale_min_gain_pct:
+                    logger.info(
+                        "LR-Extrema EXIT (stale-rearm) | %s | held=%d bars, rolling_best=%.2f%% < %.2f%%, "
+                        "gain=%.2f%% < %.2f%% | entry=%.2f close=%.2f | candle=%s",
+                        strat.instrument, pos.held_bars, rolling_best, self._stale_min_gain_pct,
+                        _pct_gain, self._stale_rearm_cur_floor_pct, pos.entry_price, close, ts,
+                    )
+                    pos.reset()
+                    return ExitDecision(price_hint=close, exit_reason="STALE_REARM", timestamp=ts)
 
         # Stale tier 2: at exactly stale_check_bars_2, exit if current gain still too low
         if (self._stale_exit_2_enabled

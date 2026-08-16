@@ -66,6 +66,18 @@ class RiskManager:
         self._halted: bool = False
         self._last_reject_reason: str | None = None   # set whenever validate() returns None
         self._paused: set[str] = set()   # instruments paused from NEW entries (exits still allowed)
+        # Same-day re-entry cooldown — instruments fully closed today. Armed in
+        # close_position(), cleared in reset_day(); no timestamps, so live and
+        # backtest share one clock (the day boundary that already calls reset_day).
+        self._reentry_blocked: set[str] = set()
+        # Loss re-entry block — instrument -> sessions remaining. Armed in
+        # close_position() when the full close realises a LOSS; each reset_day()
+        # decrements, so `sessions: N` means the earliest re-entry is the Nth
+        # session after the losing exit. Rationale (2026-08-16 recovery-profile
+        # study, 2025-01→2026-08): 105 re-entries within ~3 sessions of a losing
+        # exit returned net -10.2k at a 52% win rate (vs 68% baseline) while
+        # walking the -20% hard-stop floor 5.3% lower per rung.
+        self._loss_reentry: dict[str, int] = {}
         # Scale-in (geometric add-ons) — per-instrument lot state + a separate budget pool.
         # The pool sits ON TOP of base capital: add-on deployments never touch
         # _capital_deployed, so capital_available for base entries is unaffected.
@@ -148,6 +160,25 @@ class RiskManager:
                 signal.instrument, candle_time, config.trading_start, config.trading_end,
             )
             self._last_reject_reason = "outside_trading_window"
+            return None
+
+        # Same-day re-entry cooldown — this instrument was fully closed earlier in the
+        # session, so block re-opening it until the day boundary. EXIT signals returned
+        # at line ~141, so an open position always closes normally.
+        if config.reentry_cooldown_enabled and signal.instrument in self._reentry_blocked:
+            logger.info("Signal rejected — re-entry cooldown | %s", signal.instrument)
+            self._last_reject_reason = "reentry_cooldown"
+            return None
+
+        # Loss re-entry block — the last full exit in this instrument realised a loss
+        # within the last N sessions; re-entering that soon is coin-flip edge that
+        # compounds the hard-stop floor lower (see _loss_reentry note in __init__).
+        if config.loss_reentry_block_enabled and signal.instrument in self._loss_reentry:
+            logger.info(
+                "Signal rejected — loss re-entry block | %s | %d session(s) left",
+                signal.instrument, self._loss_reentry[signal.instrument],
+            )
+            self._last_reject_reason = "loss_reentry_block"
             return None
 
         # Scale-in: an ENTRY signal on an instrument we already hold is an add-on
@@ -540,11 +571,22 @@ class RiskManager:
                 "close_position called with exit_price=0 for %s — P&L and halt check skipped",
                 instrument,
             )
+        # Arm the same-day re-entry cooldown on a genuine exit only. post_market()
+        # evicts stale positions with exit_price=0 as bookkeeping (main.py); arming on
+        # those would depend on eviction running before reset_day() in the same job.
+        if exit_price:
+            self._reentry_blocked.add(instrument)
         if qty and exit_price and freed:
             entry_price = freed / qty
             pnl = (exit_price - entry_price) * qty
             self._realised_pnl += pnl
             self._cumulative_pnl += pnl
+            # Arm the loss re-entry block on a losing full close. Keyed off the final
+            # lot's realised P&L (scale-out profits already realised via
+            # reduce_position don't offset it — the block targets "the exit that just
+            # lost", which is what precedes the toxic rebuy).
+            if config.loss_reentry_block_enabled and pnl < 0:
+                self._loss_reentry[instrument] = config.loss_reentry_block_sessions
             logger.info(
                 "Position closed | %s x%d | entry=%.2f exit=%.2f | trade_pnl=%.2f | daily_pnl=%.2f",
                 instrument, qty, entry_price, exit_price, pnl, self._realised_pnl,
@@ -599,4 +641,18 @@ class RiskManager:
     def reset_day(self):
         self._realised_pnl = 0.0
         self._halted = False
+        self._reentry_blocked.clear()
+        # Loss re-entry block: one session elapsed — decrement, expire at zero.
+        self._loss_reentry = {
+            inst: left - 1 for inst, left in self._loss_reentry.items() if left > 1
+        }
         logger.info("Risk manager daily reset")
+
+    @property
+    def loss_reentry_state(self) -> dict[str, int]:
+        """Instrument -> sessions remaining on the loss re-entry block (read-only copy)."""
+        return dict(self._loss_reentry)
+
+    def seed_loss_reentry(self, state: dict[str, int]):
+        """Restore loss re-entry block state on startup (live-mode restart seeding)."""
+        self._loss_reentry = {k: int(v) for k, v in (state or {}).items() if int(v) > 0}

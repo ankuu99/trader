@@ -6,6 +6,15 @@ capital:
   daily_loss_limit_pct: 10
 risk:
   gtt_enabled: false
+  reentry_cooldown_enabled: false  # true → no re-entry into a stock for the rest of the session after a full exit
+                                   # Kept OFF: A/B 2026-08-05 (2025-01→2026-08, 22 names) — blanket cooldown
+                                   # discards ~₹88k gross edge to save ₹25k costs (P&L −34%, util 69.6%→37.8%),
+                                   # Calmar 2.00→1.85. Defensive only: halves corrections, costs a third of bull
+                                   # runs. See memory project_sameday_reentry_churn / todo.md.
+  loss_reentry_block:              # block re-entry for N sessions after a LOSING full exit.
+    enabled: false                 # OFF pending rolling validation. Recovery-profile study
+    sessions: 3                    # 2026-08-16: 105 rebuys <=3 sessions after a losing exit
+                                   # = net -10.2k at 52% WR (vs 68% baseline), floor -5.3%/rung.
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 25
@@ -104,6 +113,11 @@ strategies:
       stale:                      # present = enabled (Progress gate tier 1)
         check_bars: 40            # 20→40 2026-07-06 — stale-runway ×2, beat baseline 4/4 half-year windows
         min_gain_pct: 0.5         # best gain must have exceeded this % or we exit
+        rearm:                    # re-run the progress check every check_bars (rolling window)
+          enabled: true           # VALIDATED 2026-08-16: beats baseline 4/4 half-year windows
+          cur_floor_pct: -2.0     # (+67k total, 2025-H1 correction −16.2k → +2.7k). Only fires
+                                  # while current gain < floor — spares recovering winners;
+                                  # static plateau at floor [-2,-3] × pop [0.3,0.75]
       stale_2:                    # present = enabled (faded after early promise)
         check_bars: 200           # 100→200 2026-07-06 — coincides with hold_bars, tier-2 defers to hold timeout at 15m
         min_gain_pct: -2.0        # current gain floor at tier-2 check

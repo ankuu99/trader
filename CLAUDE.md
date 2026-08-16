@@ -81,6 +81,7 @@ strategies:
     ...params
 risk:
   gtt_enabled: true | false       # master GTT on/off switch
+  reentry_cooldown_enabled: true | false  # true → no re-entry into a stock for the rest of the session after a full exit
   order_type: market | limit      # live mode only; paper always fills at next candle open
   max_open_positions: 5
   default_sl_pct: 2               # fallback SL% when signal has no stop_loss_hint
@@ -222,7 +223,9 @@ Key rules:
 - `seed_cumulative_pnl(pnl)` — called on startup in live mode to restore cumulative P&L from the `state` table
 - `cumulative_pnl` property — read-only access to `_cumulative_pnl`
 - `on_order_filled()` records deployed capital; `close_position()` frees it and adds to `_cumulative_pnl`
-- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`, plus the `addon_*` reasons); surfaced in UI signals table
+- `_last_reject_reason` — set at each rejection point (`daily_halt`, `max_positions`, `already_in_position`, `pending_order_exists`, `sl_distance_zero`, `quantity_zero`, `reentry_cooldown`, `loss_reentry_block`, plus the `addon_*` reasons); surfaced in UI signals table
+- **Same-day re-entry cooldown** (`risk.reentry_cooldown_enabled`, default **false**): after a position is FULLY closed, ENTRY signals for that instrument are rejected (`reentry_cooldown`) for the rest of the session. `_reentry_blocked: set[str]` is armed in `close_position()` **only when `exit_price` is truthy** — `post_market()` evicts stale positions with `close_position(inst, 0.0)` as bookkeeping, and arming on those would make correctness depend on eviction running before `reset_day()` in the same job. Cleared in `reset_day()`, which is the sole clock: no timestamps are stored, so live (`main.py` post-market) and backtest (engine day boundary) share one mechanism. Partial scale-outs never arm it — `reduce_position()` delegates to `close_position()` only when the remainder hits zero. EXIT signals are unaffected (they return before the check)
+- **Loss re-entry block** (`risk.loss_reentry_block: {enabled, sessions}`, default **false**): after a full close that realises a LOSS, ENTRY signals for that instrument are rejected (`loss_reentry_block`) until N sessions have elapsed — `_loss_reentry: dict[str, int]` counts down one per `reset_day()` (same shared clock as the cooldown); `seed_loss_reentry()` / `loss_reentry_state` exist for live restart seeding. **FALSIFIED as a standalone rule 2026-08-16** (engine-level −₹69k vs baseline over 2025-01→2026-08 — blocking one rebuy amputates the downstream trade sequence, same shape as the blanket cooldown); kept OFF as a defensive-only option. Winning exits and exit_price=0 evictions never arm it
 - **Scale-in**: when `scale_in.enabled`, an ENTRY on an already-held instrument routes to `_validate_addon()` — geometric sizing off the previous lot, separate budget pool (`_scale_in_deployed`, on top of base capital), daily spacing, tier cap. See the Scale-in section
 
 ---
@@ -329,6 +332,7 @@ The model retrains itself every `retrain_every` candles using the most recent hi
 
    **`on_candle` (candle-granularity):**
    - **Max hold**: held `hold_bars` candles → EXIT at current close (reason: `STRATEGY`)
+   - **Stale re-arm** (`exits.stale.rearm: {enabled, cur_floor_pct}`, **enabled 2026-08-16**): tier-1 stale keys on best-gain-since-entry and is one-shot — any early pop ≥ `min_gain_pct` disarms it for the life of the position (every deep-underwater backtest trade, 117/117, got there this way). With rearm on, the progress check re-runs at every `check_bars` multiple over a ROLLING window: EXIT (reason: `STALE_REARM`) iff best gain over the last `check_bars` bars < `min_gain_pct` AND current gain < `cur_floor_pct` (−2%). The current-loss condition spares dip-then-recover winners — recovery is real above −4%, so never tighten the floor there. VALIDATED: beats baseline 4/4 half-year windows 2025-01→2026-08 (+₹67k, 2025-H1 correction −16.2k → +2.7k); static per-trade sims understate it (freed capital redeploys)
    - **Pattern top exit**: `P(local-max) >= sell_threshold` AND `held_bars >= min_hold_before_exit` AND `gain >= sell_min_pct` → EXIT at current close (reason: `PATTERN_TOP`). Only fires when gain meets the minimum floor — stop_pct handles anything below. Supplements trailing stop; whichever fires first exits.
 
    **`target_price=None`** means the backtest engine's fixed intrabar target check is disabled (`target=0`) when `trail_pct` is configured — trailing and pattern-top are the sole upside exits.
