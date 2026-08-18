@@ -24,10 +24,16 @@ class PositionState:
     max_gain_pct: float = 0.0
     breakeven_active: bool = False
     partial_taken: bool = False  # Step 2: a pattern-top scale-out has already fired
+    # Full-state capture taken at FULL-exit signal emission (survives reset(), like
+    # fill_price) so a REJECTED/CANCELLED exit order can restore the position's
+    # clocks and trail state — e.g. a last-candle exit dying in Zerodha's Closing
+    # Auction Session. One-shot: consumed by restore_snapshot(), discarded on a
+    # COMPLETE exit fill or a new entry.
+    _snapshot: dict | None = None
 
     def reset(self) -> None:
-        """Clear all position-tracking fields (except fill_price). Matches the
-        original LRExtremaStrategy._reset_position_state exactly."""
+        """Clear all position-tracking fields (except fill_price and _snapshot).
+        Matches the original LRExtremaStrategy._reset_position_state exactly."""
         self.entry_price = None
         self.held_bars = 0
         self.peak_close = None
@@ -36,6 +42,36 @@ class PositionState:
         self.max_gain_pct = 0.0
         self.breakeven_active = False
         self.partial_taken = False
+
+    def snapshot_and_reset(self) -> None:
+        """Capture every position-tracking field, then reset(). Called wherever a
+        FULL exit is emitted, so the whole position (not just entry_price) can be
+        restored if the exit order is later rejected."""
+        self._snapshot = {
+            "entry_price": self.entry_price,
+            "held_bars": self.held_bars,
+            "peak_close": self.peak_close,
+            "trailing_active": self.trailing_active,
+            "pattern_top_trailing": self.pattern_top_trailing,
+            "max_gain_pct": self.max_gain_pct,
+            "breakeven_active": self.breakeven_active,
+            "partial_taken": self.partial_taken,
+        }
+        self.reset()
+
+    def restore_snapshot(self) -> bool:
+        """Restore the state captured at exit emission (one-shot). Returns True
+        if a snapshot existed and was applied."""
+        snap = self._snapshot
+        if snap is None:
+            return False
+        self._snapshot = None
+        for key, value in snap.items():
+            setattr(self, key, value)
+        return True
+
+    def clear_snapshot(self) -> None:
+        self._snapshot = None
 
 
 @dataclass

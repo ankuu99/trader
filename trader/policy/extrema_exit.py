@@ -177,7 +177,7 @@ class ExtremaExitPolicy:
                 "LR-Extrema EXIT | %s | max hold (%d bars) | entry=%.2f close=%.2f | candle=%s",
                 strat.instrument, pos.held_bars, pos.entry_price or 0, close, ts,
             )
-            pos.reset()
+            pos.snapshot_and_reset()
             return ExitDecision(price_hint=close, exit_reason="STRATEGY", timestamp=ts)
 
         # --- Progress gate: track best gain, exit if stale ---
@@ -199,7 +199,7 @@ class ExtremaExitPolicy:
                 strat.instrument, pos.held_bars, pos.max_gain_pct, self._stale_min_gain_pct,
                 pos.entry_price, close, ts,
             )
-            pos.reset()
+            pos.snapshot_and_reset()
             return ExitDecision(price_hint=close, exit_reason="STALE", timestamp=ts)
 
         # Stale re-arm: repeat tier-1's progress check at every check_bars multiple
@@ -225,7 +225,7 @@ class ExtremaExitPolicy:
                         strat.instrument, pos.held_bars, rolling_best, self._stale_min_gain_pct,
                         _pct_gain, self._stale_rearm_cur_floor_pct, pos.entry_price, close, ts,
                     )
-                    pos.reset()
+                    pos.snapshot_and_reset()
                     return ExitDecision(price_hint=close, exit_reason="STALE_REARM", timestamp=ts)
 
         # Stale tier 2: at exactly stale_check_bars_2, exit if current gain still too low
@@ -239,7 +239,7 @@ class ExtremaExitPolicy:
                 strat.instrument, pos.held_bars, _pct_gain, self._stale_min_gain_pct_2,
                 pos.entry_price, close, ts,
             )
-            pos.reset()
+            pos.snapshot_and_reset()
             return ExitDecision(price_hint=close, exit_reason="STALE", timestamp=ts)
 
         # --- Momentum-decay exit (model lost confidence in the bottom thesis) ---
@@ -258,7 +258,7 @@ class ExtremaExitPolicy:
                         strat.instrument, p_min, self._momentum_exit_p_min_floor,
                         _pct_gain, pos.held_bars, ts,
                     )
-                    pos.reset()
+                    pos.snapshot_and_reset()
                     return ExitDecision(price_hint=close, exit_reason="MOMENTUM_DECAY", timestamp=ts)
 
         # --- Pattern-top detection: activates trailing, never exits directly ---
@@ -325,7 +325,7 @@ class ExtremaExitPolicy:
                             strat.instrument, p_max, self._sell_threshold, _pct_gain,
                             pos.held_bars, close, ts,
                         )
-                        pos.reset()
+                        pos.snapshot_and_reset()
                         return ExitDecision(price_hint=close, exit_reason="PATTERN_TOP", timestamp=ts)
                     if self._trailing_enabled and not pos.pattern_top_trailing:
                         if not pos.trailing_active:
@@ -371,7 +371,7 @@ class ExtremaExitPolicy:
                     "LR-Extrema TRAILING EOD CLOSE | %s | price=%.2f",
                     strat.instrument, last_price,
                 )
-                pos.reset()
+                pos.snapshot_and_reset()
                 return ExitDecision(price_hint=last_price, exit_reason="TRAILING_EOD_CLOSE")
 
         # Breakeven stop — arm once trigger_pct gain is reached
@@ -412,7 +412,7 @@ class ExtremaExitPolicy:
                 "LR-Extrema EXIT (tick) | %s | %s | entry=%.2f price=%.2f",
                 strat.instrument, reason, pos.entry_price, last_price,
             )
-            pos.reset()
+            pos.snapshot_and_reset()
             return ExitDecision(price_hint=last_price, exit_reason=reason_code,
                                 timestamp=tick.get("timestamp"))
 

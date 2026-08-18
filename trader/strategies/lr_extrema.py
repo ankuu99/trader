@@ -436,11 +436,13 @@ class LRExtremaStrategy(Strategy):
                 # Restore held_bars from synthetic fill on restart; normal fills pass 0
                 held_bars = order.get("_held_bars")
                 self._pos.held_bars = int(held_bars) if held_bars is not None else 0
+                self._pos.clear_snapshot()  # new lifecycle — a stale exit snapshot must never restore into it
             elif signal_type == SignalType.EXIT:
                 # Partial (scale-out) fill: position stays open with the remainder —
                 # keep entry/trailing state intact (partial_taken already set).
                 if not order.get("partial"):
                     self._pos.reset()
+                    self._pos.clear_snapshot()  # exit confirmed — nothing left to restore
         elif status in ("REJECTED", "CANCELLED"):
             if signal_type == SignalType.ENTRY:
                 logger.warning(
@@ -449,12 +451,24 @@ class LRExtremaStrategy(Strategy):
                 )
                 self._pos.reset()
             elif signal_type == SignalType.EXIT:
-                # EXIT order cancelled/rejected — restore entry state so SL/trailing can retrigger
-                logger.warning(
-                    "LR-Extrema | %s | EXIT order %s — restoring entry state for retrigger",
-                    self.instrument, status,
-                )
-                if self._pos.fill_price is not None:
+                # EXIT order cancelled/rejected (e.g. last-candle exit dying in the
+                # 15:30 Closing Auction Session) — restore the FULL pre-emission state
+                # so the hold/stale clocks, trail anchor and scale-out guard survive,
+                # not just the entry price (TVSMOTOR 2026-08-17: held_bars 200->0 lost
+                # a timeout exit for ~8 sessions under the entry-price-only restore).
+                if self._pos.restore_snapshot():
+                    logger.warning(
+                        "LR-Extrema | %s | EXIT order %s — position state restored for retrigger "
+                        "(held_bars=%d trailing=%s)",
+                        self.instrument, status, self._pos.held_bars, self._pos.trailing_active,
+                    )
+                elif self._pos.fill_price is not None:
+                    # No snapshot (e.g. restart between emission and rejection) —
+                    # legacy fallback: at least re-anchor the entry price.
+                    logger.warning(
+                        "LR-Extrema | %s | EXIT order %s — no snapshot, restoring entry price only",
+                        self.instrument, status,
+                    )
                     self._pos.entry_price = self._pos.fill_price
 
     # ------------------------------------------------------------------
