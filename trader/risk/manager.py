@@ -197,6 +197,25 @@ class RiskManager:
             self._last_reject_reason = "max_positions"
             return None
 
+        # Slow-TF slot cap — aggregated-TF (4hour/day) round-trips tie up capital
+        # 2–3.5× longer than 15m ones (measured live 2026-08-16), so uncapped they
+        # accumulate until every funded slot is a slow position and the 15m signal
+        # engine starves for cash. Base-TF entries are never blocked by this.
+        _slow_cap = config.max_slow_tf_positions
+        if _slow_cap is not None and config.is_aggregated_tf(signal.instrument):
+            _slow_held = sum(1 for k in self._open_positions if config.is_aggregated_tf(k))
+            _slow_pending = sum(
+                1 for k in self._pending_orders
+                if k not in self._pending_addons and config.is_aggregated_tf(k)
+            )
+            if _slow_held + _slow_pending >= _slow_cap:
+                logger.info(
+                    "Signal rejected — slow-TF position cap | %s | %d held + %d pending >= %d",
+                    signal.instrument, _slow_held, _slow_pending, _slow_cap,
+                )
+                self._last_reject_reason = "slow_tf_limit"
+                return None
+
         if signal.instrument in self._pending_orders:
             logger.warning("Signal rejected — pending order already exists | %s", signal.instrument)
             self._last_reject_reason = "pending_order_exists"

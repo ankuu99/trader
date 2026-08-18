@@ -197,6 +197,8 @@ class Config:
         # Preserve the config-file capital before any runtime override (e.g. set_effective_capital).
         # Used as the compounding base so Kite available cash never inflates position sizing.
         self._base_capital: float = float(data["capital"]["total"])
+        # instrument -> bool memo for is_aggregated_tf (deep-merge is per-call otherwise)
+        self._aggregated_tf_cache: dict[str, bool] = {}
 
     def reload(self, path) -> None:
         """Replace the loaded config with an alternate YAML file (backtest.py
@@ -206,6 +208,7 @@ class Config:
             data = yaml.safe_load(f)
         self._data = data
         self._base_capital = float(data["capital"]["total"])
+        self._aggregated_tf_cache = {}
 
     def reload_env(self) -> str | None:
         """Re-source config/.env with override so a KITE_ACCESS_TOKEN written by
@@ -344,6 +347,22 @@ class Config:
     @property
     def max_open_positions(self) -> int:
         return int(self._data["risk"]["max_open_positions"])
+
+    @property
+    def max_slow_tf_positions(self) -> int | None:
+        """Cap on concurrent aggregated-TF (4hour/day) positions. None = no cap."""
+        v = self._data["risk"].get("max_slow_tf_positions")
+        return int(v) if v is not None else None
+
+    def is_aggregated_tf(self, instrument: str, strategy_name: str = "lr_extrema") -> bool:
+        """True if this instrument's strategy runs on an aggregated timeframe
+        (per_stock_params timeframe differs from the base candle feed)."""
+        cached = self._aggregated_tf_cache.get(instrument)
+        if cached is None:
+            params = self.get_strategy_params(instrument, strategy_name)
+            cached = params.get("timeframe", self.candle_timeframe) != self.candle_timeframe
+            self._aggregated_tf_cache[instrument] = cached
+        return cached
 
     @property
     def gtt_enabled(self) -> bool:

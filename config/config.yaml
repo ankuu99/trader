@@ -18,6 +18,13 @@ risk:
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
   market_protection_pct: 1.0  # % buffer added to MARKET orders (Zerodha API requirement)
   max_open_positions: 25
+  max_slow_tf_positions: null # cap concurrent aggregated-TF (4hour/day) positions; null = off.
+                              # FALSIFIED as a P&L fix 2026-08-16 (A/B 2025-01→2026-08):
+                              # baseline ₹294k/Calmar 3.09 → cap=6 ₹242k/2.29 → cap=4 ₹194k/2.19.
+                              # Slow-TF trades ARE the big winners (they hold 2-3.5x longer
+                              # BECAUSE they ride the big moves); capping them churns freed
+                              # capital into marginal 15m entries (stale losses -266k → -372k).
+                              # Keep OFF — fix funding via the ledger/margin items in todo.md.
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
