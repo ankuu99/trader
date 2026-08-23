@@ -357,13 +357,17 @@ def _render_prob_sparkline(
     return "".join(parts)
 
 
-def _render_equity_sparkline(values: list[float], width: int = 300, height: int = 70) -> str:
+def _render_equity_sparkline(values: list[float], net_values: list[float] | None = None,
+                             width: int = 300, height: int = 70) -> str:
     """Line of a cumulative-P&L series with a dashed zero baseline. Green if the
-    series ends positive, red otherwise. (Clone of _render_sparkline's polyline.)"""
+    series ends positive, red otherwise. (Clone of _render_sparkline's polyline.)
+    When `net_values` is given (same length), the gross series is drawn as a dim
+    dashed line and the net-of-costs series becomes the prominent colored one."""
     if len(values) < 2:
         return "<span class='dim'>—</span>"
-    lo = min(min(values), 0.0)
-    hi = max(max(values), 0.0)
+    all_series = values + (net_values or [])
+    lo = min(min(all_series), 0.0)
+    hi = max(max(all_series), 0.0)
     rng = (hi - lo) or 1.0
     pad = 4
 
@@ -373,17 +377,24 @@ def _render_equity_sparkline(values: list[float], width: int = 300, height: int 
     def sy(v: float) -> float:
         return pad + (1 - (v - lo) / rng) * (height - 2 * pad)
 
-    pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(values))
     zero_y = max(pad, min(height - pad, sy(0.0)))
-    last = values[-1]
+    main = net_values if net_values else values
+    pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(main))
+    last = main[-1]
     color = "#3fb950" if last >= 0 else "#f85149"
+    gross_line = ""
+    if net_values:
+        gross_pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(values))
+        gross_line = (f'<polyline points="{gross_pts}" fill="none" stroke="#8b949e" '
+                      f'stroke-width="1.2" stroke-dasharray="3,2" opacity="0.7"/>')
     return (
         f'<svg width="{width}" height="{height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
         f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        f'{gross_line}'
         f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5"/>'
-        f'<circle cx="{sx(len(values) - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
+        f'<circle cx="{sx(len(main) - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
         f'</svg>'
     )
 
@@ -989,11 +1000,19 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         (t for t in _windowed if _parse_ist_naive(t["exit_time"])),
         key=lambda t: _parse_ist_naive(t["exit_time"]),
     )
-    equity_vals, _cum = [], 0.0
+    equity_vals, net_equity_vals, _cum, _cum_net = [], [], 0.0, 0.0
     for t in _closed_sorted:
-        _cum += t["gross_pnl"] or 0.0
+        _gross = t["gross_pnl"] or 0.0
+        _ep = t.get("entry_price") or 0.0
+        _xp = t.get("exit_price") or 0.0
+        _q = t.get("quantity") or 0
+        _tc = round_trip_cost(config.product, _q, _ep, _xp) if (_ep and _xp and _q) else 0.0
+        _cum += _gross
+        _cum_net += _gross - _tc
         equity_vals.append(_cum)
+        net_equity_vals.append(_cum_net)
     equity_total = _cum
+    net_equity_total = _cum_net
 
     # ── strategy config ───────────────────────────────────────────────────────
     lr = config.strategy_config("lr_extrema")
@@ -1105,12 +1124,20 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     _eq_left = ""
     if equity_vals:
         _eq_sign = "+" if equity_total >= 0 else ""
+        _net_sign = "+" if net_equity_total >= 0 else ""
+        _eq_costs = equity_total - net_equity_total
         _eq_left = f"""
             <h3 style="font-size:13px;margin:4px 0">Cumulative P&amp;L</h3>
-            <div class="val {_pnl_class(equity_total)}" style="font-size:18px">
-                &#8377; {_eq_sign}{equity_total:,.0f}</div>
-            <div class="dim" style="font-size:11px;margin-bottom:6px">{len(equity_vals)} closed trades</div>
-            {_render_equity_sparkline(equity_vals)}"""
+            <div class="val {_pnl_class(net_equity_total)}" style="font-size:18px">
+                &#8377; {_net_sign}{net_equity_total:,.0f}
+                <span class="dim" style="font-size:11px;font-weight:normal">net of costs</span></div>
+            <div class="dim" style="font-size:11px;margin-bottom:6px">
+                gross {_eq_sign}&#8377;{equity_total:,.0f} &minus; costs &#8377;{_eq_costs:,.0f}
+                &nbsp;·&nbsp; {len(equity_vals)} closed trades</div>
+            {_render_equity_sparkline(equity_vals, net_equity_vals)}
+            <div class="dim" style="font-size:11px;margin-top:2px">
+                <span style="color:#8b949e">&#9476;</span> gross
+                &nbsp;·&nbsp; <span style="color:{'#3fb950' if net_equity_total >= 0 else '#f85149'}">&#9644;</span> net</div>"""
     _dd_right = ""
     if _dd["underwater"]:
         _curr_kind = "red" if _dd["current_dd"] > 0 else "green"
@@ -1129,7 +1156,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     if _eq_left or _dd_right:
         equity_section = f"""
     <div class="card full">
-        <h2>Cumulative P&amp;L &amp; Drawdown (gross)</h2>
+        <h2>Cumulative P&amp;L &amp; Drawdown <span class="dim"
+            style="font-weight:normal;text-transform:none">· DD on gross</span></h2>
         <div style="display:flex;gap:24px;flex-wrap:wrap">
             <div style="flex:1;min-width:280px">{_eq_left}</div>
             <div style="flex:1;min-width:280px">{_dd_right}</div>
