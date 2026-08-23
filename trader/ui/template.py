@@ -1406,11 +1406,21 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                     f"{_lot_strs} · avg &#8377;{_el['avg_cost']:.2f}</span>"
                 )
 
+            # Deployed capital: blended avg cost (scale-in aware) × remaining qty
+            _avg_cost = _el["avg_cost"] if _el else (p["entry_price"] or 0.0)
+            _deployed_val = (_avg_cost or 0.0) * (p["quantity"] or 0)
+            _deployed_pct = _deployed_val / total * 100 if total else 0.0
+            deployed_cell = (
+                f"&#8377; {_deployed_val:,.0f}"
+                f"<br><span class='dim' style='font-size:11px'>{_deployed_pct:.0f}% of cap</span>"
+            )
+
             rows_html += (
                 f"<tr>"
                 f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
                 f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}{ladder_html}</td>"
                 f"<td>{p['quantity']}{addon_badge}</td>"
+                f"<td>{deployed_cell}</td>"
                 f"<td>&#8377; {p['entry_price']:.2f}</td>"
                 f"<td>&#8377; {cur:.2f} <span class='{pct_class}'>({pct_sign}{pct:.2f}%)</span></td>"
                 f"<td class='{pct_class}'>&#8377; {upnl_sign}{upnl:,.2f}</td>"
@@ -1428,7 +1438,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             sym = inst.split(":")[-1]
             rows_html += (
                 f"<tr>"
-                f"<td>{sym}</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
+                f"<td>{sym}</td><td>—</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
                 f"<td>—</td><td>—</td><td>—</td><td>—</td>"
                 f"<td>{_badge('PENDING', 'orange')}</td><td></td><td></td>"
                 f"</tr>"
@@ -1438,7 +1448,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             <h2>Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
             <table>
                 <tr>
-                    <th>Symbol / Entry time</th><th>Qty</th><th>Entry</th>
+                    <th>Symbol / Entry time</th><th>Qty</th><th>Deployed</th><th>Entry</th>
                     <th>Current (chg%)</th><th>Unreal. P&amp;L</th>
                     <th>Peak &#9650;</th><th>Low &#9660;</th><th>SL / Trail trigger</th>
                     <th>Held</th><th>Status</th><th>Price (since entry)</th>
