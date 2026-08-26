@@ -11,6 +11,26 @@ risk:
                                    # discards ~₹88k gross edge to save ₹25k costs (P&L −34%, util 69.6%→37.8%),
                                    # Calmar 2.00→1.85. Defensive only: halves corrections, costs a third of bull
                                    # runs. See memory project_sameday_reentry_churn / todo.md.
+  reentry_discount:                # same-day re-entry priced too close to the exit it follows
+    enabled: false                 # FALSIFIED 2026-08-26 — keep OFF. Defensive-only option.
+    min_discount_pct: 1.5          # block unless price <= blended_exit * (1 - min_discount_pct/100)
+    max_premium_pct: null          # null = one-sided; a number re-allows re-entries priced
+                                   #   above blended_exit * (1 + max_premium_pct/100) (momentum
+                                   #   re-entry, not churn). Reject reason: reentry_discount.
+                                   # A/B 2025-01-01→2026-08-26, identical candle cache, 22 names
+                                   # (baseline 418t / ₹303.3k / 75.83% / DD 13.1% / Calmar 3.119):
+                                   #   +/-0.10%  377t  ₹272.1k  DD 13.1%  Calmar 2.826
+                                   #   +/-0.25%  370t  ₹273.0k  DD 12.4%  Calmar 3.005
+                                   #   +/-0.50%  332t  ₹258.2k  DD 11.8%  Calmar 2.998
+                                   #   one-sided 1.5% (== +/-1.5%)  211t  ₹126.6k  DD 13.1%  Calmar 1.389
+                                   # Monotone: EVERY width loses. Even a hair-thin +/-0.1% band —
+                                   # which blocks only dead-flat round trips — costs ₹31k to save
+                                   # ₹3.9k of charges and does not improve DD at all. Blocking a
+                                   # re-entry amputates the whole downstream trade sequence (same
+                                   # shape as loss_reentry_block / the blanket cooldown above); the
+                                   # cost is never the charges, it's the capital left idle
+                                   # (time-avg util 61.8% -> 36.7% at 1.5%).
+                                   # See reviews/reentry_discount_ab_20260826.md.
   loss_reentry_block:              # block re-entry for N sessions after a LOSING full exit.
     enabled: false                 # OFF pending rolling validation. Recovery-profile study
     sessions: 3                    # 2026-08-16: 105 rebuys <=3 sessions after a losing exit

@@ -384,6 +384,27 @@ class Config:
         return int((self._data["risk"].get("loss_reentry_block") or {}).get("sessions", 3))
 
     @property
+    def reentry_discount_enabled(self) -> bool:
+        """Require a same-day re-entry to be materially cheaper than the exit it follows."""
+        return bool((self._data["risk"].get("reentry_discount") or {}).get("enabled", False))
+
+    @property
+    def reentry_discount_pct(self) -> float:
+        """Minimum % BELOW the blended exit price a same-day re-entry must be priced."""
+        return float((self._data["risk"].get("reentry_discount") or {}).get("min_discount_pct", 1.5))
+
+    @property
+    def reentry_premium_pct(self) -> float | None:
+        """Upper edge of the blocked band, % ABOVE the blended exit price.
+
+        None = one-sided (every re-entry not deep enough below the exit is blocked).
+        A number makes the block a BAND: re-entries priced above
+        exit * (1 + pct/100) are allowed through again.
+        """
+        v = (self._data["risk"].get("reentry_discount") or {}).get("max_premium_pct", None)
+        return None if v is None else float(v)
+
+    @property
     def order_type(self) -> str:
         """'MARKET' or 'LIMIT' — controls live order placement only."""
         return self._data["risk"].get("order_type", "market").upper()

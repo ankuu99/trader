@@ -70,6 +70,16 @@ class RiskManager:
         # close_position(), cleared in reset_day(); no timestamps, so live and
         # backtest share one clock (the day boundary that already calls reset_day).
         self._reentry_blocked: set[str] = set()
+        # Same-day re-entry discount gate — instrument -> [exit_proceeds, exit_qty]
+        # accumulated across every exit (partial scale-outs + the final close) SINCE
+        # the last entry fill, so blended = proceeds/qty is the true average price we
+        # got out at. Reset on the next entry fill and at reset_day().
+        # Rationale (live sweep 2026-08-26, 14 same-day exit->re-entry events): only 3
+        # re-entered >=1.5% below their blended exit; ~6 round-tripped flat (pure
+        # cost/basis churn) and 4 bought back HIGHER in bigger size (QUESS 06-30 +3.5%,
+        # 07-31 +3.4%). A symmetric "within X%" band misses that second group, so the
+        # gate is ONE-SIDED: re-entry must be at least min_discount_pct BELOW the exit.
+        self._exit_today: dict[str, list[float]] = {}
         # Loss re-entry block — instrument -> sessions remaining. Armed in
         # close_position() when the full close realises a LOSS; each reset_day()
         # decrements, so `sessions: N` means the earliest re-entry is the Nth
@@ -169,6 +179,29 @@ class RiskManager:
             logger.info("Signal rejected — re-entry cooldown | %s", signal.instrument)
             self._last_reject_reason = "reentry_cooldown"
             return None
+
+        # Same-day re-entry discount gate — we exited this instrument earlier in the
+        # session; re-establishing the risk only pays if we get back in materially
+        # cheaper than we got out. See _exit_today in __init__ for the live evidence.
+        if config.reentry_discount_enabled and signal.instrument in self._exit_today:
+            _proceeds, _qty = self._exit_today[signal.instrument]
+            if _qty > 0:
+                _blended = _proceeds / _qty
+                _limit = _blended * (1 - config.reentry_discount_pct / 100.0)
+                # max_premium_pct turns the one-sided rule into a band: a re-entry
+                # priced well ABOVE the exit is let through again (it is a momentum
+                # re-entry, not churn). None keeps the rule one-sided.
+                _prem = config.reentry_premium_pct
+                _ceil = None if _prem is None else _blended * (1 + _prem / 100.0)
+                if signal.price_hint > _limit and (_ceil is None or signal.price_hint <= _ceil):
+                    logger.info(
+                        "Signal rejected — re-entry discount | %s | price=%.2f > %.2f "
+                        "(exit avg %.2f - %.2f%%)",
+                        signal.instrument, signal.price_hint, _limit,
+                        _blended, config.reentry_discount_pct,
+                    )
+                    self._last_reject_reason = "reentry_discount"
+                    return None
 
         # Loss re-entry block — the last full exit in this instrument realised a loss
         # within the last N sessions; re-entering that soon is coin-flip edge that
@@ -456,6 +489,10 @@ class RiskManager:
             return
         fill_date = getattr(fill_ts, "date", lambda: None)() or datetime.now(_IST).date()
         lot_value = fill_price * quantity
+        if not addon:
+            # A fresh position starts a new round trip — exits recorded for the
+            # PREVIOUS one no longer describe a price we could re-enter below.
+            self._exit_today.pop(instrument, None)
 
         if addon and instrument in self._open_positions:
             # Scale-in add-on: grow the blended position; the lot's cost basis goes
@@ -574,6 +611,12 @@ class RiskManager:
     def realised_pnl(self) -> float:
         return self._realised_pnl
 
+    def _record_exit_price(self, instrument: str, exit_price: float, qty: int) -> None:
+        """Accumulate exit proceeds/qty for the same-day re-entry discount gate."""
+        acc = self._exit_today.setdefault(instrument, [0.0, 0.0])
+        acc[0] += exit_price * qty
+        acc[1] += qty
+
     def close_position(self, instrument: str, exit_price: float = 0.0):
         """Remove a position from tracking and accumulate realised P&L."""
         qty = self._open_positions.pop(instrument, None)
@@ -595,6 +638,8 @@ class RiskManager:
         # those would depend on eviction running before reset_day() in the same job.
         if exit_price:
             self._reentry_blocked.add(instrument)
+            if qty:
+                self._record_exit_price(instrument, exit_price, qty)
         if qty and exit_price and freed:
             entry_price = freed / qty
             pnl = (exit_price - entry_price) * qty
@@ -645,6 +690,8 @@ class RiskManager:
             _si["addon_value"] -= _addon_freed
             self._scale_in_deployed = max(0.0, self._scale_in_deployed - _addon_freed)
         self._capital_deployed = max(0.0, self._capital_deployed - (freed - _addon_freed))
+        if exit_price:
+            self._record_exit_price(instrument, exit_price, qty)
         if exit_price and entry_price:
             pnl = (exit_price - entry_price) * qty
             self._realised_pnl += pnl
@@ -661,6 +708,7 @@ class RiskManager:
         self._realised_pnl = 0.0
         self._halted = False
         self._reentry_blocked.clear()
+        self._exit_today.clear()
         # Loss re-entry block: one session elapsed — decrement, expire at zero.
         self._loss_reentry = {
             inst: left - 1 for inst, left in self._loss_reentry.items() if left > 1
