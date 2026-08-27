@@ -11,7 +11,7 @@ import threading
 
 from flask import Flask, Response, redirect, request
 
-from trader.ui.template import render_page, render_chart_page
+from trader.ui.template import render_page, render_chart_page, render_stock_page
 
 # Suppress Flask/Werkzeug access logs — we don't want dashboard hits polluting bot logs
 log = logging.getLogger("werkzeug")
@@ -33,6 +33,11 @@ def build_app(bot_state, risk, store, config) -> Flask:
     @app.route("/chart/<symbol>")
     def chart(symbol):
         html = render_chart_page(f"NSE:{symbol}", store, config)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/stock/<symbol>")
+    def stock(symbol):
+        html = render_stock_page(f"NSE:{symbol}", bot_state, risk, store, config)
         return Response(html, mimetype="text/html")
 
     @app.route("/pause", methods=["POST"])

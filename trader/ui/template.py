@@ -9,6 +9,7 @@ SQLite is queried directly (read-only connection) so the Store write path is unt
 import html as _html
 import sqlite3
 import time as _time
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 from trader.costs import round_trip_cost
@@ -169,6 +170,9 @@ a.chart-link:hover { text-decoration: underline; }
   .m-only input { width: 18px; height: 18px; }
   .retrow { gap: 10px; }
   .retrow > div { flex: 1 1 42%; }
+  .chart-scroll svg { min-width: 760px; }   /* scroll the big chart, don't shrink it to a thumbnail */
+  body:not(.allcols) table.t-roll th:nth-child(2), body:not(.allcols) table.t-roll td:nth-child(2),
+  body:not(.allcols) table.t-roll th:nth-child(3), body:not(.allcols) table.t-roll td:nth-child(3) { display: none; }
   body:not(.allcols) table.t-pos th:nth-child(3), body:not(.allcols) table.t-pos td:nth-child(3),
   body:not(.allcols) table.t-pos th:nth-child(4), body:not(.allcols) table.t-pos td:nth-child(4),
   body:not(.allcols) table.t-pos th:nth-child(7), body:not(.allcols) table.t-pos td:nth-child(7),
@@ -776,6 +780,56 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
     return "".join(parts)
 
 
+def _parse_ts(_s):
+    try:
+        return datetime.fromisoformat(_s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_matched_trades(db_path, instrument: str | None = None):
+    """FIFO-match every COMPLETE order (optionally one instrument) into closed
+    trades, tagging each SELL leg with its EXIT signal's reason by nearest
+    timestamp. A positional queue join drifts whenever a SELL has no recorded
+    reason (older exits predate exit_reason logging) or a non-fill EXIT signal
+    has no SELL — nearest-time keeps every SELL anchored to the exact signal it
+    came from; pre-logging exits correctly stay blank. Returns
+    (matched_trades, orders_for_match). Always match on the FULL set, then
+    window — never filter raw orders first."""
+    from trader.analytics import match_trades
+    inst_clause, args = ("", ()) if instrument is None else (" AND instrument = ?", (instrument,))
+    raw_orders = _read_db(
+        db_path,
+        "SELECT instrument, direction, quantity, price, placed_at "
+        "FROM orders WHERE status='COMPLETE'" + inst_clause + " ORDER BY placed_at",
+        args,
+    )
+    exit_reasons = _read_db(
+        db_path,
+        "SELECT instrument, logged_at, exit_reason FROM signals "
+        "WHERE signal_type='EXIT'" + inst_clause + " ORDER BY logged_at",
+        args,
+    )
+    exit_sigs: dict[str, list] = defaultdict(list)
+    for r in exit_reasons:
+        dt = _parse_ts(r["logged_at"])
+        if dt is not None:
+            exit_sigs[r["instrument"]].append((dt, r["exit_reason"]))
+    orders_for_match = []
+    for o in raw_orders:
+        rec = {"instrument": o["instrument"], "direction": o["direction"],
+               "quantity": o["quantity"], "price": o["price"], "ts": o["placed_at"]}
+        if o["direction"] == "SELL":
+            sigs = exit_sigs.get(o["instrument"])
+            odt = _parse_ts(o["placed_at"])
+            if sigs and odt is not None:
+                _dt, reason = min(sigs, key=lambda x: abs((x[0] - odt).total_seconds()))
+                if reason is not None:
+                    rec["exit_reason"] = reason
+        orders_for_match.append(rec)
+    return match_trades(orders_for_match), orders_for_match
+
+
 def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
                        pnl_class, tm: dict | None = None) -> str:
     """Compact stat row under the Cumulative P&L headline: cum return,
@@ -879,11 +933,11 @@ def _render_rolling_row(rows: list[dict], pnl_class) -> str:
             <th>Nifty B&amp;H</th><th>&Delta;</th></tr>{body}</table>"""
 
 
-def render_chart_page(instrument: str, store, config) -> str:
-    sym = instrument.split(":")[-1]
-    tf = config.candle_timeframe
-    tf_minutes = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60, "day": 1440}.get(tf, 60)
-
+def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
+    """Price chart (closes since 3 days before entry, or full cached history)
+    with fill markers, in-position phantom signals and the strategy's levels.
+    Returns (chart_svg, meta_parts, n_candles); chart_svg is None when there is
+    not enough candle data. Shared by /chart/<sym> and /stock/<sym>."""
     # Open position (may not exist)
     pos_rows = _read_db(
         config.db_path,
@@ -916,12 +970,7 @@ def render_chart_page(instrument: str, store, config) -> str:
     )
 
     if len(candle_rows) < 2:
-        return (
-            f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{sym}</title>"
-            f"<style>{_CSS}</style></head><body>"
-            f"<p class='dim'>Not enough candle data for {instrument}.</p>"
-            f"<a href='/' class='chart-link'>← Dashboard</a></body></html>"
-        )
+        return None, [], len(candle_rows)
 
     closes = [r["close"] for r in candle_rows]
     timestamps = [r["timestamp"] for r in candle_rows]
@@ -984,11 +1033,11 @@ def render_chart_page(instrument: str, store, config) -> str:
         buy_markers=buy_markers,
         sell_markers=sell_markers,
         phantom_markers=phantom_markers,
-        width=1100, height=480,
+        width=width, height=height,
     )
 
     last_close = closes[-1]
-    meta_parts = ['<a href="/" class="chart-link">← Dashboard</a>']
+    meta_parts = []
     if entry_price:
         chg = (last_close - entry_price) / entry_price * 100
         chg_sign = "+" if chg >= 0 else ""
@@ -1010,6 +1059,21 @@ def render_chart_page(instrument: str, store, config) -> str:
     if order_rows:
         n_trades = len([o for o in order_rows if o["direction"] == "BUY"])
         meta_parts.append(f"{n_trades} trade(s)")
+    return chart_svg, meta_parts, len(candle_rows)
+
+
+def render_chart_page(instrument: str, store, config) -> str:
+    sym = instrument.split(":")[-1]
+    chart_svg, meta_parts, _n = _build_chart(instrument, config)
+    if chart_svg is None:
+        return (
+            f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{sym}</title>"
+            f"<style>{_CSS}</style></head><body>"
+            f"<p class='dim'>Not enough candle data for {instrument}.</p>"
+            f"<a href='/' class='chart-link'>← Dashboard</a></body></html>"
+        )
+    meta_parts = ['<a href="/" class="chart-link">← Dashboard</a>',
+                  f'<a href="/stock/{sym}" class="chart-link">{sym} drilldown</a>'] + meta_parts
     meta_parts.append('<span style="color:#8b949e">auto-refresh 60s</span>')
 
     return f"""<!DOCTYPE html>
@@ -1119,47 +1183,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                                   drawdown_stats, position_exit_legs,
                                   position_entry_legs)
 
-    _raw_orders = _read_db(
-        config.db_path,
-        "SELECT instrument, direction, quantity, price, placed_at "
-        "FROM orders WHERE status='COMPLETE' ORDER BY placed_at",
-    )
-    _exit_reasons = _read_db(
-        config.db_path,
-        "SELECT instrument, logged_at, exit_reason FROM signals "
-        "WHERE signal_type='EXIT' ORDER BY logged_at",
-    )
-    # Match each SELL leg to its own EXIT signal by nearest timestamp. A positional
-    # queue join drifts whenever a SELL has no recorded reason (older exits predate
-    # exit_reason logging) or a non-fill EXIT signal has no SELL — nearest-time keeps
-    # every SELL anchored to the exact signal it came from. EXIT signals still carry a
-    # NULL reason for the pre-logging exits, so those SELLs correctly show blank.
-    from collections import defaultdict
-
-    def _parse_ts(_s):
-        try:
-            return datetime.fromisoformat(_s)
-        except (TypeError, ValueError):
-            return None
-
-    _exit_sigs: dict[str, list] = defaultdict(list)
-    for _r in _exit_reasons:
-        _dt = _parse_ts(_r["logged_at"])
-        if _dt is not None:
-            _exit_sigs[_r["instrument"]].append((_dt, _r["exit_reason"]))
-    _orders_for_match = []
-    for _o in _raw_orders:
-        _rec = {"instrument": _o["instrument"], "direction": _o["direction"],
-                "quantity": _o["quantity"], "price": _o["price"], "ts": _o["placed_at"]}
-        if _o["direction"] == "SELL":
-            _sigs = _exit_sigs.get(_o["instrument"])
-            _odt = _parse_ts(_o["placed_at"])
-            if _sigs and _odt is not None:
-                _dt, _reason = min(_sigs, key=lambda _s: abs((_s[0] - _odt).total_seconds()))
-                if _reason is not None:
-                    _rec["exit_reason"] = _reason
-        _orders_for_match.append(_rec)
-    _matched = match_trades(_orders_for_match)
+    _matched, _orders_for_match = _load_matched_trades(config.db_path)
     # FIFO matched on the FULL order set above; NOW restrict to the date window.
     # Everything below derived from closed trades uses the windowed set; only
     # capital utilisation keeps the full set (overlap handled inside its from/to).
@@ -1829,7 +1853,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
             rows_html += (
                 f"<tr>"
-                f"<td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
+                f"<td><a href='/stock/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
                 f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}{ladder_html}</td>"
                 f"<td>{p['quantity']}{addon_badge}</td>"
                 f"<td>{deployed_cell}</td>"
@@ -2062,7 +2086,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             else:
                 vs_nifty = "<span class='dim'>—</span>"
             _sc_body += (
-                f"<tr><td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{open_badge}</td>"
+                f"<tr><td><a href='/stock/{sym}' class='chart-link'>{sym}</a>{open_badge}</td>"
                 f"<td class='dim'>{c['n_trades']}</td>"
                 f"<td class='{_pnl_class(c['gross_pnl'])}'>&#8377; {c['gross_pnl']:+,.0f}</td>"
                 f"<td class='{_pnl_class(net)}'>&#8377; {net:+,.0f}</td>"
@@ -2327,7 +2351,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         _bars_label = f"{candles} {_ws_tf} bars" if _ws_aggregated else f"{candles} candles"
         ws_rows += (
             f"<tr>"
-            f"<td><a href='/chart/{ticker}' class='chart-link'>{ticker}</a>{_ws_tf_badge}</td>"
+            f"<td><a href='/stock/{ticker}' class='chart-link'>{ticker}</a>{_ws_tf_badge}</td>"
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"
@@ -2384,6 +2408,264 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     {strategy_section}
     {watchlist_section}
     {state_section}
+</div>
+</body>
+</html>"""
+
+
+def render_stock_page(instrument: str, bot_state, risk, store, config) -> str:
+    """Per-stock drilldown (/stock/<sym>): everything about one name in one
+    place — status + model reading, price chart with fills/levels, conviction
+    history, open-position detail with stop-risk, this stock's closed trades
+    (with the trade-matched Nifty counterfactual), its signals incl. gate
+    filters, and the effective per-stock params. Same shell as the dashboard
+    (mobile CSS + scroll-preserving refresh). Read-only."""
+    from trader.analytics import trade_matched_benchmark, BENCHMARK_INSTRUMENT
+    sym = instrument.split(":")[-1]
+    now = _now_ist()
+    params = config.get_strategy_params(instrument, "lr_extrema") or {}
+    tf = config.strategy_timeframe(instrument)
+    threshold = float(params.get("threshold", 0.70))
+    veto = float(params.get("veto_threshold", 0.50))
+    sell_thr = float(params.get("sell_threshold", 0.65))
+    stop_pct = float(params.get("stop_pct", 3.0))
+    trail_pct = float(params.get("trail_pct", 1.5))
+    hold_max = int(params.get("hold_bars", 200))
+    total = config.total_capital
+
+    # ── status / latest model reading ───────────────────────────────────────
+    ws = ((getattr(bot_state, "warmup_status", None) or {}).get(instrument)) if bot_state else None
+    scores = ((getattr(bot_state, "model_scores", None) or {}).get(instrument)) if bot_state else None
+    try:
+        paused = store.get_state(f"{instrument}.paused", 0.0) > 0.5
+    except Exception:
+        paused = False
+    pos_rows = _read_db(
+        config.db_path,
+        "SELECT entry_price, quantity, held_bars, entry_time, current_price, pct_change, "
+        "unrealised_pnl, peak_close, trailing_active, low_since_entry, pattern_top_trailing "
+        "FROM open_positions WHERE instrument = ?", (instrument,),
+    )
+    pos = pos_rows[0] if pos_rows else None
+    pending = instrument in (getattr(risk, "_pending_orders", None) or {})
+    p_min = float(scores.get("p_min", 0.0)) if scores else None
+    p_max = float(scores.get("p_max", 0.0)) if scores else None
+    if paused:
+        status = _badge("PAUSED", "red")
+    elif ws and ws.get("status") == "WARMING_UP":
+        status = _badge("WARMING", "orange")
+    elif pos:
+        status = _badge("IN POSITION", "green")
+    elif pending:
+        status = _badge("PENDING", "orange")
+    elif p_min is not None and p_min >= threshold and (p_max or 0) >= veto:
+        status = _badge("VETOED", "dim")
+    elif p_min is not None and p_min >= threshold:
+        status = _badge("ENTRY-READY", "green")
+    elif p_min is not None:
+        status = _badge("WAITING", "dim")
+    else:
+        status = _badge("NO SCORE", "dim")
+    if p_min is not None:
+        _pmc = "green" if p_min >= threshold else "dim"
+        _pxc = "red" if (p_max or 0) >= sell_thr else ("orange" if (p_max or 0) >= veto else "dim")
+        model_now = (f'P(buy) <span class="{_pmc}">{p_min * 100:.0f}%</span>'
+                     f' <span class="dim">thr {threshold * 100:.0f}%</span>'
+                     f' &nbsp;·&nbsp; P(sell) <span class="{_pxc}">{(p_max or 0) * 100:.0f}%</span>'
+                     f' <span class="dim">veto {veto * 100:.0f}% · sell {sell_thr * 100:.0f}%</span>')
+        drivers = scores.get("drivers") or []
+        if drivers:
+            _d = " · ".join(
+                f"{'▲' if (d.get('value') or 0) >= 0 else '▼'} {d.get('name')} {d.get('value'):+.2f}"
+                for d in drivers[:5] if d.get("value") is not None
+            )
+            model_now += f'<div class="dim" style="font-size:11px;margin-top:2px">drivers: {_d}</div>'
+    else:
+        model_now = '<span class="dim">no model reading yet</span>'
+    _tf_badge = (f' <span class="badge badge-dim" title="strategy timeframe">{tf}</span>'
+                 if config.is_aggregated_tf(instrument) else "")
+
+    # ── price chart + conviction history ────────────────────────────────────
+    chart_svg, meta_parts, n_candles = _build_chart(instrument, config, width=1100, height=420)
+    chart_block = chart_svg if chart_svg else (
+        f'<span class="dim">Not enough {config.candle_timeframe} candles cached for {sym} '
+        f'({n_candles} found).</span>')
+    hist = _read_model_scores(config.db_path, instrument, limit=200)
+    conviction = (_render_prob_sparkline(hist, threshold, veto, width=600, height=90)
+                  if len(hist) >= 2 else '<span class="dim">no persisted scores yet</span>')
+    _hist_from = hist[0]["timestamp"][:16] if hist else "—"
+
+    # ── open position detail ────────────────────────────────────────────────
+    pos_block = ""
+    if pos:
+        ep = pos.get("entry_price") or 0.0
+        q = pos.get("quantity") or 0
+        cur = pos.get("current_price") or 0.0
+        pct = pos.get("pct_change") or 0.0
+        upnl = pos.get("unrealised_pnl") or 0.0
+        peak = pos.get("peak_close") or 0.0
+        low = pos.get("low_since_entry") or 0.0
+        trailing = bool(pos.get("trailing_active", 0))
+        held = pos.get("held_bars") or 0
+        sl = ep * (1 - stop_pct / 100)
+        trail_trigger = peak * (1 - trail_pct / 100) if trailing and peak > 0 else None
+        eff = trail_trigger if trail_trigger else sl
+        risk_rs = (cur - eff) * q if cur > 0 else 0.0
+        risk_html = (f'<span class="red">at risk &#8377;{risk_rs:,.0f}</span>' if risk_rs >= 0
+                     else f'<span class="green">locked &#8377;{-risk_rs:,.0f}</span>')
+        _tk = "TRAIL(TOP)" if pos.get("pattern_top_trailing") else "TRAIL(PCT)"
+        pos_block = f"""
+    <div class="card">
+        <h2>Open Position</h2>
+        <table>
+            <tr><td class="dim">Entry</td><td class="val">&#8377; {ep:.2f} × {q}
+                <span class="dim">= &#8377;{ep * q:,.0f} ({ep * q / total * 100 if total else 0:.0f}% cap)</span></td></tr>
+            <tr><td class="dim">Since</td><td class="val">{_fmt_ist(_parse_ist_naive(pos.get("entry_time")))}</td></tr>
+            <tr><td class="dim">Current</td><td class="val">&#8377; {cur:.2f}
+                <span class="{_pnl_class(pct)}">({pct:+.2f}%)</span>
+                &nbsp;·&nbsp; unrealised <span class="{_pnl_class(upnl)}">&#8377; {upnl:+,.2f}</span></td></tr>
+            <tr><td class="dim">Peak / Low</td><td class="val"><span class="green">&#8377; {peak:.2f}</span>
+                <span class="dim">({(peak - ep) / ep * 100 if ep and peak else 0:+.2f}%)</span>
+                &nbsp;/&nbsp; {(f'<span class="red">&#8377; {low:.2f}</span> <span class="dim">({(low - ep) / ep * 100:+.2f}%)</span>'
+                               if (low and ep) else '<span class="dim">—</span>')}</td></tr>
+            <tr><td class="dim">Hard stop</td><td class="val red">&#8377; {sl:.2f} <span class="dim">(−{stop_pct:g}%)</span></td></tr>
+            <tr><td class="dim">Trail</td><td class="val">{(f'<span class="orange">&#8377; {trail_trigger:.2f}</span> {_badge(_tk, "orange")}'
+                                                              if trail_trigger else '<span class="dim">not active</span>')}</td></tr>
+            <tr><td class="dim">Stop risk</td><td class="val">{risk_html}
+                <span class="dim">({abs(risk_rs) / total * 100 if total else 0:.1f}% cap · to {'trail' if trail_trigger else 'hard stop'})</span></td></tr>
+            <tr><td class="dim">Held</td><td class="val">{held}/{hold_max} {tf} bars</td></tr>
+        </table>
+    </div>"""
+
+    # ── closed trades for this stock ────────────────────────────────────────
+    matched, _ = _load_matched_trades(config.db_path, instrument)
+    trades = sorted((t for t in matched if t.get("exit_time")),
+                    key=lambda t: str(t["exit_time"]), reverse=True)
+    trades_block = ""
+    if trades:
+        _ER = {"SL": "red", "TRAILING": "orange", "PATTERN_TOP": "orange",
+               "PATTERN_TOP_PARTIAL": "orange", "STALE": "dim", "STALE_REARM": "dim",
+               "STRATEGY": "dim"}
+        tg = tc = 0.0
+        rows = ""
+        for t in trades:
+            ep, xp, q = t.get("entry_price") or 0.0, t.get("exit_price") or 0.0, t.get("quantity") or 0
+            g = t.get("gross_pnl") or 0.0
+            c = round_trip_cost(config.product, q, ep, xp) if (ep and xp and q) else 0.0
+            n = g - c
+            tg += g; tc += c
+            pctp = (xp - ep) / ep * 100 if ep else 0.0
+            r = t.get("exit_reason") or ""
+            rows += (f"<tr><td class='dim'>{_fmt_ist(_parse_ist_naive(t.get('entry_time')))}</td>"
+                     f"<td>&#8377; {ep:.2f}</td><td>&#8377; {xp:.2f}</td><td class='dim'>{q}</td>"
+                     f"<td class='{_pnl_class(g)}'>&#8377; {g:+,.0f} <span class='dim'>({pctp:+.1f}%)</span></td>"
+                     f"<td class='{_pnl_class(n)}'>&#8377; {n:+,.0f}</td>"
+                     f"<td class='dim'>{_hold_duration(t.get('entry_time', ''), t.get('exit_time', ''))}</td>"
+                     f"<td>{_badge(r, _ER.get(r, 'dim')) if r else '<span class=dim>—</span>'}</td>"
+                     f"<td class='dim'>{_fmt_ist(_parse_ist_naive(t.get('exit_time')))}</td></tr>")
+        first_entry = min((_parse_ist_naive(t["entry_time"]) for t in trades if t.get("entry_time")),
+                          default=None)
+        tm_line = ""
+        if first_entry:
+            closes = _read_db(
+                config.db_path,
+                "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
+                "AND timestamp >= ? ORDER BY timestamp ASC",
+                (BENCHMARK_INSTRUMENT, (first_entry - timedelta(days=7)).isoformat()),
+            )
+            tm = trade_matched_benchmark(trades, closes)
+            if tm["pnl"] is not None:
+                edge = tm["our_gross_pct"] - tm["pct"]
+                tm_line = (f' &nbsp;·&nbsp; vs Nifty trade-matched: <span class="{_pnl_class(tm["pnl"])}">'
+                           f'&#8377;{tm["pnl"]:+,.0f} ({tm["pct"]:+.1f}%)</span> on &#8377;{tm["notional"]:,.0f}'
+                           f' → ours <span class="{_pnl_class(edge)}">{edge:+.1f} pp</span>')
+        trades_block = f"""
+    <div class="card full">
+        <h2 id="trades">Closed Trades ({len(trades)})
+            <span class="dim" style="font-weight:normal;text-transform:none">
+            gross <span class="{_pnl_class(tg)}">&#8377; {tg:+,.0f}</span> − costs &#8377;{tc:,.0f}
+            = net <span class="{_pnl_class(tg - tc)}">&#8377; {tg - tc:+,.0f}</span>{tm_line}</span></h2>
+        <table class="t-trades-s">
+            <tr><th>Entry time</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Gross</th>
+                <th>Net</th><th>Hold</th><th>Reason</th><th>Exit time</th></tr>{rows}
+        </table>
+    </div>"""
+    else:
+        trades_block = '<div class="card full"><h2>Closed Trades</h2><span class="dim">none yet</span></div>'
+
+    # ── signals for this stock (incl. gate filters) ──────────────────────────
+    sigs = _read_db(
+        config.db_path,
+        "SELECT logged_at, direction, signal_type, price_hint, accepted, reject_reason, exit_reason "
+        "FROM signals WHERE instrument = ? ORDER BY id DESC LIMIT 40", (instrument,),
+    )
+    if sigs:
+        srows = ""
+        for sg in sigs:
+            acc = bool(sg.get("accepted"))
+            rr = sg.get("reject_reason") or ""
+            kind = "green" if acc else ("dim" if rr.startswith("FILTER:") else "red")
+            reason = (sg.get("exit_reason") or "") if sg.get("signal_type") == "EXIT" else rr
+            ph = sg.get("price_hint")
+            srows += (f"<tr><td class='dim'>{_fmt_ist(_parse_ist_naive(sg.get('logged_at')))}</td>"
+                      f"<td class='{'green' if sg.get('direction') == 'BUY' else 'red'}'>{sg.get('direction')}</td>"
+                      f"<td>{sg.get('signal_type')}</td>"
+                      f"<td>{'&#8377; %.2f' % ph if ph else '—'}</td>"
+                      f"<td>{_badge('✓' if acc else '✗', kind)}</td>"
+                      f"<td class='dim'>{reason or '—'}</td></tr>")
+        signals_block = f"""
+    <div class="card full">
+        <h2 id="signals">Signals (last {len(sigs)}, incl. gate filters)</h2>
+        <table><tr><th>Time</th><th>Dir</th><th>Type</th><th>Price</th><th></th><th>Reason</th></tr>{srows}</table>
+    </div>"""
+    else:
+        signals_block = '<div class="card full"><h2>Signals</h2><span class="dim">none logged</span></div>'
+
+    # ── effective params ─────────────────────────────────────────────────────
+    _ptags = "".join(f'<span class="tag">{k} = {v}</span>' for k, v in sorted(params.items())
+                     if not isinstance(v, (dict, list)))
+    params_block = f"""
+    <div class="card full">
+        <h2>Effective Params <span class="dim" style="font-weight:normal;text-transform:none">· timeframe {tf}
+            · global ∪ per_stock_params</span></h2>
+        <div>{_ptags or '<span class="dim">—</span>'}</div>
+    </div>"""
+
+    meta = " &nbsp;·&nbsp; ".join(
+        ['<a href="/" class="chart-link">← Dashboard</a>',
+         f'<a href="/chart/{sym}" class="chart-link">full-size chart</a>'] + meta_parts
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<noscript><meta http-equiv="refresh" content="60"></noscript>
+<title>{sym} — Trader</title>
+<style>{_CSS}</style>
+<script>{_JS}</script>
+</head>
+<body>
+<h1>{sym}{_tf_badge} &nbsp;{status}</h1>
+<div class="meta">{meta} &nbsp;·&nbsp; {now.strftime("%d %b %Y, %H:%M:%S IST")}
+    &nbsp;·&nbsp; <span id="refresh-note" style="font-size:11px">auto-refresh 30s</span></div>
+<div class="toprow">
+    <div class="card"><h2>Model now</h2><div class="val">{model_now}</div></div>
+    {pos_block}
+</div>
+<div class="card full" style="margin-bottom:12px">
+    <h2>Price · {config.candle_timeframe} candles · fills, levels, in-position signals</h2>
+    <div class="chart-scroll" style="overflow-x:auto">{chart_block}</div>
+</div>
+<div class="card full" style="margin-bottom:12px">
+    <h2>Conviction history <span class="dim" style="font-weight:normal;text-transform:none">· P(buy) green / P(sell) red
+        · last {len(hist)} scores from {_hist_from}</span></h2>
+    <div style="overflow-x:auto">{conviction}</div>
+</div>
+<div class="grid">
+    {trades_block}
+    {signals_block}
+    {params_block}
 </div>
 </body>
 </html>"""

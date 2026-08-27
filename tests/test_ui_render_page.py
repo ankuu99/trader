@@ -144,3 +144,75 @@ def test_render_return_row_handles_missing_pieces():
     assert "+1.0%" in html and "&lt;90 d" in html and "on deployed: —" in html
     assert "Incl. open" not in html
     assert _render_return_row({"cum_pct": None}, {}, 1.0, 0.0, _pnl_class) == ""
+
+
+# --------------------------------------------------------------------------- #
+# /stock/<sym> drilldown
+# --------------------------------------------------------------------------- #
+
+def test_render_stock_page_empty(ctx):
+    from trader.ui.template import render_stock_page
+    bot_state, risk, store = ctx
+    html = render_stock_page("NSE:ABC", bot_state, risk, store, config)
+    assert "<title>ABC — Trader</title>" in html
+    assert "NO SCORE" in html and "Not enough" in html
+    assert "none yet" in html and "none logged" in html
+    assert 'href="/chart/ABC"' in html and "visibilitychange" in html
+
+
+def test_render_stock_page_full(ctx):
+    from trader.ui.template import render_stock_page
+    bot_state, risk, store = ctx
+    t0 = datetime.now() - timedelta(days=30)
+    _order(store, "o1", "NSE:ABC", "BUY", 10, 100.0, t0)
+    _order(store, "o2", "NSE:ABC", "SELL", 10, 110.0, t0 + timedelta(days=3))
+    store.log_signal(timestamp=t0 + timedelta(days=3), instrument="NSE:ABC", strategy="lr_extrema",
+                     direction="BUY", signal_type="EXIT", price_hint=110.0, accepted=True,
+                     reject_reason=None, exit_reason="TRAILING")
+    store.log_signal(timestamp=t0 + timedelta(days=5), instrument="NSE:ABC", strategy="lr_extrema",
+                     direction="BUY", signal_type="ENTRY", price_hint=105.0, accepted=False,
+                     reject_reason="FILTER: ht_trend", exit_reason=None)
+    # candles (base TF) + model scores + Nifty + open position + live reading
+    days = pd.date_range(t0.date(), periods=31, freq="D")
+    store.write_candles("NSE:ABC", config.candle_timeframe, pd.DataFrame({
+        "timestamp": days, "open": 100.0, "high": 101.0, "low": 99.0,
+        "close": [100.0 + i * 0.5 for i in range(len(days))], "volume": 1000}))
+    store.write_candles(BENCHMARK_INSTRUMENT, "day", pd.DataFrame({
+        "timestamp": days, "open": 20000.0, "high": 20100.0, "low": 19900.0,
+        "close": [20000.0 + i * 10 for i in range(len(days))], "volume": 0}))
+    for i, d in enumerate(days):
+        store.write_model_score("NSE:ABC", d.to_pydatetime(), 0.3 + i * 0.01, 0.2)
+    e = datetime.now() - timedelta(days=2)
+    store.upsert_open_position("NSE:ABC", 112.0, 10, 4, e, low_since_entry=111.0)
+    store.update_position_metrics("NSE:ABC", 4, 115.0, 2.7, 30.0, 116.0, True)
+    bot_state.model_scores["NSE:ABC"] = {"p_min": 0.42, "p_max": 0.2,
+                                         "drivers": [{"name": "slope_5", "value": 0.31, "kind": "contrib"}]}
+
+    html = render_stock_page("NSE:ABC", bot_state, risk, store, config)
+
+    assert "IN POSITION" in html and "P(buy) <span" in html and "drivers:" in html
+    assert "Open Position" in html and "Stop risk" in html and "TRAIL(" in html
+    assert "Closed Trades (1)" in html and "TRAILING" in html
+    assert "vs Nifty trade-matched" in html
+    assert "FILTER: ht_trend" in html and "incl. gate filters" in html
+    assert "Effective Params" in html and "threshold = " in html
+    assert "<svg" in html                      # price chart rendered
+    assert "last 31 scores" in html            # conviction history
+
+
+def test_stock_route_serves_page(ctx):
+    from trader.ui.server import build_app
+    bot_state, risk, store = ctx
+    app = build_app(bot_state, risk, store, config)
+    app.config.update(TESTING=True)
+    resp = app.test_client().get("/stock/ABC")
+    assert resp.status_code == 200 and b"ABC" in resp.data
+
+
+def test_dashboard_links_point_to_drilldown(ctx):
+    bot_state, risk, store = ctx
+    e = datetime.now() - timedelta(days=1)
+    _order(store, "ob", "NSE:ABC", "BUY", 10, 100.0, e)
+    store.upsert_open_position("NSE:ABC", 100.0, 10, 1, e)
+    html = render_page(bot_state, risk, store, config)
+    assert "href='/stock/ABC'" in html and "href='/chart/ABC'" not in html
