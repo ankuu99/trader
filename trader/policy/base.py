@@ -43,10 +43,13 @@ class PositionState:
         self.breakeven_active = False
         self.partial_taken = False
 
-    def snapshot_and_reset(self) -> None:
-        """Capture every position-tracking field, then reset(). Called wherever a
-        FULL exit is emitted, so the whole position (not just entry_price) can be
-        restored if the exit order is later rejected."""
+    def snapshot(self) -> None:
+        """Capture every position-tracking field WITHOUT resetting. Called at a
+        PARTIAL (scale-out) exit emission, which keeps the position open but
+        consumes one-shot guards (partial_taken, pattern-top trailing) — if the
+        order is rejected (CGPOWER 2026-08-27: 15:30 CAS) those guards must come
+        back or the scale-out never re-fires and the whole lot sits on the tight
+        remainder trail."""
         self._snapshot = {
             "entry_price": self.entry_price,
             "held_bars": self.held_bars,
@@ -57,6 +60,12 @@ class PositionState:
             "breakeven_active": self.breakeven_active,
             "partial_taken": self.partial_taken,
         }
+
+    def snapshot_and_reset(self) -> None:
+        """Capture every position-tracking field, then reset(). Called wherever a
+        FULL exit is emitted, so the whole position (not just entry_price) can be
+        restored if the exit order is later rejected."""
+        self.snapshot()
         self.reset()
 
     def restore_snapshot(self) -> bool:

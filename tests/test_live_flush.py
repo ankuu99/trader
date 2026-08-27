@@ -63,3 +63,69 @@ def test_flushed_candle_completes_day_bar():
     assert bar["timestamp"] == day.replace(hour=9, minute=15)
     assert bar["high"] == 110      # 15:00 candle's high folded in
     assert bar["close"] == 108     # 15:00 candle's close is the bar close
+
+
+# --------------------------------------------------------------------------- #
+# Pre-close early emission (15:29:15) — last-candle decisions must beat CAS
+# --------------------------------------------------------------------------- #
+
+def test_flush_open_partials_early_emits_and_keeps_partial():
+    feed = _feed()
+    emitted = []
+    feed.register_candle_handler(emitted.append)
+    last = datetime(2026, 8, 27, 15, 15)
+    feed._partials[111] = _partial(last, close=897.9)
+
+    feed.flush_open_partials_early()
+
+    # Delivered once, as a normal decision candle (no final tag) …
+    assert len(emitted) == 1
+    assert emitted[0]["timestamp"] == last and emitted[0]["close"] == 897.9
+    assert "_early_final" not in emitted[0]
+    # … and the partial stays open (flagged) so late ticks still shape it.
+    assert 111 in feed._partials and feed._partials[111]["early_emitted"] is True
+
+    # Idempotent: a second pre-close call does not re-deliver.
+    feed.flush_open_partials_early()
+    assert len(emitted) == 1
+
+
+def test_final_emission_after_early_flush_is_tagged_persist_only():
+    feed = _feed()
+    emitted = []
+    feed.register_candle_handler(emitted.append)
+    last = datetime(2026, 8, 27, 15, 15)
+    feed._partials[111] = _partial(last, close=897.9)
+    feed.flush_open_partials_early()
+
+    # Late tick inside the same bucket updates the open partial silently.
+    feed._partials[111]["close"] = 898.4
+    feed._partials[111]["high"] = 899.0
+
+    # 15:30 market-close flush: the bucket's real completion goes out tagged.
+    feed.flush_partials()
+    assert len(emitted) == 2
+    final = emitted[1]
+    assert final["_early_final"] is True
+    assert final["timestamp"] == last and final["close"] == 898.4 and final["high"] == 899.0
+    assert not feed._partials
+
+
+def test_rollover_after_early_flush_is_tagged_and_normal_otherwise():
+    feed = _feed()
+    emitted = []
+    feed.register_candle_handler(emitted.append)
+    day = datetime(2026, 8, 27)
+    feed._partials[111] = _partial(day.replace(hour=15, minute=15), close=100.0)
+    feed.flush_open_partials_early()
+
+    # Next-day first tick rolls the bucket: final emission tagged, new partial clean.
+    feed._process_tick({"instrument_token": 111, "last_price": 101.0, "volume_traded": 10,
+                        "exchange_timestamp": day.replace(day=28, hour=9, minute=16)})
+    assert len(emitted) == 2 and emitted[1]["_early_final"] is True
+    assert "early_emitted" not in feed._partials[111]
+
+    # A bucket that was never early-emitted completes as a plain candle.
+    feed._process_tick({"instrument_token": 111, "last_price": 102.0, "volume_traded": 20,
+                        "exchange_timestamp": day.replace(day=28, hour=9, minute=31)})
+    assert len(emitted) == 3 and "_early_final" not in emitted[2]

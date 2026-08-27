@@ -708,6 +708,13 @@ def main():
     # Candle handler
     def handle_candle(candle: dict):
         symbol = token_to_symbol.get(candle.get("instrument_token"))
+        if candle.get("_early_final"):
+            # Final OHLCV of a candle the pre-close flush already delivered:
+            # persist the complete bar for cache parity with Kite history, but
+            # never decide on it twice (no orders.on_candle, no strategy run).
+            if symbol:
+                store.write_candle(symbol, config.candle_timeframe, candle)
+            return
         candle["_symbol"] = symbol
         _htf = _get_htf_regime(symbol, candle.get("timestamp")) if symbol else None
         candle["_htf_rsi"]        = _htf["rsi"]        if _htf else None
@@ -903,6 +910,9 @@ def main():
         timeframe_minutes=config.candle_minutes,
     )
     scheduler.on_market_close(feed.flush_partials)
+    if config.candle_timeframe in _INTRADAY_TIMEFRAMES:
+        # Last-candle decisions must beat the 15:30 CAS — see flush_open_partials_early.
+        scheduler.on_pre_close(feed.flush_open_partials_early)
     def handle_tick(tick: dict):
         token = tick.get("instrument_token")
         symbol = token_to_symbol.get(token)

@@ -302,6 +302,10 @@ class ExtremaExitPolicy:
                     # Scale-out mode: sell a fraction now, arm trailing on the rest.
                     # Fires once per position (partial_taken guard).
                     if self._scale_out_enabled and not pos.partial_taken:
+                        # Snapshot BEFORE consuming the one-shot guards so a rejected
+                        # scale-out order (15:30 CAS) restores them — see
+                        # PositionState.snapshot().
+                        pos.snapshot()
                         # Arm trailing so the remainder rides with downside protection.
                         if self._trailing_enabled and not pos.trailing_active:
                             pos.trailing_active = True

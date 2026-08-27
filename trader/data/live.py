@@ -278,6 +278,11 @@ class LiveFeed:
             "close": partial["close"],
             "volume": partial["volume"],
         }
+        if partial.get("early_emitted"):
+            # This bucket was already delivered by flush_open_partials_early —
+            # strategies decided on it then. Tag the final OHLCV so the handler
+            # persists it (cache parity with Kite history) without deciding twice.
+            candle["_early_final"] = True
         logger.debug("Candle closed | token=%d | %s", token, candle)
         for handler in self._candle_handlers:
             try:
@@ -292,6 +297,27 @@ class LiveFeed:
                 logger.info("Force-flushing partial candle at market close | token=%d", token)
                 self._emit_candle(token, partial)
             self._partials.clear()
+
+    def flush_open_partials_early(self):
+        """Pre-close (15:29:15 IST): deliver every still-open partial NOW as the
+        decision candle, leaving it open so late ticks still shape the persisted
+        version — the bucket's real completion (15:30 flush_partials / next
+        rollover) is then emitted tagged `_early_final` for persistence only.
+
+        Why: a decision on the last 15m candle is otherwise made at 15:30:00 and
+        its order lands inside Zerodha's Closing Auction Session (15:30–15:35),
+        which rejects every new order (CGPOWER 2026-08-27: 50% scale-out lost).
+        Deciding ~45s early on a 14¾-minute candle is well inside the noise of
+        the backtest's candle-close decision; the exit fills before CAS instead
+        of never. Idempotent: an already early-emitted partial is skipped."""
+        with self._lock:
+            for token, partial in list(self._partials.items()):
+                if partial.get("early_emitted"):
+                    continue
+                logger.info("Pre-close early-emit open partial | token=%d | %s",
+                            token, partial["candle_start"])
+                self._emit_candle(token, partial)
+                partial["early_emitted"] = True
 
     def flush_closed_partials(self, cutoff: time):
         """Emit (and drop) partials whose candle bucket has fully closed by

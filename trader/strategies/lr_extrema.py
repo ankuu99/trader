@@ -442,7 +442,7 @@ class LRExtremaStrategy(Strategy):
                 # keep entry/trailing state intact (partial_taken already set).
                 if not order.get("partial"):
                     self._pos.reset()
-                    self._pos.clear_snapshot()  # exit confirmed — nothing left to restore
+                self._pos.clear_snapshot()  # exit (or scale-out) confirmed — nothing left to restore
         elif status in ("REJECTED", "CANCELLED"):
             if signal_type == SignalType.ENTRY:
                 logger.warning(

@@ -27,6 +27,7 @@ class Scheduler:
         self._pre_market_hooks: list = []
         self._midday_hooks: list = []
         self._eod_flush_hooks: list = []
+        self._pre_close_hooks: list = []
         self._market_close_hooks: list = []
         self._post_market_hooks: list = []
         self._heartbeat_hooks: list = []
@@ -39,6 +40,9 @@ class Scheduler:
 
     def on_eod_flush(self, fn):
         self._eod_flush_hooks.append(fn)
+
+    def on_pre_close(self, fn):
+        self._pre_close_hooks.append(fn)
 
     def on_market_close(self, fn):
         self._market_close_hooks.append(fn)
@@ -72,6 +76,15 @@ class Scheduler:
             lambda: self._run(self._eod_flush_hooks, "eod_flush"),
             CronTrigger(day_of_week="mon-fri", hour=15, minute=16, timezone=_IST),
             id="eod_flush",
+        )
+        self._scheduler.add_job(
+            # Pre-close: deliver the still-open last base candle (15:15–15:30) so
+            # last-candle decisions place their orders BEFORE the 15:30 Closing
+            # Auction Session rejects them. 45s of buffer covers sequential order
+            # placement across the watchlist. See LiveFeed.flush_open_partials_early.
+            lambda: self._run(self._pre_close_hooks, "pre_close"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=29, second=15, timezone=_IST),
+            id="pre_close",
         )
         self._scheduler.add_job(
             lambda: self._run(self._market_close_hooks, "market_close"),
