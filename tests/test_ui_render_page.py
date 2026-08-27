@@ -81,6 +81,9 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     assert "trade-matched:" in html and "ours gross" in html   # same-notional counterfactual
     assert 'class="t-trades"' in html and 'class="t-score"' in html
     assert "vs Nifty" in html and " pp</span>" in html   # per-stock trade-matched column
+    # Rolling windows row: inception (120 d) annualized, 1M under the guard
+    assert 'class="t-roll"' in html and "Inception" in html
+    assert "under the 90-day guard" in html
     # 120-day span clears the 90-day guard → annualized headline present, not the "<90 d" note
     assert "&lt;90 d" not in html
 

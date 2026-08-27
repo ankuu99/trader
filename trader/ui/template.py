@@ -831,6 +831,43 @@ def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
     return f'<div class="retrow">{cum_tile}{ann_tile}{mtm_tile}{bench_tile}</div>'
 
 
+def _render_rolling_row(rows: list[dict], pnl_class) -> str:
+    """Mini table of rolling windows (1M / 3M / Inception): trades, net ₹,
+    return, annualized (blank under the guard), Nifty buy-and-hold, and the
+    delta. Independent of the range filter. Empty when nothing has traded."""
+    if not any(r["ret"].get("cum_pct") is not None for r in rows):
+        return ""
+
+    def _pct(v, suffix=""):
+        return "—" if v is None else f"{v:+.1f}%{suffix}"
+
+    body = ""
+    for r in rows:
+        ret, b = r["ret"], r["bench"]
+        cum, ann = ret.get("cum_pct"), ret.get("ann_pct")
+        days = ret.get("days")
+        lbl = r["label"] + (f' <span class="dim">({days:.0f} d)</span>' if days and r["label"] == "Inception" else "")
+        if cum is None:
+            body += (f"<tr><td>{lbl}</td><td class='dim'>0</td><td class='dim'>—</td>"
+                     f"<td class='dim'>—</td><td class='dim'>—</td><td class='dim'>—</td><td class='dim'>—</td></tr>")
+            continue
+        ann_s = (f"<span class='{pnl_class(ann)}'>{_pct(ann)}</span>" if ann is not None
+                 else f"<span class='dim' title='under the {int(ret['min_days'])}-day guard'>—</span>")
+        if b.get("cum_pct") is not None:
+            nifty_s = f"<span class='{pnl_class(b['cum_pct'])}'>{_pct(b['cum_pct'])}</span>"
+            d = cum - b["cum_pct"]
+            delta_s = f"<span class='{pnl_class(d)}'>{d:+.1f} pp</span>"
+        else:
+            nifty_s = delta_s = "<span class='dim'>—</span>"
+        body += (f"<tr><td>{lbl}</td><td class='dim'>{r['n']}</td>"
+                 f"<td class='{pnl_class(r['net'])}'>&#8377;{r['net']:+,.0f}</td>"
+                 f"<td class='{pnl_class(cum)}'>{_pct(cum)}</td><td>{ann_s}</td>"
+                 f"<td>{nifty_s}</td><td>{delta_s}</td></tr>")
+    return f"""<table class="t-roll" style="margin:4px 0 8px">
+        <tr><th>Rolling</th><th>Trades</th><th>Net</th><th>Return</th><th>p.a.</th>
+            <th>Nifty B&amp;H</th><th>&Delta;</th></tr>{body}</table>"""
+
+
 def render_chart_page(instrument: str, store, config) -> str:
     sym = instrument.split(":")[-1]
     tf = config.candle_timeframe
@@ -1348,6 +1385,46 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         _tm = trade_matched_benchmark(_windowed, _tm_rows)
     ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class, _tm)
 
+    # ── rolling windows, INDEPENDENT of the range filter ────────────────────
+    # "Is the edge holding recently?" without touching the range buttons: 1M /
+    # 3M / since-inception, each with realised-net return, annualized (blank
+    # under the 90-day guard), and Nifty buy-and-hold over the same span.
+    _roll_bench_rows: list[dict] = []
+    if _first_fill:
+        _roll_bench_rows = _read_db(
+            config.db_path,
+            "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
+            "AND timestamp >= ? ORDER BY timestamp ASC",
+            (BENCHMARK_INSTRUMENT,
+             _first_fill.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()),
+        )
+    _roll_rows = []
+    for _label, _days in (("1M", 30), ("3M", 90), ("Inception", None)):
+        _rlo = ((_now_n - timedelta(days=_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+                if _days else None)
+        _rtrades = _filter_trades(_matched, _rlo, None)
+        _rnet = 0.0
+        for t in _rtrades:
+            _ep, _xp, _q = t.get("entry_price") or 0.0, t.get("exit_price") or 0.0, t.get("quantity") or 0
+            _rnet += (t.get("gross_pnl") or 0.0) - (
+                round_trip_cost(config.product, _q, _ep, _xp) if (_ep and _xp and _q) else 0.0)
+        if _rlo and _first_fill:
+            _rstart = max(_rlo, _first_fill)
+        else:
+            _rstart = _rlo or _first_fill
+        _rutil = 0.0
+        if _rstart and util_trades:
+            _rutil = compute_utilisation(util_trades, total, from_dt=_rstart, to_dt=_now_n,
+                                         bucket="day")["overall"]["time_avg_util_pct"]
+        _rret = return_stats(_rnet, total, _rstart, _now_n, time_avg_util_pct=_rutil)
+        _rb = benchmark_return([])
+        if _rstart:
+            _rs_iso = _rstart.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            _rb = benchmark_return([r for r in _roll_bench_rows if str(r["timestamp"]) >= _rs_iso])
+        _roll_rows.append({"label": _label, "n": len(_rtrades), "net": _rnet,
+                           "ret": _rret, "bench": _rb})
+    roll_row = _render_rolling_row(_roll_rows, _pnl_class)
+
     # ── cumulative P&L + drawdown panel (merged, #7) ──
     _dd = drawdown_stats(_windowed, config.total_capital)
     _eq_left = ""
@@ -1364,6 +1441,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 gross {_eq_sign}&#8377;{equity_total:,.0f} &minus; costs &#8377;{_eq_costs:,.0f}
                 &nbsp;·&nbsp; {len(equity_vals)} closed trades</div>
             {ret_row}
+            {roll_row}
             {_render_equity_sparkline(equity_vals, net_equity_vals)}
             <div class="dim" style="font-size:11px;margin-top:2px">
                 <span style="color:#8b949e">&#9476;</span> gross
