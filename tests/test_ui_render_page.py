@@ -102,6 +102,29 @@ def test_render_page_open_positions_show_stop_risk(ctx):
     assert "locked in" in html               # portfolio summary line present
 
 
+def test_render_page_health_strip_all_clear_and_flags(ctx):
+    bot_state, risk, store = ctx
+    html = render_page(bot_state, risk, store, config)
+    assert "Health:" in html and "ALL CLEAR" in html
+
+    # A broker reject today + an accepted signal with no order → both flagged.
+    now = datetime.now()
+    store.upsert_order({
+        "order_id": "r1", "instrument": "NSE:REDTAPE", "order_type": "MARKET", "product": "CNC",
+        "direction": "BUY", "quantity": 0, "price": 0.0, "trigger_price": None,
+        "status": "REJECTED", "mode": "live", "placed_at": now.isoformat(), "updated_at": now.isoformat(),
+    })
+    store.log_signal(timestamp=now, instrument="NSE:CGPOWER", strategy="lr_extrema",
+                     direction="BUY", signal_type="EXIT", price_hint=897.9, accepted=True,
+                     reject_reason=None, exit_reason="PATTERN_TOP_PARTIAL")
+    bot_state.model_scores["NSE:KPL"] = {"p_min": 1.0, "p_max": 0.0, "drivers": []}
+    html = render_page(bot_state, risk, store, config)
+    assert "ALL CLEAR" not in html
+    assert "1 broker reject today (REDTAPE)" in html
+    assert "1 accepted signal never placed (CGPOWER)" in html
+    assert "model saturated P(buy)=1.0: KPL" in html
+
+
 def test_render_page_short_window_blanks_annualized(ctx):
     bot_state, risk, store = ctx
     t0 = datetime.now() - timedelta(days=5)

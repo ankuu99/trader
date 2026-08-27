@@ -1042,6 +1042,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     _lo_local = (_lo - _NAIVE_TO_IST_DELTA) if _lo else None
     _hi_local = (_hi - _NAIVE_TO_IST_DELTA) if _hi else None
 
+    _tok = getattr(bot_state, "token_status", None) or {}
+
     # ── heartbeat staleness ──────────────────────────────────────────────────
     last_tick = bot_state.last_candle_at
     if last_tick:
@@ -1258,6 +1260,72 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             </form>
         </span>"""
 
+    # ── health strip: "is something wrong?" in one line ───────────────────────
+    # Red only when non-zero. Sources: today's REJECTED orders (broker), today's
+    # ACCEPTED signals that never produced an order row (placement failures —
+    # Kite refused before assigning an id, e.g. CAS / network), model saturation
+    # (P(buy) pinned at 1.0 = stale-model failure mode), stale tick, token, halt.
+    _today_local = (now.replace(tzinfo=None) - _NAIVE_TO_IST_DELTA).replace(hour=0, minute=0, second=0, microsecond=0)
+    _rej_today = _read_db(
+        config.db_path,
+        "SELECT instrument FROM orders WHERE status = 'REJECTED' AND placed_at >= ?",
+        (_today_local.isoformat(),),
+    )
+    _acc_today = _read_db(
+        config.db_path,
+        "SELECT instrument, logged_at FROM signals WHERE accepted = 1 AND logged_at >= ?",
+        (_today_local.isoformat(),),
+    )
+    _ord_today = _read_db(
+        config.db_path,
+        "SELECT instrument, placed_at FROM orders WHERE placed_at >= ?",
+        (_today_local.isoformat(),),
+    )
+    _ord_ts: dict[str, list] = defaultdict(list)
+    for _o in _ord_today:
+        _d = _parse_ts(_o["placed_at"])
+        if _d is not None:
+            _ord_ts[_o["instrument"]].append(_d)
+    _unplaced = []
+    for _a in _acc_today:
+        _d = _parse_ts(_a["logged_at"])
+        if _d is None:
+            continue
+        if not any(abs((_x - _d).total_seconds()) <= 120 for _x in _ord_ts.get(_a["instrument"], [])):
+            _unplaced.append(_a["instrument"].split(":")[-1])
+    _saturated = [
+        _sym.split(":")[-1] for _sym, _ms in (getattr(bot_state, "model_scores", {}) or {}).items()
+        if (_ms.get("p_min") or 0.0) >= 0.999
+    ]
+    _health = []   # (label, kind, href)
+    if halted:
+        _health.append(("HALTED — daily loss limit", "red", "#pnl"))
+    if _tok and not _tok.get("valid"):
+        _health.append(("Kite token INVALID", "red", "#state"))
+    if tick_stale and market == "OPEN":
+        _health.append(("no ticks > 10 min", "red", None))
+    if _rej_today:
+        _health.append((f"{len(_rej_today)} broker reject{'s' if len(_rej_today) > 1 else ''} today "
+                        f"({', '.join(sorted({r['instrument'].split(':')[-1] for r in _rej_today}))})",
+                        "red", "#orders"))
+    if _unplaced:
+        _health.append((f"{len(_unplaced)} accepted signal{'s' if len(_unplaced) > 1 else ''} never placed "
+                        f"({', '.join(sorted(set(_unplaced)))}) — CAS / placement failure", "red", "#signals"))
+    if _saturated:
+        _health.append((f"model saturated P(buy)=1.0: {', '.join(sorted(_saturated))}", "orange", "#watchlist"))
+    if pending_orders:
+        _health.append((f"{len(pending_orders)} pending order{'s' if len(pending_orders) > 1 else ''}", "dim", "#positions"))
+    if _health:
+        _items = "".join(
+            (f'<a href="{href}" style="text-decoration:none">{_badge(lbl, kind)}</a>' if href else _badge(lbl, kind))
+            for lbl, kind, href in _health
+        )
+        health_strip = f'<div class="meta" style="margin-bottom:10px;line-height:2">Health: {_items}</div>'
+    else:
+        health_strip = (f'<div class="meta" style="margin-bottom:10px">Health: {_badge("ALL CLEAR", "green")}'
+                        f' <span class="dim" style="font-size:11px">no rejects, no unplaced signals, '
+                        f'model sane, ticks fresh</span></div>')
+
     header = f"""
     <h1>Trader Dashboard</h1>
     <div class="meta">
@@ -1272,7 +1340,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             &nbsp;·&nbsp; <span class="orange">{_range_label}</span></span>
         {range_controls}
         <label class="m-only"><input type="checkbox" id="allcols"> all columns</label>
-    </div>"""
+    </div>
+    {health_strip}"""
 
     # Scale-in pool row — shown only when the feature is on (or money is still parked)
     _si_deployed = getattr(risk, "scale_in_deployed", 0.0)
@@ -1306,7 +1375,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     pnl_sign = "+" if realised >= 0 else ""
     pnl_card = f"""
     <div class="card">
-        <h2>P&amp;L Today</h2>
+        <h2 id="pnl">P&amp;L Today</h2>
         <table>
             <tr><td class="dim">Realised</td>
                 <td class="val {_pnl_class(realised)}">&#8377; {pnl_sign}{realised:,.2f}</td></tr>
@@ -1529,7 +1598,6 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     _ctrl_body = "".join(_ctrl_rows) or "<tr><td class='dim' colspan='2'>none paused</td></tr>"
 
     # Kite token status (published by main.py: startup / heartbeat / hot-reload)
-    _tok = getattr(bot_state, "token_status", None) or {}
     if _tok:
         _tok_badge = _badge("VALID", "green") if _tok.get("valid") else _badge("INVALID", "red")
         _tok_checked = _tok.get("checked_at")
@@ -1553,7 +1621,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             </div>"""
     state_section = f"""
     <div class="card full">
-        <h2>Persistent State (carried day-to-day)</h2>
+        <h2 id="state">Persistent State (carried day-to-day)</h2>
         <div style="display:flex;gap:24px;flex-wrap:wrap">
             <div class="pane-sm">
                 <h3 style="font-size:13px;margin:4px 0">Cumulative (lifetime)</h3>
@@ -1800,7 +1868,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             )
         pos_section = f"""
         <div class="card full">
-            <h2>Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
+            <h2 id="positions">Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
             {_risk_line}
             <table class="t-pos">
                 <tr>
@@ -1842,7 +1910,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             )
         orders_section = f"""
         <div class="card full">
-            <h2>Orders ({len(orders)}) <span class="dim" style="font-weight:normal;text-transform:none">· {_range_label}</span></h2>
+            <h2 id="orders">Orders ({len(orders)}) <span class="dim" style="font-weight:normal;text-transform:none">· {_range_label}</span></h2>
             <table>
                 <tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Qty</th><th>Price</th><th>Status</th></tr>
                 {rows_html}
@@ -2041,7 +2109,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             )
         signals_section = f"""
         <div class="card full">
-            <h2>Recent Signals (last 20)</h2>
+            <h2 id="signals">Recent Signals (last 20)</h2>
             <table class="t-signals">
                 <tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Type</th>
                     <th>Price hint</th><th></th><th>Reason</th></tr>
@@ -2275,7 +2343,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         )
     watchlist_section = f"""
     <div class="card full">
-        <h2>Watchlist ({len(config.watchlist)} symbols)</h2>
+        <h2 id="watchlist">Watchlist ({len(config.watchlist)} symbols)</h2>
         <table class="t-watch">
             <tr><th>Symbol</th><th>Last price</th><th>Candle time (IST)</th>
                 <th>Volume</th>
