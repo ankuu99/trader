@@ -80,6 +80,7 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     assert "no daily candles cached" not in html      # benchmark found
     assert "trade-matched:" in html and "ours gross" in html   # same-notional counterfactual
     assert 'class="t-trades"' in html and 'class="t-score"' in html
+    assert "vs Nifty" in html and " pp</span>" in html   # per-stock trade-matched column
     # 120-day span clears the 90-day guard → annualized headline present, not the "<90 d" note
     assert "&lt;90 d" not in html
 

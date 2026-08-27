@@ -180,7 +180,7 @@ a.chart-link:hover { text-decoration: underline; }
   body:not(.allcols) table.t-trades th:nth-child(6), body:not(.allcols) table.t-trades td:nth-child(6),
   body:not(.allcols) table.t-trades th:nth-child(7), body:not(.allcols) table.t-trades td:nth-child(7),
   body:not(.allcols) table.t-trades th:nth-child(9), body:not(.allcols) table.t-trades td:nth-child(9),
-  body:not(.allcols) table.t-score th:nth-child(5), body:not(.allcols) table.t-score td:nth-child(5),
+  body:not(.allcols) table.t-score th:nth-child(6), body:not(.allcols) table.t-score td:nth-child(6),
   body:not(.allcols) table.t-signals th:nth-child(5), body:not(.allcols) table.t-signals td:nth-child(5),
   body:not(.allcols) table.t-watch th:nth-child(3), body:not(.allcols) table.t-watch td:nth-child(3),
   body:not(.allcols) table.t-watch th:nth-child(4), body:not(.allcols) table.t-watch td:nth-child(4),
@@ -1334,6 +1334,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # Nifty. Windowed trades are filtered by EXIT time, so an entry can predate
     # the window — pull closes from the earliest entry, not the window start.
     _tm = trade_matched_benchmark([], [])
+    _tm_rows: list[dict] = []
     _tm_entries = [_parse_ist_naive(t["entry_time"]) for t in _windowed if t.get("entry_time")]
     _tm_entries = [d for d in _tm_entries if d]
     if _tm_entries:
@@ -1854,11 +1855,24 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             hold = f"{c['avg_hold_hours']:.1f}h" if c["avg_hold_hours"] is not None else "—"
             last_reason = c["last_exit_reason"] or "—"
             open_badge = f" {_badge('OPEN ' + str(c['open_qty']), 'green')}" if c["open_qty"] else ""
+            # Trade-matched Nifty on THIS stock's capital-days: same notional, same
+            # entry/exit days, in the index. Gross vs gross (index side is frictionless).
+            _tm_i = trade_matched_benchmark(
+                [t for t in _windowed if t["instrument"] == c["instrument"]], _tm_rows)
+            if _tm_i["pnl"] is not None:
+                _edge = _tm_i["our_gross_pct"] - _tm_i["pct"]
+                vs_nifty = (f"<span class='{_pnl_class(_edge)}' title='ours {_tm_i['our_gross_pct']:+.1f}% vs "
+                            f"Nifty {_tm_i['pct']:+.1f}% on &#8377;{_tm_i['notional']:,.0f} deployed'>"
+                            f"{_edge:+.1f} pp</span>"
+                            f"<br><span class='dim' style='font-size:10px'>Nifty &#8377;{_tm_i['pnl']:+,.0f}</span>")
+            else:
+                vs_nifty = "<span class='dim'>—</span>"
             _sc_body += (
                 f"<tr><td><a href='/chart/{sym}' class='chart-link'>{sym}</a>{open_badge}</td>"
                 f"<td class='dim'>{c['n_trades']}</td>"
                 f"<td class='{_pnl_class(c['gross_pnl'])}'>&#8377; {c['gross_pnl']:+,.0f}</td>"
                 f"<td class='{_pnl_class(net)}'>&#8377; {net:+,.0f}</td>"
+                f"<td>{vs_nifty}</td>"
                 f"<td class='dim'>{hold}</td>"
                 f"<td class='dim'>{last_reason}</td></tr>"
             )
@@ -1867,6 +1881,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             <h2>Per-Stock Performance (live)</h2>
             <table class="t-score">
                 <tr><th>Symbol</th><th>Trades</th><th>Gross P&amp;L</th><th>Net P&amp;L</th>
+                    <th>vs Nifty <span class="dim" style="font-weight:normal">trade-matched</span></th>
                     <th>Avg hold</th><th>Last exit</th></tr>
                 {_sc_body}
             </table>
