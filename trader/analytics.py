@@ -5,6 +5,7 @@ Safe to import from both the live/UI path and the backtest scripts: these
 functions only operate on plain trade dicts and return plain dicts.
 """
 
+from bisect import bisect_right
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
@@ -452,4 +453,61 @@ def benchmark_return(
         "cum_pct": cum * 100.0, "ann_pct": ann * 100.0 if ann is not None else None,
         "days": days, "first_close": c0, "last_close": c1, "first_ts": t0, "last_ts": t1,
     })
+    return out
+
+
+def trade_matched_benchmark(trades: list[dict], closes: list[dict]) -> dict:
+    """Trade-matched index counterfactual: for every closed trade, put the same
+    notional (`entry_price × quantity`) into the benchmark at the close of the
+    entry day and take it out at the close of the exit day. Answers "the same
+    money, deployed on the same days, in the index instead — who won?", which
+    buy-and-hold on the full capital conflates with idle-cash and timing.
+
+    `closes` are daily candles (`timestamp`, `close`) sorted ascending; a leg
+    uses the last close ON OR BEFORE its date. Trades missing a price/qty/time
+    or without a close on either side are skipped (counted in `skipped`). Costs
+    are not applied to the index side; compare against OUR GROSS for
+    like-for-like (net is the number you bank, shown separately by the UI).
+
+    Returns {pnl, notional, pct, our_gross, our_gross_pct, n_trades, skipped}
+    — pct fields are on the summed notional; None when nothing matched."""
+    out = {"pnl": None, "notional": 0.0, "pct": None, "our_gross": 0.0,
+           "our_gross_pct": None, "n_trades": 0, "skipped": 0}
+    series = sorted(
+        ((t.date(), float(c)) for t, c in
+         ((_parse_iso(r.get("timestamp")), r.get("close")) for r in closes)
+         if t is not None and c),
+        key=lambda x: x[0],
+    )
+    if not series:
+        out["skipped"] = len(trades)
+        return out
+    dates = [d for d, _ in series]
+
+    def _close_on_or_before(day):
+        i = bisect_right(dates, day) - 1
+        return series[i][1] if i >= 0 else None
+
+    pnl = notional = ours = 0.0
+    n = skipped = 0
+    for t in trades:
+        ed, xd = _parse_iso(t.get("entry_time")), _parse_iso(t.get("exit_time"))
+        ep, q = t.get("entry_price"), t.get("quantity")
+        if not (ed and xd and ep and q):
+            skipped += 1
+            continue
+        c0, c1 = _close_on_or_before(ed.date()), _close_on_or_before(xd.date())
+        if not c0 or not c1:
+            skipped += 1
+            continue
+        amt = float(ep) * float(q)
+        pnl += amt * (c1 / c0 - 1.0)
+        notional += amt
+        ours += float(t.get("gross_pnl") or 0.0)
+        n += 1
+    out.update({"n_trades": n, "skipped": skipped, "notional": notional, "our_gross": ours})
+    if n and notional > 0:
+        out["pnl"] = pnl
+        out["pct"] = pnl / notional * 100.0
+        out["our_gross_pct"] = ours / notional * 100.0
     return out

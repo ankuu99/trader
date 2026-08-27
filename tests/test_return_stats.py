@@ -100,3 +100,64 @@ def test_benchmark_return_short_or_sparse_series():
     assert benchmark_return([{"timestamp": "2026-08-01T00:00:00", "close": 100.0}])["cum_pct"] is None
     assert benchmark_return([])["cum_pct"] is None
     assert benchmark_return([{"timestamp": "bad", "close": None}] * 3)["cum_pct"] is None
+
+
+# --------------------------------------------------------------------------- #
+# trade-matched benchmark
+# --------------------------------------------------------------------------- #
+
+from trader.analytics import trade_matched_benchmark  # noqa: E402
+
+
+def _closes(*pairs):
+    return [{"timestamp": f"{d}T00:00:00", "close": c} for d, c in pairs]
+
+
+def test_trade_matched_uses_same_notional_on_same_days():
+    closes = _closes(("2026-06-01", 100.0), ("2026-06-02", 102.0),
+                     ("2026-06-03", 101.0), ("2026-06-05", 110.0))
+    trades = [
+        # ₹10,000 in from 01-Jun close (100) to 05-Jun close (110) → index +₹1,000
+        {"entry_time": "2026-06-01T10:00", "exit_time": "2026-06-05T14:00",
+         "entry_price": 100.0, "quantity": 100, "gross_pnl": 1_500.0},
+        # ₹5,000 from 02-Jun (102) to 03-Jun (101) → index −₹49.02
+        {"entry_time": "2026-06-02T10:00", "exit_time": "2026-06-03T14:00",
+         "entry_price": 50.0, "quantity": 100, "gross_pnl": -200.0},
+    ]
+    r = trade_matched_benchmark(trades, closes)
+    assert r["n_trades"] == 2 and r["skipped"] == 0
+    assert r["notional"] == pytest.approx(15_000.0)
+    assert r["pnl"] == pytest.approx(1_000.0 - 5_000.0 * (1 - 101.0 / 102.0), abs=0.01)
+    assert r["pct"] == pytest.approx(r["pnl"] / 15_000.0 * 100)
+    assert r["our_gross"] == pytest.approx(1_300.0)
+    assert r["our_gross_pct"] == pytest.approx(1_300.0 / 15_000.0 * 100)
+
+
+def test_trade_matched_weekend_exit_uses_last_close_on_or_before():
+    closes = _closes(("2026-06-05", 100.0), ("2026-06-08", 104.0))  # Fri, Mon
+    trades = [{"entry_time": "2026-06-05T10:00", "exit_time": "2026-06-07T10:00",  # Sun exit
+               "entry_price": 10.0, "quantity": 10, "gross_pnl": 0.0}]
+    r = trade_matched_benchmark(trades, closes)
+    assert r["n_trades"] == 1 and r["pnl"] == pytest.approx(0.0)   # Fri→Fri close
+
+
+def test_trade_matched_skips_unpriceable_trades():
+    closes = _closes(("2026-06-02", 100.0), ("2026-06-03", 105.0))
+    trades = [
+        {"entry_time": "2026-06-01T10:00", "exit_time": "2026-06-03T10:00",   # no close ≤ 01-Jun
+         "entry_price": 10.0, "quantity": 10, "gross_pnl": 1.0},
+        {"entry_time": "2026-06-02T10:00", "exit_time": "2026-06-03T10:00",
+         "entry_price": None, "quantity": 10, "gross_pnl": 1.0},                # NULL price (remote DB)
+        {"entry_time": "2026-06-02T10:00", "exit_time": "2026-06-03T10:00",
+         "entry_price": 10.0, "quantity": 10, "gross_pnl": 7.0},
+    ]
+    r = trade_matched_benchmark(trades, closes)
+    assert r["n_trades"] == 1 and r["skipped"] == 2
+    assert r["pnl"] == pytest.approx(5.0) and r["our_gross"] == 7.0
+
+
+def test_trade_matched_empty():
+    assert trade_matched_benchmark([], _closes(("2026-06-02", 100.0)))["pnl"] is None
+    r = trade_matched_benchmark([{"entry_time": "2026-06-02T10:00", "exit_time": "2026-06-03T10:00",
+                                  "entry_price": 10.0, "quantity": 1, "gross_pnl": 0.0}], [])
+    assert r["pnl"] is None and r["skipped"] == 1

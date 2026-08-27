@@ -766,9 +766,10 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
 
 def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
-                       pnl_class) -> str:
+                       pnl_class, tm: dict | None = None) -> str:
     """Compact stat row under the Cumulative P&L headline: cum return,
-    annualized (with on-deployed secondary), incl.-open MTM, Nifty 50 benchmark.
+    annualized (with on-deployed secondary), incl.-open MTM, Nifty 50 benchmark
+    (buy-and-hold on full capital + the trade-matched counterfactual `tm`).
     Empty string when there is no return to show."""
     if ret.get("cum_pct") is None:
         return ""
@@ -802,6 +803,16 @@ def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
                     f'<div class="dim s">{_ann(ret["mtm_ann_pct"])} · realised + unrealised</div></div>')
     else:
         mtm_tile = ""
+    tm = tm or {}
+    if tm.get("pnl") is not None:
+        tm_diff = tm["our_gross_pct"] - tm["pct"]
+        tm_line = (f'<div class="dim s">trade-matched: '
+                   f'<span class="{pnl_class(tm["pnl"])}">&#8377;{tm["pnl"]:+,.0f} ({tm["pct"]:+.1f}%)</span>'
+                   f' on &#8377;{tm["notional"]:,.0f} · ours gross {tm["our_gross_pct"]:+.1f}% → '
+                   f'<span class="{pnl_class(tm_diff)}">{tm_diff:+.1f} pp</span>'
+                   f'{" · " + str(tm["skipped"]) + " unpriced" if tm.get("skipped") else ""}</div>')
+    else:
+        tm_line = ""
     if bench.get("cum_pct") is not None:
         if ret["ann_pct"] is not None and bench["ann_pct"] is not None:
             diff = ret["ann_pct"] - bench["ann_pct"]
@@ -812,11 +823,11 @@ def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
         bench_tile = (f'<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
                       f'<div class="v {pnl_class(bench["cum_pct"])}">{_pct(bench["cum_pct"])}</div>'
                       f'<div class="dim s">{_ann(bench["ann_pct"])} · '
-                      f'<span class="{pnl_class(diff)}">{diff_s}</span></div></div>')
+                      f'<span class="{pnl_class(diff)}">{diff_s}</span></div>{tm_line}</div>')
     else:
         bench_tile = ('<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
                       '<div class="v dim">—</div>'
-                      '<div class="dim s">no daily candles cached for the window yet</div></div>')
+                      f'<div class="dim s">no daily candles cached for the window yet</div>{tm_line}</div>')
     return f'<div class="retrow">{cum_tile}{ann_tile}{mtm_tile}{bench_tile}</div>'
 
 
@@ -1289,7 +1300,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # window's time-avg utilisation; "incl. open" adds today's unrealised P&L
     # (only meaningful for a window that reaches now). Annualized figures blank
     # below ANNUALIZE_MIN_DAYS — see trader/analytics.py::return_stats.
-    from trader.analytics import return_stats, benchmark_return, BENCHMARK_INSTRUMENT
+    from trader.analytics import (return_stats, benchmark_return, trade_matched_benchmark,
+                                  BENCHMARK_INSTRUMENT)
     _now_n = now.replace(tzinfo=None)
     _fill_times = [_parse_ist_naive(t["entry_time"]) for t in _matched if t.get("entry_time")]
     _fill_times += [_parse_ist_naive(p["entry_time"]) for p in positions if p.get("entry_time")]
@@ -1318,7 +1330,22 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
              _ret_end.isoformat()),
         )
         _bench = benchmark_return(_bench_rows)
-    ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class)
+    # Trade-matched counterfactual: same notional, same entry/exit days, in
+    # Nifty. Windowed trades are filtered by EXIT time, so an entry can predate
+    # the window — pull closes from the earliest entry, not the window start.
+    _tm = trade_matched_benchmark([], [])
+    _tm_entries = [_parse_ist_naive(t["entry_time"]) for t in _windowed if t.get("entry_time")]
+    _tm_entries = [d for d in _tm_entries if d]
+    if _tm_entries:
+        _tm_rows = _read_db(
+            config.db_path,
+            "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
+            "AND timestamp >= ? ORDER BY timestamp ASC",
+            (BENCHMARK_INSTRUMENT,
+             (min(_tm_entries) - timedelta(days=7)).replace(hour=0, minute=0, second=0).isoformat()),
+        )
+        _tm = trade_matched_benchmark(_windowed, _tm_rows)
+    ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class, _tm)
 
     # ── cumulative P&L + drawdown panel (merged, #7) ──
     _dd = drawdown_stats(_windowed, config.total_capital)

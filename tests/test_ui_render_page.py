@@ -78,6 +78,7 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     assert "Cum return" in html and "Annualized" in html and "p.a." in html
     assert "Nifty 50" in html
     assert "no daily candles cached" not in html      # benchmark found
+    assert "trade-matched:" in html and "ours gross" in html   # same-notional counterfactual
     assert 'class="t-trades"' in html and 'class="t-score"' in html
     # 120-day span clears the 90-day guard → annualized headline present, not the "<90 d" note
     assert "&lt;90 d" not in html
