@@ -464,14 +464,18 @@ def _render_prob_sparkline(
 
 
 def _render_equity_sparkline(values: list[float], net_values: list[float] | None = None,
-                             width: int = 300, height: int = 70) -> str:
+                             width: int = 300, height: int = 70,
+                             bench_values: list | None = None) -> str:
     """Line of a cumulative-P&L series with a dashed zero baseline. Green if the
     series ends positive, red otherwise. (Clone of _render_sparkline's polyline.)
     When `net_values` is given (same length), the gross series is drawn as a dim
-    dashed line and the net-of-costs series becomes the prominent colored one."""
+    dashed line and the net-of-costs series becomes the prominent colored one.
+    `bench_values` (same length, None gaps allowed) overlays the benchmark's
+    full-capital buy-and-hold ₹ at each point as a thin blue line."""
     if len(values) < 2:
         return "<span class='dim'>—</span>"
-    all_series = values + (net_values or [])
+    bench = [v for v in (bench_values or []) if v is not None]
+    all_series = values + (net_values or []) + bench
     lo = min(min(all_series), 0.0)
     hi = max(max(all_series), 0.0)
     rng = (hi - lo) or 1.0
@@ -493,11 +497,18 @@ def _render_equity_sparkline(values: list[float], net_values: list[float] | None
         gross_pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(values))
         gross_line = (f'<polyline points="{gross_pts}" fill="none" stroke="#8b949e" '
                       f'stroke-width="1.2" stroke-dasharray="3,2" opacity="0.7"/>')
+    bench_line = ""
+    if bench_values and len(bench_values) == len(values) and len(bench) >= 2:
+        bench_pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(bench_values)
+                             if v is not None)
+        bench_line = (f'<polyline points="{bench_pts}" fill="none" stroke="#58a6ff" '
+                      f'stroke-width="1.1" opacity="0.85"/>')
     return (
         f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
         f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        f'{bench_line}'
         f'{gross_line}'
         f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.5"/>'
         f'<circle cx="{sx(len(main) - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
@@ -1338,7 +1349,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # (only meaningful for a window that reaches now). Annualized figures blank
     # below ANNUALIZE_MIN_DAYS — see trader/analytics.py::return_stats.
     from trader.analytics import (return_stats, benchmark_return, trade_matched_benchmark,
-                                  BENCHMARK_INSTRUMENT)
+                                  benchmark_equity, BENCHMARK_INSTRUMENT)
     _now_n = now.replace(tzinfo=None)
     _fill_times = [_parse_ist_naive(t["entry_time"]) for t in _matched if t.get("entry_time")]
     _fill_times += [_parse_ist_naive(p["entry_time"]) for p in positions if p.get("entry_time")]
@@ -1357,6 +1368,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         unrealised_pnl=_open_unreal if _window_live else None,
     )
     _bench = benchmark_return([])
+    _bench_rows: list[dict] = []
     if _ret_start and _ret_end:
         _bench_rows = _read_db(
             config.db_path,
@@ -1384,6 +1396,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         )
         _tm = trade_matched_benchmark(_windowed, _tm_rows)
     ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class, _tm)
+    # Nifty B&H ₹ on full capital, marked at each closed trade's exit → same
+    # trade-indexed x-axis as the equity curve (rebased to 0 at the window start).
+    _bench_eq = benchmark_equity(
+        _bench_rows, [_parse_ist_naive(t["exit_time"]) for t in _closed_sorted], total,
+    ) if _bench_rows else []
 
     # ── rolling windows, INDEPENDENT of the range filter ────────────────────
     # "Is the edge holding recently?" without touching the range buttons: 1M /
@@ -1442,9 +1459,10 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 &nbsp;·&nbsp; {len(equity_vals)} closed trades</div>
             {ret_row}
             {roll_row}
-            {_render_equity_sparkline(equity_vals, net_equity_vals)}
+            {_render_equity_sparkline(equity_vals, net_equity_vals, bench_values=_bench_eq)}
             <div class="dim" style="font-size:11px;margin-top:2px">
-                <span style="color:#8b949e">&#9476;</span> gross
+                <span style="color:#58a6ff">&#9644;</span> Nifty B&amp;H on &#8377;{total:,.0f}, at our exit dates
+                &nbsp;·&nbsp; <span style="color:#8b949e">&#9476;</span> gross
                 &nbsp;·&nbsp; <span style="color:{'#3fb950' if net_equity_total >= 0 else '#f85149'}">&#9644;</span> net</div>"""
     _dd_right = ""
     if _dd["underwater"]:

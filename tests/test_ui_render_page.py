@@ -84,6 +84,7 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     # Rolling windows row: inception (120 d) annualized, 1M under the guard
     assert 'class="t-roll"' in html and "Inception" in html
     assert "under the 90-day guard" in html
+    assert "at our exit dates" in html and 'stroke="#58a6ff" stroke-width="1.1"' in html   # Nifty overlay
     # 120-day span clears the 90-day guard → annualized headline present, not the "<90 d" note
     assert "&lt;90 d" not in html
 

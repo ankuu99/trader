@@ -161,3 +161,22 @@ def test_trade_matched_empty():
     r = trade_matched_benchmark([{"entry_time": "2026-06-02T10:00", "exit_time": "2026-06-03T10:00",
                                   "entry_price": 10.0, "quantity": 1, "gross_pnl": 0.0}], [])
     assert r["pnl"] is None and r["skipped"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# benchmark_equity — index B&H ₹ marked at our exit dates
+# --------------------------------------------------------------------------- #
+
+from trader.analytics import benchmark_equity  # noqa: E402
+
+
+def test_benchmark_equity_marks_capital_bh_at_each_date():
+    closes = _closes(("2026-06-01", 100.0), ("2026-06-02", 102.0), ("2026-06-05", 110.0))
+    dates = [datetime(2026, 6, 1, 15), "2026-06-03T10:00", datetime(2026, 6, 7), datetime(2026, 5, 20)]
+    eq = benchmark_equity(closes, dates, 400_000.0)
+    assert eq[0] == pytest.approx(0.0)              # entered at first close
+    assert eq[1] == pytest.approx(8_000.0)          # 03-Jun → last close on/before = 102 → +2%
+    assert eq[2] == pytest.approx(40_000.0)         # Sunday → Friday's 110 → +10%
+    assert eq[3] is None                            # before the series starts
+    assert benchmark_equity([], dates, 1.0) == []
+    assert benchmark_equity(closes, dates, 0.0) == []

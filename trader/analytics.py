@@ -511,3 +511,31 @@ def trade_matched_benchmark(trades: list[dict], closes: list[dict]) -> dict:
         out["pct"] = pnl / notional * 100.0
         out["our_gross_pct"] = ours / notional * 100.0
     return out
+
+
+def benchmark_equity(closes: list[dict], dates: list, capital: float) -> list[float | None]:
+    """₹ P&L of a buy-and-hold of `capital` in the benchmark, marked at each of
+    `dates` (e.g. our trades' exit times), entered at the FIRST close of
+    `closes`. Lets the index sit on the same trade-indexed x-axis as our
+    equity curve: at the moment of each of our exits, where would full-capital
+    Nifty B&H be. `closes` sorted ascending daily candles; a date with no close
+    on or before it yields None. Empty list when there is nothing to anchor."""
+    series = sorted(
+        ((t.date(), float(c)) for t, c in
+         ((_parse_iso(r.get("timestamp")), r.get("close")) for r in closes)
+         if t is not None and c),
+        key=lambda x: x[0],
+    )
+    if not series or not capital:
+        return []
+    days = [d for d, _ in series]
+    c0 = series[0][1]
+    out: list[float | None] = []
+    for d in dates:
+        dd = _parse_iso(d) if not hasattr(d, "date") else d
+        if dd is None:
+            out.append(None)
+            continue
+        i = bisect_right(days, dd.date()) - 1
+        out.append(capital * (series[i][1] / c0 - 1.0) if i >= 0 else None)
+    return out
