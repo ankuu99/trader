@@ -346,3 +346,110 @@ def compute_utilisation(
         "peak_date": peak_date,
     }
     return {"monthly": monthly_rows, "overall": overall}
+
+
+# --------------------------------------------------------------------------- #
+# Return stats (cumulative + annualized) and the Nifty benchmark             #
+# --------------------------------------------------------------------------- #
+
+#: Benchmark instrument for the dashboard's "vs market" line. Cached as `day`
+#: candles in the normal candles table (main.py warms it at startup/pre/post
+#: market); the UI only ever reads it. NSE index instruments live in
+#: `kite.instruments("NSE")` with this tradingsymbol.
+BENCHMARK_INSTRUMENT = "NSE:NIFTY 50"
+
+#: Annualizing a window shorter than this is extrapolation, not measurement
+#: (a +2% week reads as ~180% p.a.). The dashboard blanks `ann_pct` below it.
+ANNUALIZE_MIN_DAYS = 90
+
+
+def annualize(cum_frac: float, days: float, min_days: float = ANNUALIZE_MIN_DAYS) -> float | None:
+    """CAGR for a cumulative return fraction earned over `days` calendar days.
+    None when the span is below `min_days` or the base is wiped out (1 + r <= 0)."""
+    if days is None or days < min_days or days <= 0:
+        return None
+    base = 1.0 + cum_frac
+    if base <= 0:
+        return None
+    return base ** (365.0 / days) - 1.0
+
+
+def return_stats(
+    net_pnl: float,
+    capital: float,
+    start: datetime | None,
+    end: datetime | None,
+    *,
+    time_avg_util_pct: float | None = None,
+    unrealised_pnl: float | None = None,
+    min_days: float = ANNUALIZE_MIN_DAYS,
+) -> dict:
+    """Cumulative and annualized return of the strategy over [start, end].
+
+    Headline is on `capital` (the config/effective total — what the account
+    earned). Two secondaries:
+      * on deployed — same P&L over `capital × time_avg_util_pct`, i.e. the edge
+        per rupee actually at risk (None when util is unknown / zero);
+      * incl. open  — mark-to-market: `net_pnl + unrealised_pnl` on `capital`
+        (None when unrealised is not supplied).
+
+    `days` is the calendar span; start should be the later of the window start
+    and the first fill (idle time before the bot's first trade must not dilute
+    the figure), end is "now" — capital stays at risk through today.
+
+    All `*_ann_pct` keys are None below `min_days` (see `annualize`).
+    Everything is None when capital <= 0 or the span cannot be established."""
+    out = {
+        "days": None, "cum_pct": None, "ann_pct": None,
+        "deployed_cum_pct": None, "deployed_ann_pct": None,
+        "mtm_cum_pct": None, "mtm_ann_pct": None,
+        "annualized": False, "min_days": min_days,
+    }
+    if not capital or capital <= 0 or start is None or end is None or end < start:
+        return out
+    days = (end - start).total_seconds() / 86400.0
+    out["days"] = days
+    cum = net_pnl / capital
+    out["cum_pct"] = cum * 100.0
+    ann = annualize(cum, days, min_days)
+    out["ann_pct"] = ann * 100.0 if ann is not None else None
+    out["annualized"] = ann is not None
+
+    if time_avg_util_pct and time_avg_util_pct > 0:
+        dep_cap = capital * time_avg_util_pct / 100.0
+        dcum = net_pnl / dep_cap
+        out["deployed_cum_pct"] = dcum * 100.0
+        dann = annualize(dcum, days, min_days)
+        out["deployed_ann_pct"] = dann * 100.0 if dann is not None else None
+
+    if unrealised_pnl is not None:
+        mcum = (net_pnl + unrealised_pnl) / capital
+        out["mtm_cum_pct"] = mcum * 100.0
+        mann = annualize(mcum, days, min_days)
+        out["mtm_ann_pct"] = mann * 100.0 if mann is not None else None
+    return out
+
+
+def benchmark_return(
+    closes: list[dict],
+    min_days: float = ANNUALIZE_MIN_DAYS,
+) -> dict:
+    """Buy-and-hold return of a daily close series (dicts with `timestamp`,
+    `close`, already restricted to the window and sorted ascending): enter at
+    the first close, mark at the last. Annualized over the series' own span so a
+    stale cache never inflates the figure. None-filled when fewer than 2 points."""
+    out = {"cum_pct": None, "ann_pct": None, "days": None,
+           "first_close": None, "last_close": None, "first_ts": None, "last_ts": None}
+    pts = [(_parse_iso(c.get("timestamp")), c.get("close")) for c in closes]
+    pts = [(t, float(c)) for t, c in pts if t is not None and c]
+    if len(pts) < 2 or pts[0][1] <= 0:
+        return out
+    (t0, c0), (t1, c1) = pts[0], pts[-1]
+    days = (t1 - t0).total_seconds() / 86400.0
+    cum = c1 / c0 - 1.0
+    ann = annualize(cum, days, min_days)
+    out.update({
+        "cum_pct": cum * 100.0, "ann_pct": ann * 100.0 if ann is not None else None,
+        "days": days, "first_close": c0, "last_close": c1, "first_ts": t0, "last_ts": t1,
+    })
+    return out

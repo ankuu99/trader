@@ -13,6 +13,59 @@ from datetime import datetime, timezone, timedelta
 
 from trader.costs import round_trip_cost
 
+# Auto-refresh without a full navigation: re-fetch this URL every 30s and swap
+# <body> in place, so scroll position (and any open <details>) survive — a meta
+# refresh snaps a phone back to the top every 30s. Pauses while the tab is
+# hidden (battery/data over Tailscale) and while a form input has focus, so a
+# half-typed date range is never clobbered. <noscript> keeps the old meta
+# refresh as the fallback. The "all columns" checkbox (mobile only) undoes the
+# CSS column pruning and is remembered per browser in localStorage.
+_JS = """
+(function () {
+  var INTERVAL = 30000, timer = null;
+  function applyCols() {
+    var on = false;
+    try { on = localStorage.getItem('allcols') === '1'; } catch (e) {}
+    document.body.classList.toggle('allcols', on);
+    var cb = document.getElementById('allcols');
+    if (cb) {
+      cb.checked = on;
+      cb.onchange = function () {
+        try { localStorage.setItem('allcols', cb.checked ? '1' : '0'); } catch (e) {}
+        applyCols();
+      };
+    }
+  }
+  function schedule() { clearTimeout(timer); timer = setTimeout(refresh, INTERVAL); }
+  function refresh() {
+    if (document.visibilityState !== 'visible') { return; }  // resumes on visibilitychange
+    var ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) { return schedule(); }
+    fetch(location.href, { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var open = {};
+        document.querySelectorAll('details[id]').forEach(function (d) { open[d.id] = d.open; });
+        document.body.innerHTML = doc.body.innerHTML;
+        Object.keys(open).forEach(function (id) {
+          var d = document.getElementById(id); if (d) { d.open = open[id]; }
+        });
+        applyCols();
+      })
+      .catch(function (err) {
+        var n = document.getElementById('refresh-note');
+        if (n) { n.textContent = 'refresh failed (' + (err && err.message || err) + ') — retrying'; }
+      })
+      .then(schedule);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') { refresh(); }
+  });
+  document.addEventListener('DOMContentLoaded', function () { applyCols(); schedule(); });
+})();
+"""
+
 
 def _html_attr(text: str) -> str:
     """Escape a string for safe use inside a double-quoted HTML attribute."""
@@ -81,6 +134,59 @@ a.chart-link:hover { text-decoration: underline; }
 .rangebar input[type=date] {
     background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
     border-radius: 3px; padding: 2px 4px; font-size: 11px; font-family: inherit;
+}
+
+.pane { flex: 1; min-width: 280px; }
+.pane-wide { flex: 1.6; min-width: 380px; }
+.pane-sm { min-width: 220px; }
+.hdr { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.m-only { display: none; }
+.retrow { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 6px; }
+.retrow > div { flex: 1 1 140px; min-width: 0; }
+.card svg { max-width: 100%; height: auto; }
+.retrow .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.retrow .v { font-size: 15px; color: #e6edf3; }
+.retrow .s { font-size: 11px; }
+/* ── phone layout (Tailscale on mobile): single column, cards scroll their own
+   wide tables, bigger tap targets, low-priority columns pruned unless the
+   "all columns" toggle is on. Desktop is untouched. ── */
+@media (max-width: 720px) {
+  body { padding: 8px; font-size: 14px; }
+  h1 { font-size: 17px; }
+  .meta { font-size: 13px; margin-bottom: 10px; }
+  .grid { grid-template-columns: 1fr; gap: 8px; }
+  .toprow { gap: 8px; }
+  .toprow > *, .pane, .pane-wide, .pane-sm { min-width: 0; flex-basis: 100%; }
+  .card { padding: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .card h2 { font-size: 12px; }
+  th, td { padding: 6px 10px 6px 0; }
+  th, .dim { font-size: 12px; }
+  .badge { font-size: 12px; padding: 2px 7px; }
+  .rbtn { padding: 6px 12px; font-size: 13px; }
+  .rangebar { gap: 6px; }
+  .rangebar input[type=date] { padding: 5px 6px; font-size: 13px; }
+  .m-only { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+  .m-only input { width: 18px; height: 18px; }
+  .retrow { gap: 10px; }
+  .retrow > div { flex: 1 1 42%; }
+  body:not(.allcols) table.t-pos th:nth-child(3), body:not(.allcols) table.t-pos td:nth-child(3),
+  body:not(.allcols) table.t-pos th:nth-child(4), body:not(.allcols) table.t-pos td:nth-child(4),
+  body:not(.allcols) table.t-pos th:nth-child(7), body:not(.allcols) table.t-pos td:nth-child(7),
+  body:not(.allcols) table.t-pos th:nth-child(8), body:not(.allcols) table.t-pos td:nth-child(8),
+  body:not(.allcols) table.t-pos th:nth-child(10), body:not(.allcols) table.t-pos td:nth-child(10),
+  body:not(.allcols) table.t-pos th:nth-child(13), body:not(.allcols) table.t-pos td:nth-child(13),
+  body:not(.allcols) table.t-trades th:nth-child(1), body:not(.allcols) table.t-trades td:nth-child(1),
+  body:not(.allcols) table.t-trades th:nth-child(5), body:not(.allcols) table.t-trades td:nth-child(5),
+  body:not(.allcols) table.t-trades th:nth-child(6), body:not(.allcols) table.t-trades td:nth-child(6),
+  body:not(.allcols) table.t-trades th:nth-child(7), body:not(.allcols) table.t-trades td:nth-child(7),
+  body:not(.allcols) table.t-trades th:nth-child(9), body:not(.allcols) table.t-trades td:nth-child(9),
+  body:not(.allcols) table.t-score th:nth-child(5), body:not(.allcols) table.t-score td:nth-child(5),
+  body:not(.allcols) table.t-signals th:nth-child(5), body:not(.allcols) table.t-signals td:nth-child(5),
+  body:not(.allcols) table.t-watch th:nth-child(3), body:not(.allcols) table.t-watch td:nth-child(3),
+  body:not(.allcols) table.t-watch th:nth-child(4), body:not(.allcols) table.t-watch td:nth-child(4),
+  body:not(.allcols) table.t-watch th:nth-child(9), body:not(.allcols) table.t-watch td:nth-child(9),
+  body:not(.allcols) table.t-watch th:nth-child(10), body:not(.allcols) table.t-watch td:nth-child(10),
+  body:not(.allcols) table.t-watch th:nth-child(11), body:not(.allcols) table.t-watch td:nth-child(11) { display: none; }
 }
 """
 
@@ -286,7 +392,7 @@ def _render_watchlist_sparkline(
     pts = " ".join(f"{sx(i):.1f},{sy(c):.1f}" for i, c in enumerate(closes))
 
     parts = [
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block;background:#161b22;border-radius:3px">',
     ]
     if open_entry:
@@ -342,7 +448,7 @@ def _render_prob_sparkline(
     last = scores[-1]
 
     parts = [
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block;background:#161b22;border-radius:3px">',
         # threshold / veto guides
         f'<line x1="{pad}" y1="{sy(threshold):.1f}" x2="{width - pad}" y2="{sy(threshold):.1f}" '
@@ -388,7 +494,7 @@ def _render_equity_sparkline(values: list[float], net_values: list[float] | None
         gross_line = (f'<polyline points="{gross_pts}" fill="none" stroke="#8b949e" '
                       f'stroke-width="1.2" stroke-dasharray="3,2" opacity="0.7"/>')
     return (
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
         f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
@@ -418,7 +524,7 @@ def _render_underwater_svg(underwater: list[float], width: int = 300, height: in
     zero_y = pad
     area = f"{sx(0):.1f},{zero_y:.1f} " + pts + f" {sx(len(underwater) - 1):.1f},{zero_y:.1f}"
     return (
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
         f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
@@ -459,7 +565,7 @@ def _render_utilisation_svg(rows: list[dict], capital: float,
     upts = " ".join(f"{sx(i):.1f},{syu(v):.1f}" for i, v in enumerate(util_vals))
     dpts = " ".join(f"{sx(i):.1f},{syd(v):.1f}" for i, v in enumerate(dep_vals))
     return (
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{pad}" x2="{width - pad}" y2="{pad}" '
         f'stroke="#d29922" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.4"/>'
@@ -492,7 +598,7 @@ def _render_sparkline(closes: list[float], entry_price: float,
     color = "#3fb950" if last >= entry_price else "#f85149"
 
     return (
-        f'<svg width="{width}" height="{height}" '
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'style="vertical-align:middle;display:inline-block">'
         f'<line x1="{pad}" y1="{entry_y:.1f}" x2="{width - pad}" y2="{entry_y:.1f}" '
         f'stroke="#3fb950" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.6"/>'
@@ -657,6 +763,61 @@ def _render_chart_svg(closes: list[float], timestamps: list[str], entry_idx: int
 
     parts.append('</svg>')
     return "".join(parts)
+
+
+def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
+                       pnl_class) -> str:
+    """Compact stat row under the Cumulative P&L headline: cum return,
+    annualized (with on-deployed secondary), incl.-open MTM, Nifty 50 benchmark.
+    Empty string when there is no return to show."""
+    if ret.get("cum_pct") is None:
+        return ""
+
+    def _pct(v, suffix=""):
+        return "—" if v is None else f"{v:+.1f}%{suffix}"
+
+    min_days = int(ret["min_days"])
+    days = ret["days"] or 0.0
+    na_ann = (f'<span class="dim" title="annualized only once the window spans '
+              f'{min_days}+ days">— p.a. (&lt;{min_days} d)</span>')
+
+    def _ann(v):
+        return (f'<span class="{pnl_class(v)}">{_pct(v, " p.a.")}</span>'
+                if v is not None else na_ann)
+
+    cum_tile = (f'<div><div class="dim k">Cum return</div>'
+                f'<div class="v {pnl_class(ret["cum_pct"])}">{_pct(ret["cum_pct"])}</div>'
+                f'<div class="dim s">on &#8377;{capital:,.0f} · {days:.0f} d</div></div>')
+    if ret.get("deployed_cum_pct") is not None:
+        dep_s = (f'on deployed ({util_pct:.0f}%): {_pct(ret["deployed_cum_pct"])}'
+                 f' · {_pct(ret["deployed_ann_pct"], " p.a.") if ret["deployed_ann_pct"] is not None else "—"}')
+    else:
+        dep_s = "on deployed: —"
+    ann_tile = (f'<div><div class="dim k">Annualized</div>'
+                f'<div class="v">{_ann(ret["ann_pct"])}</div>'
+                f'<div class="dim s">{dep_s}</div></div>')
+    if ret.get("mtm_cum_pct") is not None:
+        mtm_tile = (f'<div><div class="dim k">Incl. open</div>'
+                    f'<div class="v {pnl_class(ret["mtm_cum_pct"])}">{_pct(ret["mtm_cum_pct"])}</div>'
+                    f'<div class="dim s">{_ann(ret["mtm_ann_pct"])} · realised + unrealised</div></div>')
+    else:
+        mtm_tile = ""
+    if bench.get("cum_pct") is not None:
+        if ret["ann_pct"] is not None and bench["ann_pct"] is not None:
+            diff = ret["ann_pct"] - bench["ann_pct"]
+            diff_s = f"ours {diff:+.1f} pp p.a."
+        else:
+            diff = ret["cum_pct"] - bench["cum_pct"]
+            diff_s = f"ours {diff:+.1f} pp cum"
+        bench_tile = (f'<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
+                      f'<div class="v {pnl_class(bench["cum_pct"])}">{_pct(bench["cum_pct"])}</div>'
+                      f'<div class="dim s">{_ann(bench["ann_pct"])} · '
+                      f'<span class="{pnl_class(diff)}">{diff_s}</span></div></div>')
+    else:
+        bench_tile = ('<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
+                      '<div class="v dim">—</div>'
+                      '<div class="dim s">no daily candles cached for the window yet</div></div>')
+    return f'<div class="retrow">{cum_tile}{ann_tile}{mtm_tile}{bench_tile}</div>'
 
 
 def render_chart_page(instrument: str, store, config) -> str:
@@ -1045,12 +1206,13 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         &nbsp;·&nbsp; {now.strftime("%d %b %Y, %H:%M:%S IST")}
         &nbsp;·&nbsp; uptime {uptime_str}
         &nbsp;·&nbsp; last tick: {'<span class="red">'+tick_str+'</span>' if tick_stale else tick_str}
-        <span style="float:right;font-size:11px">auto-refresh 30s</span>
+        &nbsp;·&nbsp; <span id="refresh-note" style="font-size:11px">auto-refresh 30s</span>
     </div>
-    <div class="meta" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="meta hdr">
         <span style="font-size:11px">Showing <span class="val">{len(_windowed)}</span> closed trades
             &nbsp;·&nbsp; <span class="orange">{_range_label}</span></span>
         {range_controls}
+        <label class="m-only"><input type="checkbox" id="allcols"> all columns</label>
     </div>"""
 
     # Scale-in pool row — shown only when the feature is on (or money is still parked)
@@ -1119,6 +1281,45 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     else:
         util_section = ""
 
+    # ── return stats (cumulative + annualized) + Nifty 50 benchmark ───────────
+    # Span anchors: start = later of the window start and the FIRST fill (idle
+    # time before the bot's first trade must not dilute the figure); end = now
+    # while the window is live (capital stays at risk), else the window end.
+    # Headline is realised net on config capital; "on deployed" uses the
+    # window's time-avg utilisation; "incl. open" adds today's unrealised P&L
+    # (only meaningful for a window that reaches now). Annualized figures blank
+    # below ANNUALIZE_MIN_DAYS — see trader/analytics.py::return_stats.
+    from trader.analytics import return_stats, benchmark_return, BENCHMARK_INSTRUMENT
+    _now_n = now.replace(tzinfo=None)
+    _fill_times = [_parse_ist_naive(t["entry_time"]) for t in _matched if t.get("entry_time")]
+    _fill_times += [_parse_ist_naive(p["entry_time"]) for p in positions if p.get("entry_time")]
+    _fill_times = [d for d in _fill_times if d]
+    _first_fill = min(_fill_times) if _fill_times else None
+    if _lo and _first_fill:
+        _ret_start = max(_lo, _first_fill)
+    else:
+        _ret_start = _lo or _first_fill
+    _window_live = _hi is None or _hi >= _now_n
+    _ret_end = _now_n if _window_live else _hi
+    _open_unreal = sum((p.get("unrealised_pnl") or 0.0) for p in positions)
+    _ret = return_stats(
+        net_equity_total, total, _ret_start, _ret_end,
+        time_avg_util_pct=_o["time_avg_util_pct"],
+        unrealised_pnl=_open_unreal if _window_live else None,
+    )
+    _bench = benchmark_return([])
+    if _ret_start and _ret_end:
+        _bench_rows = _read_db(
+            config.db_path,
+            "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
+            "AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+            (BENCHMARK_INSTRUMENT,
+             _ret_start.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
+             _ret_end.isoformat()),
+        )
+        _bench = benchmark_return(_bench_rows)
+    ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class)
+
     # ── cumulative P&L + drawdown panel (merged, #7) ──
     _dd = drawdown_stats(_windowed, config.total_capital)
     _eq_left = ""
@@ -1134,6 +1335,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             <div class="dim" style="font-size:11px;margin-bottom:6px">
                 gross {_eq_sign}&#8377;{equity_total:,.0f} &minus; costs &#8377;{_eq_costs:,.0f}
                 &nbsp;·&nbsp; {len(equity_vals)} closed trades</div>
+            {ret_row}
             {_render_equity_sparkline(equity_vals, net_equity_vals)}
             <div class="dim" style="font-size:11px;margin-top:2px">
                 <span style="color:#8b949e">&#9476;</span> gross
@@ -1159,8 +1361,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         <h2>Cumulative P&amp;L &amp; Drawdown <span class="dim"
             style="font-weight:normal;text-transform:none">· DD on gross</span></h2>
         <div style="display:flex;gap:24px;flex-wrap:wrap">
-            <div style="flex:1;min-width:280px">{_eq_left}</div>
-            <div style="flex:1;min-width:280px">{_dd_right}</div>
+            <div class="pane">{_eq_left}</div>
+            <div class="pane">{_dd_right}</div>
         </div>
     </div>"""
     else:
@@ -1169,9 +1371,9 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # ── graph row: capital utilisation + merged P&L/drawdown side by side ──
     _graph_panes = ""
     if util_section:
-        _graph_panes += f'<div style="flex:1;min-width:280px">{util_section}</div>'
+        _graph_panes += f'<div class="pane">{util_section}</div>'
     if equity_section:
-        _graph_panes += f'<div style="flex:1.6;min-width:380px">{equity_section}</div>'
+        _graph_panes += f'<div class="pane pane-wide">{equity_section}</div>'
     graph_row = f'<div class="toprow">{_graph_panes}</div>' if _graph_panes else ""
 
     # ── persistent state panel (day-to-day continuity) ────────────────────────
@@ -1213,7 +1415,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     else:
         _tok_badge, _tok_detail = _badge("UNKNOWN", "orange"), "no check recorded yet"
     token_block = f"""
-            <div style="min-width:220px">
+            <div class="pane-sm">
                 <h3 style="font-size:13px;margin:4px 0">Kite token</h3>
                 <table>
                     <tr><td class="dim">status</td><td class="val">{_tok_badge}</td></tr>
@@ -1229,7 +1431,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     <div class="card full">
         <h2>Persistent State (carried day-to-day)</h2>
         <div style="display:flex;gap:24px;flex-wrap:wrap">
-            <div style="min-width:280px">
+            <div class="pane-sm">
                 <h3 style="font-size:13px;margin:4px 0">Cumulative (lifetime)</h3>
                 <table>
                     <tr><td class="dim">cumulative_pnl</td>
@@ -1247,11 +1449,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                         Reset P&amp;L</button>
                 </form>
             </div>
-            <div style="min-width:300px">
+            <div class="pane-sm">
                 <h3 style="font-size:13px;margin:4px 0">Position state</h3>
                 <table>{_pos_body}</table>
             </div>
-            <div style="min-width:180px">
+            <div class="pane-sm">
                 <h3 style="font-size:13px;margin:4px 0">Controls</h3>
                 <table>{_ctrl_body}</table>
             </div>
@@ -1446,7 +1648,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         pos_section = f"""
         <div class="card full">
             <h2>Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
-            <table>
+            <table class="t-pos">
                 <tr>
                     <th>Symbol / Entry time</th><th>Qty</th><th>Deployed</th><th>Entry</th>
                     <th>Current (chg%)</th><th>Unreal. P&amp;L</th>
@@ -1565,7 +1767,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 <span class="{_pnl_class(total_net)}">{net_total_sign}&#8377; {total_net:,.2f}</span>
                 </span>
             </h2>
-            <table>
+            <table class="t-trades">
                 <tr><th>Entry time</th><th>Symbol</th><th>Entry &#8377;</th><th>Exit &#8377;</th>
                     <th>Qty</th><th>Gross P&amp;L</th><th>Cost</th><th>Net P&amp;L</th>
                     <th>Hold</th><th>Exit reason</th><th>Exit time</th></tr>
@@ -1636,7 +1838,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         scorecard_section = f"""
         <div class="card full">
             <h2>Per-Stock Performance (live)</h2>
-            <table>
+            <table class="t-score">
                 <tr><th>Symbol</th><th>Trades</th><th>Gross P&amp;L</th><th>Net P&amp;L</th>
                     <th>Avg hold</th><th>Last exit</th></tr>
                 {_sc_body}
@@ -1672,7 +1874,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         signals_section = f"""
         <div class="card full">
             <h2>Recent Signals (last 20)</h2>
-            <table>
+            <table class="t-signals">
                 <tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Type</th>
                     <th>Price hint</th><th></th><th>Reason</th></tr>
                 {rows_html}
@@ -1906,7 +2108,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     watchlist_section = f"""
     <div class="card full">
         <h2>Watchlist ({len(config.watchlist)} symbols)</h2>
-        <table>
+        <table class="t-watch">
             <tr><th>Symbol</th><th>Last price</th><th>Candle time (IST)</th>
                 <th>Volume</th>
                 <th>P(buy) <span class="dim" style="font-weight:normal">thr={int(_threshold*100)}%</span></th>
@@ -1922,10 +2124,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="30">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<noscript><meta http-equiv="refresh" content="30"></noscript>
 <title>Trader</title>
 <style>{_CSS}</style>
+<script>{_JS}</script>
 </head>
 <body>
 {header}

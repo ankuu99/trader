@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / "config" / ".env")
 
+from trader.analytics import BENCHMARK_INSTRUMENT
 from trader.auth.session import create_kite
 from trader.core.config import config
 from trader.core.logger import get_logger, setup
@@ -40,6 +41,9 @@ from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
 from trader.ui.state import BotState
+
+# Kite instrument_token for NSE:NIFTY 50 (index) — fallback only, see refresh_benchmark.
+_NIFTY50_TOKEN = 256265
 
 setup(log_dir=config.log_dir, level=config.log_level)
 logger = get_logger(__name__)
@@ -145,6 +149,22 @@ def main():
                 config.warmup_days_for(symbol))
         if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
             warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
+
+    # Nifty 50 daily closes for the dashboard's benchmark line (buy-and-hold
+    # over the same window as the return stats). Best-effort and read-only for
+    # trading: the UI reads whatever is cached; a failure here never blocks.
+    # 400 days covers the dashboard's 1Y range with slack. NSE index instruments
+    # ship in kite.instruments("NSE"); the literal token is the documented
+    # fallback should the listing ever omit it.
+    _bench_token = symbol_to_token.get(BENCHMARK_INSTRUMENT, _NIFTY50_TOKEN)
+
+    def refresh_benchmark(lookback_days: int = 400):
+        try:
+            warm_up(kite, store, _bench_token, BENCHMARK_INSTRUMENT, "day", lookback_days)
+        except Exception as exc:  # noqa: BLE001 — cosmetic, never fatal
+            logger.warning("Benchmark refresh failed (%s): %s", BENCHMARK_INSTRUMENT, exc)
+
+    refresh_benchmark()
 
     # Warm up strategies from cached historical candles so they don't need
     # 200+ live candles (33+ trading days) before emitting any signal.
@@ -779,6 +799,7 @@ def main():
                     config.warmup_days_for(symbol))
             if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
                 warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
+        refresh_benchmark(lookback_days=10)  # cache-hit except yesterday's close
         feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
 
     def eod_flush():
@@ -817,6 +838,7 @@ def main():
 
     def post_market():
         portfolio.refresh()  # fetch live P&L from Kite before summarising
+        refresh_benchmark(lookback_days=10)  # today's Nifty close for the dashboard benchmark
         # Evict phantom positions from risk tracker that were closed by GTT
         # but whose order updates were never received (known edge case).
         #
