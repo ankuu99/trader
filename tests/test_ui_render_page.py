@@ -89,6 +89,19 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     assert "&lt;90 d" not in html
 
 
+def test_render_page_open_positions_show_stop_risk(ctx):
+    bot_state, risk, store = ctx
+    e = datetime.now() - timedelta(days=2)
+    _order(store, "ob", "NSE:ABC", "BUY", 10, 100.0, e)
+    store.upsert_open_position("NSE:ABC", 100.0, 10, 5, e, low_since_entry=99.0)
+    # current 104, trailing OFF → effective stop = hard stop (100 × (1 − stop_pct))
+    store.update_position_metrics("NSE:ABC", 5, 104.0, 4.0, 40.0, 104.0, False)
+    html = render_page(bot_state, risk, store, config)
+    assert "If every stop hits:" in html
+    assert "at risk &#8377;" in html          # per-row exposure to the effective stop
+    assert "locked in" in html               # portfolio summary line present
+
+
 def test_render_page_short_window_blanks_annualized(ctx):
     bot_state, risk, store = ctx
     t0 = datetime.now() - timedelta(days=5)

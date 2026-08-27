@@ -1595,6 +1595,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
     if positions or pending_orders:
         rows_html = ""
+        # Portfolio stop-risk: ₹ given back if every position's EFFECTIVE stop
+        # (trail trigger when trailing, else hard stop) hits from the current
+        # price. Positive = at risk; negative = already locked in above price.
+        _risk_at_risk = 0.0     # sum of positive exposures
+        _risk_locked = 0.0      # sum of locked-in gains (stops above price)
         for p in positions:
             sym = p["instrument"].split(":")[-1]
             # Per-stock params: stop/trail/hold limits AND the strategy TF —
@@ -1647,11 +1652,24 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                     f"<br><span class='{cushion_color}' style='font-size:11px'>"
                     f"cushion {cushion_pct:+.2f}%</span>"
                 )
+            # ₹ to the effective stop × remaining qty → the evening number.
+            _eff_stop = trail_trigger if trail_trigger else sl_price
+            _risk_rs = (cur - _eff_stop) * (p["quantity"] or 0) if cur > 0 else 0.0
+            _risk_pct = _risk_rs / total * 100 if total else 0.0
+            if _risk_rs >= 0:
+                _risk_at_risk += _risk_rs
+                risk_str = (f"<br><span class='red' style='font-size:11px'>at risk &#8377;{_risk_rs:,.0f}"
+                            f" <span class='dim'>({_risk_pct:.1f}% cap)</span></span>")
+            else:
+                _risk_locked += -_risk_rs
+                risk_str = (f"<br><span class='green' style='font-size:11px'>locked &#8377;{-_risk_rs:,.0f}"
+                            f" <span class='dim'>({-_risk_pct:.1f}% cap)</span></span>")
             stop_cell = (
                 f"<span class='red'>&#8377; {sl_price:.2f}</span>"
                 + (f"<br><span class='orange' style='font-size:11px'>trail &#8377; {trail_trigger:.2f}</span>"
                    if trail_trigger else "")
                 + trail_cushion_str
+                + risk_str
             )
             # Hold bars progress bar (strategy-TF units — days for a day-TF stock)
             hold_pct = min(100, int(held / _pos_hold_max * 100)) if _pos_hold_max else 0
@@ -1769,9 +1787,21 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 f"<td>{_badge('PENDING', 'orange')}</td><td></td><td></td>"
                 f"</tr>"
             )
+        _risk_net = _risk_locked - _risk_at_risk
+        _risk_line = ""
+        if positions:
+            _risk_line = (
+                f'<div class="dim" style="font-size:11px;margin:-4px 0 8px">'
+                f'If every stop hits: <span class="red">&#8377;{_risk_at_risk:,.0f} at risk</span>'
+                f' <span class="dim">({_risk_at_risk / total * 100 if total else 0:.1f}% of capital)</span>'
+                f' &nbsp;·&nbsp; <span class="green">&#8377;{_risk_locked:,.0f} locked in</span>'
+                f' &nbsp;·&nbsp; net <span class="{_pnl_class(_risk_net)}">&#8377;{_risk_net:+,.0f}</span>'
+                f' <span class="dim">· effective stop = trail trigger when trailing, else hard stop</span></div>'
+            )
         pos_section = f"""
         <div class="card full">
             <h2>Open Positions ({len(positions)}) + Pending ({len(pending_orders)})</h2>
+            {_risk_line}
             <table class="t-pos">
                 <tr>
                     <th>Symbol / Entry time</th><th>Qty</th><th>Deployed</th><th>Entry</th>
