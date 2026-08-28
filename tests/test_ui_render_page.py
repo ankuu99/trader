@@ -216,3 +216,21 @@ def test_dashboard_links_point_to_drilldown(ctx):
     store.upsert_open_position("NSE:ABC", 100.0, 10, 1, e)
     html = render_page(bot_state, risk, store, config)
     assert "href='/stock/ABC'" in html and "href='/chart/ABC'" not in html
+
+
+def test_render_page_giveback_pane_is_plain_english(ctx):
+    bot_state, risk, store = ctx
+    t0 = datetime.now() - timedelta(days=40)
+    # win, loss (giveback), bigger win (recovered), then a loss still open → "underwater"
+    legs = [("NSE:ABC", 10, 100.0, 120.0, 0), ("NSE:ABC", 10, 120.0, 110.0, 5),
+            ("NSE:XYZ", 10, 100.0, 130.0, 10), ("NSE:XYZ", 10, 130.0, 125.0, 20)]
+    for i, (inst, q, bp, sp, d) in enumerate(legs):
+        _order(store, f"b{i}", inst, "BUY", q, bp, t0 + timedelta(days=d))
+        _order(store, f"s{i}", inst, "SELL", q, sp, t0 + timedelta(days=d + 2))
+    html = render_page(bot_state, risk, store, config)
+    assert "Giveback from peak" in html and "Drawdown</h3>" not in html
+    assert "days and counting" in html                  # underwater state sentence
+    assert 'class="t-giveback"' in html and "ongoing" in html
+    assert "high-water mark" in html and 'stroke="#d29922"' in html   # HWM step line drawn
+    assert "not a loss against starting capital" in html
+    assert "· net of costs" in html

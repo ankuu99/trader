@@ -5,6 +5,8 @@ All pure functions over plain dicts; must tolerate None prices/pnl/timestamps
 (remote DB carries NULL order prices). No win-rate-by-exit-reason anywhere —
 that metric is circular for this strategy."""
 
+from datetime import datetime
+
 from trader.analytics import (
     exit_reason_breakdown,
     per_stock_scorecard,
@@ -125,3 +127,47 @@ def test_position_exit_legs_none_when_no_partial():
     open_positions = [{"instrument": "NSE:TVSMOTOR", "quantity": 7,
                        "entry_time": "2026-06-24T09:45:01"}]
     assert position_exit_legs(orders, open_positions) == {}
+
+
+def test_drawdown_stats_episodes_and_state():
+    # +100, +60 (=160 peak), -80 (=80 trough), +100 (=180 recovered+new peak), -30 (ongoing)
+    trades = [
+        _trade("NSE:A", 100.0, "T", "2026-06-01T09:15", "2026-06-01T10:00"),
+        _trade("NSE:A", 60.0,  "T", "2026-06-02T09:15", "2026-06-02T10:00"),
+        _trade("NSE:A", -80.0, "T", "2026-06-03T09:15", "2026-06-03T10:00"),
+        _trade("NSE:A", 100.0, "T", "2026-06-05T09:15", "2026-06-05T10:00"),
+        _trade("NSE:A", -30.0, "T", "2026-06-08T09:15", "2026-06-08T10:00"),
+    ]
+    now = datetime(2026, 6, 15, 12, 0)
+    s = drawdown_stats(trades, capital=10_000.0, now=now)
+    assert s["hwm"] == [100.0, 160.0, 160.0, 180.0, 180.0]
+    assert s["state"] == "underwater"
+    assert s["current_dd"] == 30.0
+    assert s["days_in_drawdown"] == 10            # peak 06-05 → now 06-15, not → last exit
+    assert len(s["episodes"]) == 2
+    worst, cur = s["episodes"]                    # deepest first
+    assert worst["depth"] == 80.0 and not worst["ongoing"]
+    assert worst["peak_time"].startswith("2026-06-02") and worst["trough_time"].startswith("2026-06-03")
+    assert worst["recovery_time"].startswith("2026-06-05") and worst["days_underwater"] == 3
+    assert cur["ongoing"] and cur["recovery_time"] is None and cur["days_underwater"] == 10
+    assert s["last_episode"] is cur
+    # net-of-costs selection: a net_pnl key shrinks every leg
+    for t in trades:
+        t["net_pnl"] = t["gross_pnl"] - 1.0
+    sn = drawdown_stats(trades, capital=10_000.0, now=now, pnl_key="net_pnl")
+    assert sn["peak"] == 176.0 and sn["current_dd"] == 31.0
+
+
+def test_drawdown_stats_new_high_reports_last_recovered_episode():
+    trades = [
+        _trade("NSE:A", 50.0,  "T", "2026-06-01T09:15", "2026-06-01T10:00"),
+        _trade("NSE:A", -20.0, "T", "2026-06-02T09:15", "2026-06-02T10:00"),
+        _trade("NSE:A", 40.0,  "T", "2026-06-04T09:15", "2026-06-04T10:00"),
+    ]
+    s = drawdown_stats(trades, capital=10_000.0)
+    assert s["state"] == "new_high" and s["current_dd"] == 0.0 and s["days_in_drawdown"] == 0
+    assert s["last_episode"]["depth"] == 20.0 and not s["last_episode"]["ongoing"]
+    assert s["last_episode"]["recovery_time"].startswith("2026-06-04")
+    # a monotone curve has no episodes at all
+    s2 = drawdown_stats(trades[:1], capital=10_000.0)
+    assert s2["state"] == "new_high" and s2["episodes"] == [] and s2["last_episode"] is None

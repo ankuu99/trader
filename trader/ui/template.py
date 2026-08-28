@@ -549,6 +549,69 @@ def _render_underwater_svg(underwater: list[float], width: int = 300, height: in
     )
 
 
+def _render_giveback_svg(equity: list[float], hwm: list[float], worst: dict | None = None,
+                         width: int = 300, height: int = 70) -> str:
+    """Net equity curve with its running high-water mark (dashed step) and the
+    gap between them shaded — the giveback drawn ON the curve, so a dip reads as
+    "we were at X, fell to Y, climbed back", not as a hole below zero. `worst`
+    (an episode dict) puts a marker at the deepest trough."""
+    if len(equity) < 2 or len(hwm) != len(equity):
+        return "<span class='dim'>—</span>"
+    lo = min(min(equity), 0.0)
+    hi = max(max(hwm), 0.0)
+    rng = (hi - lo) or 1.0
+    pad = 4
+    n = len(equity)
+
+    def sx(i: int) -> float:
+        return pad + (i / (n - 1)) * (width - 2 * pad)
+
+    def sy(v: float) -> float:
+        return pad + (1 - (v - lo) / rng) * (height - 2 * pad)
+
+    zero_y = max(pad, min(height - pad, sy(0.0)))
+    eq_pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(equity))
+    # HWM as a step line: flat until a new peak, then a vertical rise.
+    step = []
+    for i, v in enumerate(hwm):
+        if i and hwm[i - 1] != v:
+            step.append(f"{sx(i):.1f},{sy(hwm[i - 1]):.1f}")
+        step.append(f"{sx(i):.1f},{sy(v):.1f}")
+    hwm_pts = " ".join(step)
+    # Shade hwm -> equity (top edge along the HWM, back along the equity line).
+    gap = (" ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(hwm)) + " "
+           + " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in reversed(list(enumerate(equity)))))
+    last = equity[-1]
+    color = "#3fb950" if last >= 0 else "#f85149"
+    marker = ""
+    if worst and worst.get("depth", 0) > 0:
+        # trough index = deepest point of that episode
+        t_idx = max(range(n), key=lambda i: hwm[i] - equity[i])
+        marker = (f'<circle cx="{sx(t_idx):.1f}" cy="{sy(equity[t_idx]):.1f}" r="2.5" '
+                  f'fill="none" stroke="#f85149" stroke-width="1.2"/>')
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'style="vertical-align:middle;display:inline-block">'
+        f'<line x1="{pad}" y1="{zero_y:.1f}" x2="{width - pad}" y2="{zero_y:.1f}" '
+        f'stroke="#8b949e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>'
+        f'<polygon points="{gap}" fill="#f85149" fill-opacity="0.18"/>'
+        f'<polyline points="{hwm_pts}" fill="none" stroke="#d29922" stroke-width="1" '
+        f'stroke-dasharray="3,2" opacity="0.9"/>'
+        f'<polyline points="{eq_pts}" fill="none" stroke="{color}" stroke-width="1.5"/>'
+        f'{marker}'
+        f'<circle cx="{sx(n - 1):.1f}" cy="{sy(last):.1f}" r="2" fill="{color}"/>'
+        f'</svg>'
+    )
+
+
+def _fmt_day(ts) -> str:
+    """'2026-08-12T15:20' -> '12 Aug'."""
+    try:
+        return datetime.fromisoformat(str(ts)).strftime("%-d %b")
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _render_utilisation_svg(rows: list[dict], capital: float,
                             width: int = 300, height: int = 70) -> str:
     """Capital utilisation over trading days. Blue line = utilisation %
@@ -1255,6 +1318,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         _tc = round_trip_cost(config.product, _q, _ep, _xp) if (_ep and _xp and _q) else 0.0
         _cum += _gross
         _cum_net += _gross - _tc
+        t["net_pnl"] = _gross - _tc      # consumed by drawdown_stats(pnl_key="net_pnl")
         equity_vals.append(_cum)
         net_equity_vals.append(_cum_net)
     equity_total = _cum
@@ -1536,7 +1600,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     roll_row = _render_rolling_row(_roll_rows, _pnl_class)
 
     # ── cumulative P&L + drawdown panel (merged, #7) ──
-    _dd = drawdown_stats(_windowed, config.total_capital)
+    _dd = drawdown_stats(_windowed, config.total_capital, now=_now_n, pnl_key="net_pnl")
     _eq_left = ""
     if equity_vals:
         _eq_sign = "+" if equity_total >= 0 else ""
@@ -1559,24 +1623,69 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
                 &nbsp;·&nbsp; <span style="color:{'#3fb950' if net_equity_total >= 0 else '#f85149'}">&#9644;</span> net</div>"""
     _dd_right = ""
     if _dd["underwater"]:
-        _curr_kind = "red" if _dd["current_dd"] > 0 else "green"
+        _cap_n = config.total_capital or 0.0
+        _ep = _dd["last_episode"]
+        _worst = _dd["episodes"][0] if _dd["episodes"] else None
+        if _dd["state"] == "underwater" and _ep:
+            _dd_kind = "red"
+            _sentence = (f"Still <b>&#8377;{_dd['current_dd']:,.0f}</b> "
+                         f"({_dd['current_dd_pct']:.1f}% of capital) below the "
+                         f"&#8377;{_dd['peak']:,.0f} peak of {_fmt_day(_ep['peak_time'])} "
+                         f"&mdash; {_dd['days_in_drawdown']} days and counting"
+                         + (f"; deepest so far &#8377;{_ep['depth']:,.0f} on "
+                            f"{_fmt_day(_ep['trough_time'])}." if _ep['depth'] > _dd['current_dd'] + 0.5 else "."))
+        elif _ep:
+            _dd_kind = "green"
+            _sentence = (f"<b>At a new high</b> (&#8377;{_dd['peak']:,.0f}). The last giveback "
+                         f"&mdash; &#8377;{_ep['depth']:,.0f} ({_ep['depth_pct']:.1f}%), "
+                         f"{_fmt_day(_ep['peak_time'])} &rarr; {_fmt_day(_ep['trough_time'])} &mdash; "
+                         f"was recovered on {_fmt_day(_ep['recovery_time'])} after "
+                         f"{_ep['days_underwater']} days.")
+        else:
+            _dd_kind = "green"
+            _sentence = (f"<b>At a new high</b> (&#8377;{_dd['peak']:,.0f}) and never below it "
+                         f"&mdash; nothing given back yet.")
+        _ep_rows = ""
+        for e in _dd["episodes"][:3]:
+            _rec = ("<span class='red'>ongoing</span>" if e["ongoing"]
+                    else _fmt_day(e["recovery_time"]))
+            _ep_rows += (f"<tr><td>{_fmt_day(e['peak_time'])} &rarr; {_fmt_day(e['trough_time'])}"
+                         f" &rarr; {_rec}</td>"
+                         f"<td class='val red'>&#8377;{e['depth']:,.0f} "
+                         f"<span class='dim'>({e['depth_pct']:.1f}%)</span></td>"
+                         f"<td class='val'>{e['days_underwater']}</td></tr>")
+        _open_line = ""
+        if _window_live and positions:
+            _mtm_below = _dd["current_dd"] - _open_unreal
+            _mtm_txt = (f"&#8377;{_mtm_below:,.0f} below the peak" if _mtm_below > 0
+                        else f"&#8377;{-_mtm_below:,.0f} above it")
+            _open_line = (f"<div class='dim' style='font-size:11px;margin-top:4px'>"
+                          f"Incl. open positions ({'+' if _open_unreal >= 0 else ''}&#8377;{_open_unreal:,.0f} "
+                          f"unrealised, not yet banked): {_mtm_txt} if closed now.</div>")
         _dd_right = f"""
-            <h3 style="font-size:13px;margin:4px 0">Drawdown</h3>
-            <table>
-                <tr><td class="dim">Max DD</td>
-                    <td class="val red">&#8377; {_dd['max_dd']:,.0f}
-                    <span class="dim">({_dd['max_dd_pct']:.2f}%)</span></td></tr>
-                <tr><td class="dim">Current DD</td>
-                    <td class="val {_curr_kind}">&#8377; {_dd['current_dd']:,.0f}
-                    <span class="dim">({_dd['current_dd_pct']:.2f}%)</span></td></tr>
-                <tr><td class="dim">Days in DD</td><td class="val">{_dd['days_in_drawdown']}</td></tr>
+            <h3 style="font-size:13px;margin:4px 0">Giveback from peak
+                <span class="dim" style="font-weight:normal">(drawdown)</span></h3>
+            <div class="{_dd_kind}" style="font-size:12px;line-height:1.5;margin-bottom:4px">{_sentence}</div>
+            {_render_giveback_svg(_dd['equity'], _dd['hwm'], _worst)}
+            <div class="dim" style="font-size:11px;margin:2px 0 6px">
+                <span style="color:#d29922">&#9476;</span> best-so-far (high-water mark)
+                &nbsp;·&nbsp; <span style="color:#f85149">&#9644;</span> shaded = banked profit handed back
+                &nbsp;·&nbsp; &#9675; deepest point</div>
+            <table class="t-giveback">
+                <tr><th>peak &rarr; trough &rarr; recovered</th><th>given back</th><th>days under</th></tr>
+                {_ep_rows}
             </table>
-            {_render_underwater_svg(_dd['underwater'])}"""
+            {_open_line}
+            <div class="dim" style="font-size:11px;margin-top:6px">
+                Net of costs, closed trades only. Giveback measures realised profit handed back since
+                its best point &mdash; it is not a loss against starting capital unless the curve is
+                below the dotted zero line. Worst ever: &#8377;{_dd['max_dd']:,.0f}
+                ({_dd['max_dd_pct']:.1f}% of &#8377;{_cap_n:,.0f}).</div>"""
     if _eq_left or _dd_right:
         equity_section = f"""
     <div class="card full">
-        <h2>Cumulative P&amp;L &amp; Drawdown <span class="dim"
-            style="font-weight:normal;text-transform:none">· DD on gross</span></h2>
+        <h2>Cumulative P&amp;L &amp; Giveback <span class="dim"
+            style="font-weight:normal;text-transform:none">· net of costs</span></h2>
         <div style="display:flex;gap:24px;flex-wrap:wrap">
             <div class="pane">{_eq_left}</div>
             <div class="pane">{_dd_right}</div>

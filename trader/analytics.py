@@ -146,41 +146,102 @@ def per_stock_scorecard(trades: list[dict], open_positions: list[dict]) -> list[
     return rows
 
 
-def drawdown_stats(trades: list[dict], capital: float) -> dict:
-    """Underwater / drawdown stats (#7) over the gross-P&L equity curve of
-    closed trades, ordered by exit time. Returns the equity and underwater
-    series plus peak, max drawdown, current drawdown (₹ and %), and days spent
-    in the current drawdown. All-zero / empty series when there are no trades."""
+def drawdown_stats(trades: list[dict], capital: float, now: datetime | None = None,
+                   pnl_key: str = "gross_pnl") -> dict:
+    """Giveback-from-peak ("drawdown") stats over the closed-trade equity curve,
+    ordered by exit time.
+
+    A giveback is realised money handed back relative to the highest point the
+    cumulative P&L has reached — NOT a loss against starting capital (the curve
+    can be well above zero throughout). The UI presents it that way; this helper
+    returns everything it needs:
+
+      equity / hwm / underwater / times — per-closed-trade series (cum P&L, its
+        running peak, cum − peak (<= 0), exit-time ISO strings);
+      peak, max_dd(_pct), current_dd(_pct) — as before;
+      days_in_drawdown — peak → `now` when given (the position is still under
+        water today, so the clock runs to now, not to the last exit);
+      state — "new_high" (last point is the peak), "underwater" (below it) or
+        "empty";
+      episodes — every peak→trough→recovery excursion, deepest first:
+        {peak_time, trough_time, recovery_time (None while ongoing), depth,
+         depth_pct, days_to_trough, days_underwater, ongoing};
+      last_episode — the ongoing episode when underwater, else the most recently
+        recovered one (None when the curve never gave anything back).
+
+    `pnl_key` selects the per-trade P&L field: "gross_pnl" (match_trades output)
+    or "net_pnl" when the caller has layered costs on. All-zero / empty when there
+    are no trades."""
     dated = sorted((t for t in trades if _parse_iso(t.get("exit_time"))),
                    key=lambda t: _parse_iso(t["exit_time"]))
+    empty = {"equity": [], "hwm": [], "underwater": [], "times": [], "peak": 0.0,
+             "max_dd": 0.0, "max_dd_pct": 0.0,
+             "current_dd": 0.0, "current_dd_pct": 0.0, "days_in_drawdown": 0,
+             "state": "empty", "episodes": [], "last_episode": None}
     if not dated:
-        return {"equity": [], "underwater": [], "peak": 0.0,
-                "max_dd": 0.0, "max_dd_pct": 0.0,
-                "current_dd": 0.0, "current_dd_pct": 0.0, "days_in_drawdown": 0}
-    equity, underwater = [], []
+        return empty
+    cap = capital or 0.0
+    pct = (lambda v: (abs(v) / cap * 100.0) if cap else 0.0)
+    equity, hwm, underwater, times = [], [], [], []
     cum = 0.0
     peak = float("-inf")
     peak_time = _parse_iso(dated[0]["exit_time"])
     max_dd = 0.0
+    episodes: list[dict] = []
+    cur: dict | None = None          # the episode in progress (below the HWM)
     for t in dated:
-        cum += t.get("gross_pnl") or 0.0
+        ts = _parse_iso(t["exit_time"])
+        cum += t.get(pnl_key) or 0.0
         if cum > peak:
+            if cur is not None:      # climbed back above the old peak: episode closed
+                cur["recovery_time"] = ts.isoformat()
+                cur["days_underwater"] = (ts - cur["_peak_dt"]).days
+                cur["ongoing"] = False
+                episodes.append(cur)
+                cur = None
             peak = cum
-            peak_time = _parse_iso(t["exit_time"])
+            peak_time = ts
         equity.append(cum)
-        dd = cum - peak           # <= 0
+        hwm.append(peak)
+        times.append(ts.isoformat())
+        dd = cum - peak              # <= 0
         underwater.append(dd)
         max_dd = min(max_dd, dd)
-    current_dd = equity[-1] - peak
+        if dd < 0:
+            if cur is None:
+                cur = {"peak_time": peak_time.isoformat(), "_peak_dt": peak_time,
+                       "peak_value": peak, "trough_time": ts.isoformat(),
+                       "depth": 0.0, "days_to_trough": 0}
+            if -dd > cur["depth"]:
+                cur["depth"] = -dd
+                cur["trough_time"] = ts.isoformat()
+                cur["days_to_trough"] = (ts - cur["_peak_dt"]).days
     last_time = _parse_iso(dated[-1]["exit_time"])
-    days = (last_time - peak_time).days if (current_dd < 0 and last_time and peak_time) else 0
-    cap = capital or 0.0
+    ref_now = now or last_time
+    current_dd = equity[-1] - peak
+    if cur is not None:              # still under water
+        cur["recovery_time"] = None
+        cur["days_underwater"] = max(0, (ref_now - cur["_peak_dt"]).days)
+        cur["ongoing"] = True
+        episodes.append(cur)
+    for e in episodes:
+        e.pop("_peak_dt", None)
+        e["depth_pct"] = pct(e["depth"])
+    episodes.sort(key=lambda e: (-e["depth"], e["peak_time"]))
+    state = "underwater" if current_dd < 0 else "new_high"
+    if state == "underwater":
+        last_ep = next(e for e in episodes if e["ongoing"])
+    else:
+        done = [e for e in episodes if not e["ongoing"]]
+        last_ep = max(done, key=lambda e: e["recovery_time"]) if done else None
+    days = max(0, (ref_now - peak_time).days) if current_dd < 0 else 0
     return {
-        "equity": equity, "underwater": underwater, "peak": peak,
-        "max_dd": abs(max_dd), "max_dd_pct": (abs(max_dd) / cap * 100.0) if cap else 0.0,
-        "current_dd": abs(current_dd),
-        "current_dd_pct": (abs(current_dd) / cap * 100.0) if cap else 0.0,
+        "equity": equity, "hwm": hwm, "underwater": underwater, "times": times,
+        "peak": peak,
+        "max_dd": abs(max_dd), "max_dd_pct": pct(max_dd),
+        "current_dd": abs(current_dd), "current_dd_pct": pct(current_dd),
         "days_in_drawdown": days,
+        "state": state, "episodes": episodes, "last_episode": last_ep,
     }
 
 
