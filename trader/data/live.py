@@ -59,6 +59,15 @@ class LiveFeed:
 
         self._stopping = False
         self._suspended = False  # True between market close disconnect and next-day reconnect
+        # True once connect() has been issued in this process — the ticker then owns
+        # a socket and/or a retry loop, so reconnect() is allowed to act on it.
+        # Guards the startup ordering in main.py (pre_market() → reconnect() runs
+        # BEFORE feed.start()); without it startup would connect twice.
+        self._started = False
+        # Set by update_access_token() when the ticker was rebuilt under a started
+        # feed: the new ticker has never been connected, so the next reconnect()
+        # must connect it even if the (stale) old socket looked alive.
+        self._needs_reconnect = False
 
         self._bind_ticker_callbacks()
 
@@ -94,6 +103,8 @@ class LiveFeed:
         """
         logger.info("Starting live feed | tokens=%s | timeframe=%dmin",
                     self._tokens, self._timeframe)
+        self._started = True
+        self._needs_reconnect = False
         self._ticker.connect(threaded=threaded)
 
     def stop(self):
@@ -109,16 +120,69 @@ class LiveFeed:
             self._partials.clear()
             self._vol_baseline.clear()
             self._vol_last.clear()
-        self._ticker.close()
+        self._close_ticker(self._ticker)
         logger.info("Live feed disconnected for market close")
 
     def reconnect(self):
-        """Re-establish WebSocket connection at market open. No-op on first startup."""
-        if not self._suspended:
+        """Re-establish the WebSocket at market open whenever the ticker is not
+        actually connected — not merely after an explicit market-close disconnect.
+
+        Self-healing is the point. The 2026-08-28 outage: the process was
+        restarted at 01:33 IST, start() connected on the PREVIOUS day's token,
+        that token died at midnight-rollover, and kiteconnect's ticker burned its
+        50 retry attempts on 403s and gave up. At 09:00 pre_market rebuilt the
+        ticker with the fresh token and called reconnect() — which returned
+        immediately because `_suspended` was False (disconnect() had never run in
+        this process's lifetime). Zero ticks all session, 8 positions unmonitored.
+
+        A true no-op when the socket is genuinely up (normal startup, where
+        main.py calls pre_market() → reconnect() before feed.start()), and before
+        the feed has ever been started."""
+        was_suspended = self._suspended
+        self._suspended = False  # always cleared: gates _on_close/_on_error noise
+
+        if not (self._started or was_suspended):
+            # Startup ordering: pre_market() runs before feed.start(). Connecting
+            # here would double-connect.
             return
-        self._suspended = False
+
+        connected = self._ticker_is_connected()
+        if connected and not (was_suspended or self._needs_reconnect):
+            logger.info("Live feed already connected — reconnect no-op")
+            return
+
+        logger.info("Live feed reconnecting (ticker was down) | suspended=%s "
+                    "token_rebuilt=%s socket_connected=%s",
+                    was_suspended, self._needs_reconnect, connected)
+        self._needs_reconnect = False
         self._connect_ticker()
-        logger.info("Live feed reconnecting for market open")
+
+    def _ticker_is_connected(self) -> bool:
+        """is_connected() on the current ticker; any failure reads as 'not connected'."""
+        try:
+            return bool(self._ticker.is_connected())
+        except Exception:
+            logger.debug("ticker.is_connected() raised — treating as disconnected",
+                         exc_info=True)
+            return False
+
+    def _close_ticker(self, ticker):
+        """Tear an old ticker down unconditionally: close the socket AND kill any
+        in-flight auto-retry loop. A ticker that is `is_connected() is False` may
+        still be looping reconnect attempts (403s on an expired token), so the
+        close must not be conditional on is_connected(). kiteconnect 5.x's close()
+        already calls stop_retry(), but close() can raise before reaching it on a
+        never-connected ticker — hence the second, independent attempt."""
+        try:
+            ticker.close()
+        except Exception:
+            logger.debug("Error closing old ticker", exc_info=True)
+        try:
+            stop_retry = getattr(ticker, "stop_retry", None)
+            if stop_retry is not None:
+                stop_retry()
+        except Exception:
+            logger.debug("Error stopping old ticker retry loop", exc_info=True)
 
     def _connect_ticker(self):
         """Connect the ticker, safe against an already-running Twisted reactor.
@@ -133,6 +197,7 @@ class LiveFeed:
         error; observed 2026-07-14/15). Hand the call to the reactor thread
         instead."""
         from twisted.internet import reactor
+        self._started = True
         if reactor.running:
             reactor.callFromThread(self._ticker.connect, threaded=True)
         else:
@@ -142,19 +207,27 @@ class LiveFeed:
         """Adopt a fresh Kite access token by rebuilding the underlying KiteTicker.
 
         The ws URL embeds the token at construction, so mutation isn't enough — a
-        new ticker is built and all callbacks re-bound. Intended for the overnight
-        window (between market-close disconnect and pre-market reconnect); if the
-        old socket is still up it is closed first. Subscriptions, handlers and
-        candle state live on this object and carry over untouched."""
-        try:
-            if self._ticker.is_connected():
-                logger.warning("update_access_token called while connected — closing old socket")
-                self._ticker.close()
-        except Exception:
-            logger.exception("Error closing old ticker during token update")
+        new ticker is built and all callbacks re-bound. Subscriptions, handlers and
+        candle state live on this object and carry over untouched.
+
+        This method only REBUILDS; it never connects. It records that a reconnect
+        is owed (`_needs_reconnect`) whenever the feed had already been started,
+        and the caller's following `reconnect()` does the connecting — that is
+        what makes the 09:00 pre_market sequence (`update_access_token()` then
+        `reconnect()`) self-healing regardless of process start time.
+
+        The old ticker is torn down unconditionally: `is_connected()` is False
+        while it is still burning 403 retry attempts on the expired token, so a
+        conditional close would leak that loop (2026-08-28)."""
+        if self._ticker_is_connected():
+            logger.warning("update_access_token called while connected — closing old socket")
+        self._close_ticker(self._ticker)
         self._ticker = KiteTicker(api_key, access_token)
         self._bind_ticker_callbacks()
-        logger.info("Live feed access token updated (ticker rebuilt)")
+        if self._started:
+            self._needs_reconnect = True
+        logger.info("Live feed access token updated (ticker rebuilt) | reconnect_pending=%s",
+                    self._needs_reconnect)
 
     # ------------------------------------------------------------------ #
     # KiteTicker callbacks                                                 #
