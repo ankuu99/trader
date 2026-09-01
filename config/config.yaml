@@ -280,8 +280,9 @@ per_stock_params:
   # base candles; decisions ~15:15, same-day entry — docs/Aggregated_Timeframes_Design.md).
   # Fundamentally qualified 2026-06-30 (reviews/qualify_IPCALAB_20260630.md).
   # Every TF-sensitive param is overridden — the global values are 15m-calibrated.
-  # Threshold calibrated 2026-09-01 (calibrate_stock.py sweep 2023-01→2026-09, inside this
-  # block): 0.82 → ₹33.1k/35t/77% WR vs ₹17.1k/19t @0.90. Plateau 0.80–0.88 all ≥₹28.7k.
+  # Threshold calibrated 2026-09-01, in-block sweeps on BOTH windows: 0.88 is the robust pick —
+  # 2023-01→now: ₹32.7k/29t/82.8% WR (tie with 0.82's ₹33.1k); 2025-01→now: ₹19.9k/18t/83.3%
+  # (0.82 drops to ₹5.6k in the recent regime). vs ₹17.1k @0.90 (2023+) / ₹10.7k (2025+).
   NSE:IPCALAB:
     lr_extrema:
       timeframe: day
@@ -291,7 +292,7 @@ per_stock_params:
                                     # system restart already does (fresh warm-up retrain
                                     # each morning); keeps backtest == live behaviour
       extrema_order: 3              # swing extrema = local min/max over ±3 days
-      threshold: 0.82             # min P(local-min) to enter — calibrated 2026-09-01 (see above)
+      threshold: 0.88             # min P(local-min) to enter — calibrated 2026-09-01 (see above)
       exits:
         hold_bars: 40               # ~2 months max hold
         sell_min_pct: 7.0
