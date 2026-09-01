@@ -280,10 +280,8 @@ per_stock_params:
   # base candles; decisions ~15:15, same-day entry — docs/Aggregated_Timeframes_Design.md).
   # Fundamentally qualified 2026-06-30 (reviews/qualify_IPCALAB_20260630.md).
   # Every TF-sensitive param is overridden — the global values are 15m-calibrated.
-  # STARTING POINTS ONLY, not calibrated. Before trusting results:
-  #   python scripts/calibrate.py --from 2024-01-01 --strategy-timeframe day \
-  #       --params threshold stop_pct trail_pct hold_bars sell_threshold
-  # (needs ~2.4yr of 15m cache — first fetch requires a live Kite session)
+  # Threshold calibrated 2026-09-01 (calibrate_stock.py sweep 2023-01→2026-09, inside this
+  # block): 0.82 → ₹33.1k/35t/77% WR vs ₹17.1k/19t @0.90. Plateau 0.80–0.88 all ≥₹28.7k.
   NSE:IPCALAB:
     lr_extrema:
       timeframe: day
@@ -293,6 +291,7 @@ per_stock_params:
                                     # system restart already does (fresh warm-up retrain
                                     # each morning); keeps backtest == live behaviour
       extrema_order: 3              # swing extrema = local min/max over ±3 days
+      threshold: 0.82             # min P(local-min) to enter — calibrated 2026-09-01 (see above)
       exits:
         hold_bars: 40               # ~2 months max hold
         sell_min_pct: 7.0
@@ -320,6 +319,8 @@ per_stock_params:
       lookback_bars: 400            # ~19-month rolling training window
       retrain_every: 1              # retrain every day bar — replicates what the daily
       extrema_order: 5              # swing extrema = local min/max over ±3 days
+      threshold: 0.88             # min P(local-min) to enter — calibrated 2026-09-01 in-block sweep
+                                    # (2023-01→2026-09, stale 10/30 kept): ₹35.5k/21t/85.7% WR vs ₹17.5k/13t @0.90
       exits:
         hold_bars: 40               # ~2 months max hold
         sell_min_pct: 7.0
