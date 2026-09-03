@@ -414,11 +414,45 @@ def compute_utilisation(
 # Return stats (cumulative + annualized) and the Nifty benchmark             #
 # --------------------------------------------------------------------------- #
 
-#: Benchmark instrument for the dashboard's "vs market" line. Cached as `day`
-#: candles in the normal candles table (main.py warms it at startup/pre/post
-#: market); the UI only ever reads it. NSE index instruments live in
-#: `kite.instruments("NSE")` with this tradingsymbol.
-BENCHMARK_INSTRUMENT = "NSE:NIFTY 50"
+#: Selectable dashboard benchmarks (`?bench=<key>` in the UI). Daily closes for
+#: every entry are cached as `day` candles in the normal candles table
+#: (main.py::refresh_benchmark warms them at startup/pre/post market); the UI
+#: only ever reads them. Index instruments live in `kite.instruments("NSE")`
+#: under segment INDICES; `token` is the documented instrument_token fallback
+#: (verified against the live dump 2026-09-03) should the listing ever omit
+#: one. Gold has no NSE index — GOLDBEES (ETF, ~0.8%/yr expense drag) is the
+#: honest "what if I'd just bought the ETF" proxy.
+BENCHMARKS: dict[str, dict] = {
+    "nifty50": {
+        "instrument": "NSE:NIFTY 50", "label": "Nifty 50", "short": "N50",
+        "token": 256265},
+    "banknifty": {
+        "instrument": "NSE:NIFTY BANK", "label": "Nifty Bank", "short": "Bank",
+        "token": 260105},
+    "midcap100": {
+        "instrument": "NSE:NIFTY MIDCAP 100", "label": "Nifty Midcap 100",
+        "short": "Mid", "token": 256777},
+    "smallcap250": {
+        "instrument": "NSE:NIFTY SMLCAP 250", "label": "Nifty Smallcap 250",
+        "short": "Small", "token": 267273},
+    "gold": {
+        "instrument": "NSE:GOLDBEES", "label": "Gold (GOLDBEES)",
+        "short": "Gold", "token": 3693569},
+}
+
+#: Benchmark shown when no (or an unknown) `?bench=` key is given.
+DEFAULT_BENCHMARK = "nifty50"
+
+#: Back-compat alias — the default benchmark's instrument.
+BENCHMARK_INSTRUMENT = BENCHMARKS[DEFAULT_BENCHMARK]["instrument"]
+
+
+def resolve_benchmark(key: str | None) -> tuple[str, dict]:
+    """Map a `?bench=` query value to (key, spec); unknown/absent → default."""
+    k = (key or "").strip().lower()
+    if k not in BENCHMARKS:
+        k = DEFAULT_BENCHMARK
+    return k, BENCHMARKS[k]
 
 #: Annualizing a window shorter than this is extrapolation, not measurement
 #: (a +2% week reads as ~180% p.a.). The dashboard blanks `ann_pct` below it.

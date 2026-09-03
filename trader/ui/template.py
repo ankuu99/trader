@@ -894,11 +894,12 @@ def _load_matched_trades(db_path, instrument: str | None = None):
 
 
 def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
-                       pnl_class, tm: dict | None = None) -> str:
+                       pnl_class, tm: dict | None = None,
+                       bench_label: str = "Nifty 50") -> str:
     """Compact stat row under the Cumulative P&L headline: cum return,
-    annualized (with on-deployed secondary), incl.-open MTM, Nifty 50 benchmark
-    (buy-and-hold on full capital + the trade-matched counterfactual `tm`).
-    Empty string when there is no return to show."""
+    annualized (with on-deployed secondary), incl.-open MTM, the selected
+    benchmark (buy-and-hold on full capital + the trade-matched counterfactual
+    `tm`). Empty string when there is no return to show."""
     if ret.get("cum_pct") is None:
         return ""
 
@@ -948,21 +949,23 @@ def _render_return_row(ret: dict, bench: dict, capital: float, util_pct: float,
         else:
             diff = ret["cum_pct"] - bench["cum_pct"]
             diff_s = f"ours {diff:+.1f} pp cum"
-        bench_tile = (f'<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
+        bench_tile = (f'<div><div class="dim k">{bench_label} (buy &amp; hold)</div>'
                       f'<div class="v {pnl_class(bench["cum_pct"])}">{_pct(bench["cum_pct"])}</div>'
                       f'<div class="dim s">{_ann(bench["ann_pct"])} · '
                       f'<span class="{pnl_class(diff)}">{diff_s}</span></div>{tm_line}</div>')
     else:
-        bench_tile = ('<div><div class="dim k">Nifty 50 (buy &amp; hold)</div>'
+        bench_tile = (f'<div><div class="dim k">{bench_label} (buy &amp; hold)</div>'
                       '<div class="v dim">—</div>'
                       f'<div class="dim s">no daily candles cached for the window yet</div>{tm_line}</div>')
     return f'<div class="retrow">{cum_tile}{ann_tile}{mtm_tile}{bench_tile}</div>'
 
 
-def _render_rolling_row(rows: list[dict], pnl_class) -> str:
+def _render_rolling_row(rows: list[dict], pnl_class,
+                        bench_label: str = "Nifty 50") -> str:
     """Mini table of rolling windows (1M / 3M / Inception): trades, net ₹,
-    return, annualized (blank under the guard), Nifty buy-and-hold, and the
-    delta. Independent of the range filter. Empty when nothing has traded."""
+    return, annualized (blank under the guard), the selected benchmark's
+    buy-and-hold, and the delta. Independent of the range filter. Empty when
+    nothing has traded."""
     if not any(r["ret"].get("cum_pct") is not None for r in rows):
         return ""
 
@@ -993,7 +996,7 @@ def _render_rolling_row(rows: list[dict], pnl_class) -> str:
                  f"<td>{nifty_s}</td><td>{delta_s}</td></tr>")
     return f"""<table class="t-roll" style="margin:4px 0 8px">
         <tr><th>Rolling</th><th>Trades</th><th>Net</th><th>Return</th><th>p.a.</th>
-            <th>Nifty B&amp;H</th><th>&Delta;</th></tr>{body}</table>"""
+            <th>{bench_label} B&amp;H</th><th>&Delta;</th></tr>{body}</table>"""
 
 
 def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
@@ -1165,6 +1168,12 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
     # ── date range (URL params; persists across the meta-refresh for free) ─────
     _lo, _hi, _range_label, _range_key = _resolve_range(range_params)
+    # Active benchmark (?bench=<key>, default Nifty 50) — drives every "vs
+    # market" figure on the page: B&H tile, trade-matched line, rolling table,
+    # equity overlay, per-stock scorecard column.
+    from trader.analytics import resolve_benchmark, DEFAULT_BENCHMARK, BENCHMARKS
+    _bench_key, _bench_spec = resolve_benchmark((range_params or {}).get("bench"))
+    _bench_inst, _bench_label = _bench_spec["instrument"], _bench_spec["label"]
     # SQL queries hit naive process-local timestamps; convert the IST window back.
     _lo_local = (_lo - _NAIVE_TO_IST_DELTA) if _lo else None
     _hi_local = (_hi - _NAIVE_TO_IST_DELTA) if _hi else None
@@ -1333,10 +1342,25 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     _from_val = _lo.strftime("%Y-%m-%d") if _lo else ""
     _to_val = (_hi or now.replace(tzinfo=None)).strftime("%Y-%m-%d")
 
+    # Range links carry the active benchmark, benchmark links carry the active
+    # range — both live in the query string so the 30s body-swap refresh (which
+    # re-fetches the current URL) keeps the selection.
+    _bench_qs = f"&bench={_bench_key}" if _bench_key != DEFAULT_BENCHMARK else ""
+    if _range_key == "custom":
+        _range_qs = f"from={_from_val}&to={_to_val}"
+    else:
+        _range_qs = f"range={_range_key}"
+
     def _rbtn(key, label):
         cls = "rbtn active" if key == _range_key else "rbtn"
-        return f'<a href="/?range={key}" class="{cls}">{label}</a>'
+        return f'<a href="/?range={key}{_bench_qs}" class="{cls}">{label}</a>'
 
+    def _bbtn(key, spec):
+        cls = "rbtn active" if key == _bench_key else "rbtn"
+        title, short = spec["label"], spec["short"]
+        return f'<a href="/?{_range_qs}&bench={key}" class="{cls}" title="vs {title}">{short}</a>'
+
+    _bench_btns = "".join(_bbtn(k, sp) for k, sp in BENCHMARKS.items())
     range_controls = f"""
         <span class="rangebar">
             <span class="dim" style="font-size:11px">Range:</span>
@@ -1344,8 +1368,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             <form method="GET" action="/" style="display:inline-flex;gap:4px;margin-left:6px;align-items:center">
                 <input type="date" name="from" value="{_from_val}">
                 <input type="date" name="to" value="{_to_val}">
+                <input type="hidden" name="bench" value="{_bench_key}">
                 <button type="submit" class="rbtn{' active' if _range_key == 'custom' else ''}">Apply</button>
             </form>
+            <span class="dim" style="font-size:11px;margin-left:10px">vs:</span>
+            {_bench_btns}
         </span>"""
 
     # ── health strip: "is something wrong?" in one line ───────────────────────
@@ -1497,7 +1524,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     else:
         util_section = ""
 
-    # ── return stats (cumulative + annualized) + Nifty 50 benchmark ───────────
+    # ── return stats (cumulative + annualized) + selected benchmark ───────────
     # Span anchors: start = later of the window start and the FIRST fill (idle
     # time before the bot's first trade must not dilute the figure); end = now
     # while the window is live (capital stays at risk), else the window end.
@@ -1506,7 +1533,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     # (only meaningful for a window that reaches now). Annualized figures blank
     # below ANNUALIZE_MIN_DAYS — see trader/analytics.py::return_stats.
     from trader.analytics import (return_stats, benchmark_return, trade_matched_benchmark,
-                                  benchmark_equity, BENCHMARK_INSTRUMENT)
+                                  benchmark_equity)
     _now_n = now.replace(tzinfo=None)
     _fill_times = [_parse_ist_naive(t["entry_time"]) for t in _matched if t.get("entry_time")]
     _fill_times += [_parse_ist_naive(p["entry_time"]) for p in positions if p.get("entry_time")]
@@ -1531,7 +1558,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             config.db_path,
             "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
             "AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
-            (BENCHMARK_INSTRUMENT,
+            (_bench_inst,
              _ret_start.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
              _ret_end.isoformat()),
         )
@@ -1548,11 +1575,12 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             config.db_path,
             "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
             "AND timestamp >= ? ORDER BY timestamp ASC",
-            (BENCHMARK_INSTRUMENT,
+            (_bench_inst,
              (min(_tm_entries) - timedelta(days=7)).replace(hour=0, minute=0, second=0).isoformat()),
         )
         _tm = trade_matched_benchmark(_windowed, _tm_rows)
-    ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class, _tm)
+    ret_row = _render_return_row(_ret, _bench, total, _o["time_avg_util_pct"], _pnl_class, _tm,
+                                 bench_label=_bench_label)
     # Nifty B&H ₹ on full capital, marked at each closed trade's exit → same
     # trade-indexed x-axis as the equity curve (rebased to 0 at the window start).
     _bench_eq = benchmark_equity(
@@ -1569,7 +1597,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             config.db_path,
             "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
             "AND timestamp >= ? ORDER BY timestamp ASC",
-            (BENCHMARK_INSTRUMENT,
+            (_bench_inst,
              _first_fill.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()),
         )
     _roll_rows = []
@@ -1597,7 +1625,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             _rb = benchmark_return([r for r in _roll_bench_rows if str(r["timestamp"]) >= _rs_iso])
         _roll_rows.append({"label": _label, "n": len(_rtrades), "net": _rnet,
                            "ret": _rret, "bench": _rb})
-    roll_row = _render_rolling_row(_roll_rows, _pnl_class)
+    roll_row = _render_rolling_row(_roll_rows, _pnl_class, bench_label=_bench_label)
 
     # ── cumulative P&L + drawdown panel (merged, #7) ──
     _dd = drawdown_stats(_windowed, config.total_capital, now=_now_n, pnl_key="net_pnl")
@@ -1618,7 +1646,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             {roll_row}
             {_render_equity_sparkline(equity_vals, net_equity_vals, bench_values=_bench_eq)}
             <div class="dim" style="font-size:11px;margin-top:2px">
-                <span style="color:#58a6ff">&#9644;</span> Nifty B&amp;H on &#8377;{total:,.0f}, at our exit dates
+                <span style="color:#58a6ff">&#9644;</span> {_bench_label} B&amp;H on &#8377;{total:,.0f}, at our exit dates
                 &nbsp;·&nbsp; <span style="color:#8b949e">&#9476;</span> gross
                 &nbsp;·&nbsp; <span style="color:{'#3fb950' if net_equity_total >= 0 else '#f85149'}">&#9644;</span> net</div>"""
     _dd_right = ""
@@ -2189,9 +2217,9 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             if _tm_i["pnl"] is not None:
                 _edge = _tm_i["our_gross_pct"] - _tm_i["pct"]
                 vs_nifty = (f"<span class='{_pnl_class(_edge)}' title='ours {_tm_i['our_gross_pct']:+.1f}% vs "
-                            f"Nifty {_tm_i['pct']:+.1f}% on &#8377;{_tm_i['notional']:,.0f} deployed'>"
+                            f"{_bench_label} {_tm_i['pct']:+.1f}% on &#8377;{_tm_i['notional']:,.0f} deployed'>"
                             f"{_edge:+.1f} pp</span>"
-                            f"<br><span class='dim' style='font-size:10px'>Nifty &#8377;{_tm_i['pnl']:+,.0f}</span>")
+                            f"<br><span class='dim' style='font-size:10px'>{_bench_label} &#8377;{_tm_i['pnl']:+,.0f}</span>")
             else:
                 vs_nifty = "<span class='dim'>—</span>"
             _sc_body += (
@@ -2208,7 +2236,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             <h2>Per-Stock Performance (live)</h2>
             <table class="t-score">
                 <tr><th>Symbol</th><th>Trades</th><th>Gross P&amp;L</th><th>Net P&amp;L</th>
-                    <th>vs Nifty <span class="dim" style="font-weight:normal">trade-matched</span></th>
+                    <th>vs {_bench_label} <span class="dim" style="font-weight:normal">trade-matched</span></th>
                     <th>Avg hold</th><th>Last exit</th></tr>
                 {_sc_body}
             </table>
@@ -2522,14 +2550,17 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 </html>"""
 
 
-def render_stock_page(instrument: str, bot_state, risk, store, config) -> str:
+def render_stock_page(instrument: str, bot_state, risk, store, config,
+                      bench: str | None = None) -> str:
     """Per-stock drilldown (/stock/<sym>): everything about one name in one
     place — status + model reading, price chart with fills/levels, conviction
     history, open-position detail with stop-risk, this stock's closed trades
     (with the trade-matched Nifty counterfactual), its signals incl. gate
     filters, and the effective per-stock params. Same shell as the dashboard
     (mobile CSS + scroll-preserving refresh). Read-only."""
-    from trader.analytics import trade_matched_benchmark, BENCHMARK_INSTRUMENT
+    from trader.analytics import trade_matched_benchmark, resolve_benchmark
+    _, _bench_spec = resolve_benchmark(bench)
+    _bench_inst, _bench_label = _bench_spec["instrument"], _bench_spec["label"]
     sym = instrument.split(":")[-1]
     now = _now_ist()
     params = config.get_strategy_params(instrument, "lr_extrema") or {}
@@ -2680,12 +2711,12 @@ def render_stock_page(instrument: str, bot_state, risk, store, config) -> str:
                 config.db_path,
                 "SELECT timestamp, close FROM candles WHERE instrument = ? AND timeframe = 'day' "
                 "AND timestamp >= ? ORDER BY timestamp ASC",
-                (BENCHMARK_INSTRUMENT, (first_entry - timedelta(days=7)).isoformat()),
+                (_bench_inst, (first_entry - timedelta(days=7)).isoformat()),
             )
             tm = trade_matched_benchmark(trades, closes)
             if tm["pnl"] is not None:
                 edge = tm["our_gross_pct"] - tm["pct"]
-                tm_line = (f' &nbsp;·&nbsp; vs Nifty trade-matched: <span class="{_pnl_class(tm["pnl"])}">'
+                tm_line = (f' &nbsp;·&nbsp; vs {_bench_label} trade-matched: <span class="{_pnl_class(tm["pnl"])}">'
                            f'&#8377;{tm["pnl"]:+,.0f} ({tm["pct"]:+.1f}%)</span> on &#8377;{tm["notional"]:,.0f}'
                            f' → ours <span class="{_pnl_class(edge)}">{edge:+.1f} pp</span>')
         trades_block = f"""

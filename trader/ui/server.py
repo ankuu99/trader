@@ -37,7 +37,8 @@ def build_app(bot_state, risk, store, config) -> Flask:
 
     @app.route("/stock/<symbol>")
     def stock(symbol):
-        html = render_stock_page(f"NSE:{symbol}", bot_state, risk, store, config)
+        html = render_stock_page(f"NSE:{symbol}", bot_state, risk, store, config,
+                                 bench=request.args.get("bench"))
         return Response(html, mimetype="text/html")
 
     @app.route("/pause", methods=["POST"])

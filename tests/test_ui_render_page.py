@@ -89,6 +89,33 @@ def test_render_page_with_trades_shows_return_row_and_benchmark(ctx):
     assert "&lt;90 d" not in html
 
 
+def test_render_page_benchmark_selector(ctx):
+    # ?bench=<key> swaps every "vs market" figure to the selected benchmark and
+    # the range/bench links cross-preserve each other in the query string.
+    from trader.analytics import BENCHMARKS
+    bot_state, risk, store = ctx
+    t0 = datetime.now() - timedelta(days=120)
+    _order(store, "o1", "NSE:ABC", "BUY", 10, 100.0, t0)
+    _order(store, "o2", "NSE:ABC", "SELL", 10, 110.0, t0 + timedelta(days=3))
+    days = pd.date_range(t0.date(), periods=121, freq="D")
+    store.write_candles(BENCHMARKS["gold"]["instrument"], "day", pd.DataFrame({
+        "timestamp": days, "open": 80.0, "high": 81.0, "low": 79.0,
+        "close": [80.0 + i * 0.1 for i in range(len(days))], "volume": 0}))
+
+    html = render_page(bot_state, risk, store, config, range_params={"bench": "gold"})
+
+    assert "Gold (GOLDBEES) (buy &amp; hold)" in html
+    assert "no daily candles cached" not in html          # GOLDBEES closes were read
+    assert "vs Gold (GOLDBEES)" in html                   # scorecard column follows
+    assert 'href="/?range=1m&bench=gold"' in html         # range links carry the bench
+    assert 'href="/?range=all&bench=nifty50"' in html     # selector offers the default back
+
+    # Default (no bench param): Nifty 50, and range links carry no bench suffix.
+    html_default = render_page(bot_state, risk, store, config)
+    assert "Nifty 50 (buy &amp; hold)" in html_default
+    assert 'href="/?range=1m"' in html_default
+
+
 def test_render_page_open_positions_show_stop_risk(ctx):
     bot_state, risk, store = ctx
     e = datetime.now() - timedelta(days=2)
@@ -193,7 +220,7 @@ def test_render_stock_page_full(ctx):
     assert "IN POSITION" in html and "P(buy) <span" in html and "drivers:" in html
     assert "Open Position" in html and "Stop risk" in html and "TRAIL(" in html
     assert "Closed Trades (1)" in html and "TRAILING" in html
-    assert "vs Nifty trade-matched" in html
+    assert "vs Nifty 50 trade-matched" in html
     assert "FILTER: ht_trend" in html and "incl. gate filters" in html
     assert "Effective Params" in html and "threshold = " in html
     assert "<svg" in html                      # price chart rendered
