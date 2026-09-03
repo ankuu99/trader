@@ -2537,9 +2537,9 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 {graph_row}
 <div class="grid">
     {pos_section}
+    {trades_section}
     {scorecard_section}
     {orders_section}
-    {trades_section}
     {signals_section}
     {filtered_section}
     {strategy_section}
