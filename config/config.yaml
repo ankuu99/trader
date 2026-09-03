@@ -1,7 +1,7 @@
 env: live
 candle_timeframe: 15minute
 capital:
-  total: 400000 
+  total: 600000 
   max_risk_per_trade_pct: 5.0
   daily_loss_limit_pct: 10
 risk:
@@ -48,7 +48,9 @@ risk:
   compounding: true            # true → per-stock cap scales with base_capital + strategy cumulative P&L
   default_sl_pct: 3
   risk_reward: 2.5
-  max_capital_per_stock_pct: 10.0   # deploy candidate (validated ONLY paired with meta_label.enabled)
+  max_capital_per_stock_pct: 6.67  # keeps ₹40k/stock at ₹6L — capital scaling A/B 2026-09-03/04 (reviews/capital_500k_ab_20260903.md):
+                                   # slot benefit saturates at ₹6L (₹430.9k / Calmar 3.63 / DD 10.5% vs ₹4L ₹313.8k/3.17/13.1%);
+                                   # 7th lakh adds only +₹18k. Live needs ₹6L actually in Kite (effective_capital = min).
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 scale_in:                     # portfolio-level geometric add-ons (validated 2026-07-07 counterfactual)
@@ -60,7 +62,10 @@ scale_in:                     # portfolio-level geometric add-ons (validated 202
 watchlist:
 #  - NSE:CARRARO        # removed 2026-07-05 — calibration: 15m −₹8.2k, no reliable regime (day "win" = lone ₹1.1k spike @33% WR)
 #  - NSE:MGEL           # removed 2026-07-05 — no longer in NSE instruments (delisted/renamed)
-  - NSE:REDTAPE
+#  - NSE:REDTAPE      # removed 2026-09-04 — watchlist review: negative in every config
+                      # (standalone −₹12k/212t since 2023; stale exits −₹114.6k > entire win side).
+                      # Qualify came back FIT — quant removal only; day-TF re-qualify not ruled out.
+                      # reviews/stock_REDTAPE_20260904.md
   - NSE:THANGAMAYL
   - NSE:CHENNPETRO
   - NSE:CUMMINSIND
@@ -695,12 +700,6 @@ per_stock_params:
       forward_label:
         enabled: true
         min_return_pct: 1.5
-  NSE:REDTAPE:
-    lr_extrema:
-      threshold: 0.88               # calibrated 2026-07-05: ₹7.3k/37t/81% vs ₹5.6k baseline
-      forward_label:
-        enabled: true
-        min_return_pct: 1.0
   NSE:GUJALKALI:
     lr_extrema:
       threshold: 0.95
