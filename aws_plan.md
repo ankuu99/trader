@@ -378,49 +378,42 @@ Full plan, bill breakdown and implications: `infra_cost_plan.md`. This is the ho
 ### Daily cycle (Mon–Fri, IST)
 | Time | What | Where it lives |
 |---|---|---|
-| 06:45 | Instance **started** | GitHub Actions `.github/workflows/ec2-schedule.yml` (cron, best-effort ±15 min) |
+| 06:45 | Instance **started** | EventBridge Scheduler `trader-start` (ap-south-1, tz Asia/Kolkata) |
 | boot | Kite TOTP login → `config/.env` | `scripts/kite-token-refresh.service` (oneshot; `trader.service` waits on it) |
 | boot+1 min | Bot up, positions restored from SQLite + holdings | `trader.service` |
 | 08:15 | Second TOTP login (belt-and-braces) | trader-user cron `--no-restart` |
 | 09:00 | Token hot-reload; **effective-capital cap retried** if Kite margins were down at boot | `main.py pre_market()` |
 | 16:00 | Instance **powered off** (= EC2 stop) | `scripts/trader-poweroff.timer` on the box |
-| 16:30 | Backup stop (no-op if already stopped) | GitHub Actions |
+| 16:00 | Backup stop (no-op if already stopped) | EventBridge Scheduler `trader-stop` |
 | 23:55 daily | Catch-all power-off (covers a box started by hand) | `scripts/trader-poweroff.timer` |
 
 Weekends/NSE holidays: never started on weekends; weekday holidays boot and idle (~₹30).
 Elastic IP, EBS root, host key and Tailscale identity all survive stop/start.
 Dashboard + SSH are unreachable while stopped.
 
-### Why GitHub Actions starts it
-A stopped instance cannot start itself; something outside must call the AWS API.
-The AWS-native way (EventBridge Scheduler) needs an IAM role, and IAM user `abhishek`
-has no IAM/scheduler/cost-explorer rights — only EC2. GitHub Actions is a free
-external cron running one command, `aws ec2 start-instances`, with the key stored as
-repo secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Schedules only run from the
-default branch (`main`) — the workflow must exist on `main`.
-
-### Secrets — what is and isn't public
-- Repo is PUBLIC. The workflow file holds only instance id + region (not secret).
-- No key has ever been in a tracked file or git history (verified 2026-09-05).
-  `config/.env` is git-ignored.
-- GitHub secrets are encrypted, never readable back (API returns name only), masked in
-  logs, and never passed to fork PRs. Only a write-access account can use them —
-  i.e. exposure = "as safe as the GitHub login", not public.
-- The key is the SAME broad EC2 key the Mac uses. Its values were also displayed once
-  in a Claude session transcript on 2026-09-05 (private, not public). **Rotate it** at
-  the next console login (see below).
-- Rotate / re-set the GitHub copy from the Mac:
-  `aws configure get aws_access_key_id | gh secret set AWS_ACCESS_KEY_ID -R ankuu99/trader`
-  `aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY -R ankuu99/trader`
-- GitHub disables scheduled workflows on a public repo after 60 days without commits
-  (it emails first). A commit re-arms it.
+### How the AWS-native schedule is built (all via CLI, 2026-09-05)
+- IAM role `trader-ec2-scheduler`, trusted by `scheduler.amazonaws.com`
+  (condition `aws:SourceAccount`), inline policy: `ec2:StartInstances`/`StopInstances`
+  on `arn:aws:ec2:ap-south-1:789665427100:instance/i-04c3a635ebb6455e2` + Describe*.
+- Schedules (group `default`, flexible window OFF, retry 10× within 1 h):
+  `trader-start` = `cron(45 6 ? * MON-FRI *)` → `aws-sdk:ec2:startInstances`;
+  `trader-stop`  = `cron(0 16 ? * MON-FRI *)` → `aws-sdk:ec2:stopInstances`.
+- Proven end-to-end with one-off `at()` schedules the same night: stop fired at the
+  scheduled second (running → stopped in 26 s); start brought the box up in ~30 s, same
+  EIP, token unit + bot clean.
+- EventBridge Scheduler is free at this volume. Inspect / pause:
+  `aws scheduler list-schedules --region ap-south-1`,
+  `aws scheduler update-schedule --name trader-start --state DISABLED ...`.
+- GitHub Actions was used as the starter for ~35 min on 2026-09-05 (the IAM user had
+  no IAM rights at the time); the workflow and its two repo secrets were deleted the
+  same night once EventBridge was proven. Nothing AWS-related remains on GitHub.
 
 ### Manual control from the Mac
 ```
 ./scripts/ec2.sh status | start | stop | ensure-running
 ```
-`ensure-running` starts only if stopped and waits for SSH. Or use GitHub → Actions →
-"EC2 schedule" → Run workflow → start/stop/status (works from the phone).
+`ensure-running` starts only if stopped and waits for SSH. Uses the default AWS CLI
+profile.
 
 ### Releases
 Unchanged: `./scripts/release.sh release-YYYY-MM-DD`. `deploy.sh` now runs
@@ -429,15 +422,27 @@ any changed systemd units (`trader.service`, `kite-token-refresh.service`,
 `trader-poweroff.{service,timer}`), restarts the bot. An evening-started box powers
 off at 23:55 on its own — no manual stop needed.
 
-### Pending console work (needs root/admin login — the CLI user cannot do IAM)
-1. **Rotate the `abhishek` access key** (create new → update Mac profile + the two
-   GitHub secrets → delete old).
-2. Preferably **go AWS-native**: IAM role for `scheduler.amazonaws.com` with
-   `ec2:StartInstances`/`StopInstances` on `i-04c3a635ebb6455e2`; two EventBridge
-   Scheduler rules, timezone Asia/Kolkata: `cron(45 6 ? * MON-FRI *)` start,
-   `cron(0 16 ? * MON-FRI *)` stop. Then delete the GitHub workflow + secrets.
-3. A scoped IAM user (Start/Stop/Describe on this instance only) for the Mac's
-   `ec2.sh`, replacing the broad key.
+### Keys and permissions — housekeeping still owed (2026-09-05)
+- IAM user `abhishek` has **`AdministratorAccess` temporarily attached** (added by the
+  owner in the console for this work). Detach it once the two items below are done:
+  `aws iam detach-user-policy --user-name abhishek --policy-arn arn:aws:iam::aws:policy/AdministratorAccess`
+- **Rotate `abhishek`'s access key** `AKIA3PW52F2OCFH5H77J`: its value was displayed once
+  in a Claude session transcript on 2026-09-05 (private, not public) and briefly held as
+  a GitHub secret (deleted). The older key `AKIA3PW52F2OFHTDGIGF` (last used 2025-07-21)
+  is dead — delete it first (IAM allows 2 keys per user). Sequence from the Mac:
+  ```
+  aws iam delete-access-key --user-name abhishek --access-key-id AKIA3PW52F2OFHTDGIGF
+  aws iam create-access-key --user-name abhishek > ~/.aws/abhishek-new.json && chmod 600 ~/.aws/abhishek-new.json
+  aws configure set aws_access_key_id     "$(python3 -c "import json;print(json.load(open('$HOME/.aws/abhishek-new.json'))['AccessKey']['AccessKeyId'])")"
+  aws configure set aws_secret_access_key "$(python3 -c "import json;print(json.load(open('$HOME/.aws/abhishek-new.json'))['AccessKey']['SecretAccessKey'])")"
+  aws sts get-caller-identity          # must succeed on the NEW key (wait ~10 s)
+  aws iam delete-access-key --user-name abhishek --access-key-id AKIA3PW52F2OCFH5H77J
+  rm ~/.aws/abhishek-new.json
+  ```
+- Optional: a scoped user `trader-ec2-ops` (Start/Stop/Describe on this instance only —
+  same policy as the scheduler role) for `ec2.sh`, so the Mac's day-to-day key isn't
+  EC2-full. Claude's attempt to create it was blocked by the terminal's permission
+  classifier; do it in the console or via `aws iam create-user` + `put-user-policy`.
 
 ### Verification checklist (first week)
 - [ ] Telegram startup message ~06:47 each weekday

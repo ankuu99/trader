@@ -78,17 +78,15 @@ Phase 2 t4g.micro ≈ $8.3 / ₹720; Phase 2 with 8 GB root ≈ $6.9 / ₹600. P
 **Status 2026-09-05: IMPLEMENTED (see "As built" below) — the console/EventBridge steps
 were replaced because IAM user `abhishek` cannot create roles or schedules.**
 
-**As built:** stop = on-box `scripts/trader-poweroff.timer` (16:00 IST Mon–Fri + 23:55
-daily catch-all → `systemctl poweroff`; instance-initiated shutdown behaviour is `stop`,
-no AWS rights needed). Start = GitHub Actions `.github/workflows/ec2-schedule.yml`
-(06:45 IST Mon–Fri `ec2:StartInstances` with the existing user's keys as repo secrets;
-also a 16:30 IST backup stop and a manual start/stop/status button). Boot-time token =
-`scripts/kite-token-refresh.service`. Caveats: GitHub cron is best-effort (minutes late
-at busy hours — harmless, nothing needs the box before 08:15); GitHub disables schedules
-on a public repo after 60 days without commits (it emails first); the repo secret is a
-broad EC2 key — a scoped IAM user (Start/Stop/Describe on this instance only) is a
-2-minute console job for later. `trader-restart.timer` (weekly) disabled as redundant.
-Target: same instance, off 16:00→07:00 IST Mon–Fri. Expected bill ≈ $10.4 / ₹900.
+**As built (final, same night):** stop = on-box `scripts/trader-poweroff.timer` (16:00 IST
+Mon–Fri + 23:55 daily catch-all → `systemctl poweroff`; instance-initiated shutdown
+behaviour is `stop`). Start = **EventBridge Scheduler** `trader-start` (06:45 IST Mon–Fri,
+role `trader-ec2-scheduler`), with `trader-stop` at 16:00 as backup — created via CLI after
+the owner temporarily attached AdministratorAccess to IAM user `abhishek`; proven with
+one-off `at()` schedules (stop 26 s, start ~30 s, same EIP). A GitHub Actions starter was
+used for ~35 min in between and then deleted (workflow + secrets). Boot-time token =
+`scripts/kite-token-refresh.service`. `trader-restart.timer` (weekly) disabled. Owed:
+rotate `abhishek`'s key, detach AdministratorAccess — see `aws_plan.md`.
 
 **What exists today (verified 2026-09-05):**
 - There is **no boot-time token refresh** — only the 08:15 IST cron
