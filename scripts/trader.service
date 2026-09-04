@@ -1,5 +1,7 @@
 [Unit]
 Description=Python Trading Bot
+# StartLimit* are [Unit] keys (they were silently ignored under [Service]).
+StartLimitIntervalSec=0
 # kite-token-refresh.service: boot-time TOTP login (the box boots fresh every
 # trading morning at 07:00 IST). Wants= not Requires=: if the login fails the bot
 # must still start and crash-loop until a refresh lands (08:15 cron / retries).
@@ -17,7 +19,6 @@ ExecStart=/opt/trader/.venv/bin/python main.py
 # the service must keep retrying and self-heal rather than hit a start limit.
 Restart=always
 RestartSec=60
-StartLimitIntervalSec=0
 # SIGTERM is a hard kill for main.py (only KeyboardInterrupt is handled); all
 # state is persisted to SQLite as it happens, so 30 s is plenty.
 TimeoutStopSec=30

@@ -14,6 +14,8 @@
 
 [Unit]
 Description=Kite access token refresh via TOTP (boot-time)
+# StartLimit* are [Unit] keys (they were silently ignored under [Service]).
+StartLimitIntervalSec=0
 After=network-online.target time-sync.target
 Wants=network-online.target
 
@@ -26,7 +28,6 @@ WorkingDirectory=/opt/trader
 ExecStart=/opt/trader/.venv/bin/python scripts/kite_totp_refresh.py --no-restart
 Restart=on-failure
 RestartSec=120
-StartLimitIntervalSec=0
 TimeoutStartSec=180
 
 Environment=PYTHONUNBUFFERED=1
