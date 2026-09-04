@@ -368,3 +368,81 @@ After initial setup and after `refresh-token.sh`, verify:
 | Disk growth | — | ~70 MB logs (rotating) + ~1 MB/mo SQLite |
 
 **No code changes to the project are required.** This is purely infrastructure setup.
+
+---
+
+## Operations since 2026-09-05 — scheduled stop/start (cost cut ₹1,660 → ~₹900/mo)
+
+Full plan, bill breakdown and implications: `infra_cost_plan.md`. This is the how-to.
+
+### Daily cycle (Mon–Fri, IST)
+| Time | What | Where it lives |
+|---|---|---|
+| 06:45 | Instance **started** | GitHub Actions `.github/workflows/ec2-schedule.yml` (cron, best-effort ±15 min) |
+| boot | Kite TOTP login → `config/.env` | `scripts/kite-token-refresh.service` (oneshot; `trader.service` waits on it) |
+| boot+1 min | Bot up, positions restored from SQLite + holdings | `trader.service` |
+| 08:15 | Second TOTP login (belt-and-braces) | trader-user cron `--no-restart` |
+| 09:00 | Token hot-reload; **effective-capital cap retried** if Kite margins were down at boot | `main.py pre_market()` |
+| 16:00 | Instance **powered off** (= EC2 stop) | `scripts/trader-poweroff.timer` on the box |
+| 16:30 | Backup stop (no-op if already stopped) | GitHub Actions |
+| 23:55 daily | Catch-all power-off (covers a box started by hand) | `scripts/trader-poweroff.timer` |
+
+Weekends/NSE holidays: never started on weekends; weekday holidays boot and idle (~₹30).
+Elastic IP, EBS root, host key and Tailscale identity all survive stop/start.
+Dashboard + SSH are unreachable while stopped.
+
+### Why GitHub Actions starts it
+A stopped instance cannot start itself; something outside must call the AWS API.
+The AWS-native way (EventBridge Scheduler) needs an IAM role, and IAM user `abhishek`
+has no IAM/scheduler/cost-explorer rights — only EC2. GitHub Actions is a free
+external cron running one command, `aws ec2 start-instances`, with the key stored as
+repo secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Schedules only run from the
+default branch (`main`) — the workflow must exist on `main`.
+
+### Secrets — what is and isn't public
+- Repo is PUBLIC. The workflow file holds only instance id + region (not secret).
+- No key has ever been in a tracked file or git history (verified 2026-09-05).
+  `config/.env` is git-ignored.
+- GitHub secrets are encrypted, never readable back (API returns name only), masked in
+  logs, and never passed to fork PRs. Only a write-access account can use them —
+  i.e. exposure = "as safe as the GitHub login", not public.
+- The key is the SAME broad EC2 key the Mac uses. Its values were also displayed once
+  in a Claude session transcript on 2026-09-05 (private, not public). **Rotate it** at
+  the next console login (see below).
+- Rotate / re-set the GitHub copy from the Mac:
+  `aws configure get aws_access_key_id | gh secret set AWS_ACCESS_KEY_ID -R ankuu99/trader`
+  `aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY -R ankuu99/trader`
+- GitHub disables scheduled workflows on a public repo after 60 days without commits
+  (it emails first). A commit re-arms it.
+
+### Manual control from the Mac
+```
+./scripts/ec2.sh status | start | stop | ensure-running
+```
+`ensure-running` starts only if stopped and waits for SSH. Or use GitHub → Actions →
+"EC2 schedule" → Run workflow → start/stop/status (works from the phone).
+
+### Releases
+Unchanged: `./scripts/release.sh release-YYYY-MM-DD`. `deploy.sh` now runs
+`ec2.sh ensure-running` first (starts a stopped box), checks out the tag, installs
+any changed systemd units (`trader.service`, `kite-token-refresh.service`,
+`trader-poweroff.{service,timer}`), restarts the bot. An evening-started box powers
+off at 23:55 on its own — no manual stop needed.
+
+### Pending console work (needs root/admin login — the CLI user cannot do IAM)
+1. **Rotate the `abhishek` access key** (create new → update Mac profile + the two
+   GitHub secrets → delete old).
+2. Preferably **go AWS-native**: IAM role for `scheduler.amazonaws.com` with
+   `ec2:StartInstances`/`StopInstances` on `i-04c3a635ebb6455e2`; two EventBridge
+   Scheduler rules, timezone Asia/Kolkata: `cron(45 6 ? * MON-FRI *)` start,
+   `cron(0 16 ? * MON-FRI *)` stop. Then delete the GitHub workflow + secrets.
+3. A scoped IAM user (Start/Stop/Describe on this instance only) for the Mac's
+   `ec2.sh`, replacing the broad key.
+
+### Verification checklist (first week)
+- [ ] Telegram startup message ~06:47 each weekday
+- [ ] Journal: `kite-token-refresh` finished → `Started trader` → `Live position restored`
+- [ ] 09:00 log shows `Effective capital set (pre_market)` if the boot-time margins call failed
+- [ ] 15:35 daily-P&L Telegram arrives; box gone by 16:01 (`./scripts/ec2.sh status`)
+- [ ] `public-ipv4` unchanged; Kite orders fill
+- [ ] October bill ≈ ₹900
