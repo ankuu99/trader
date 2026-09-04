@@ -154,6 +154,16 @@ Target: same instance, off 16:00→07:00 IST Mon–Fri. Expected bill ≈ $10.4 
 7. **Rollback:** disable the two scheduler rules (or `aws ec2 start-instances` from the
    Mac); the box is 24/7 again with no other change.
 
+**Rehearsal 2026-09-05 01:26 IST (Sat):** `ec2.sh stop` 32 s → `ec2.sh start` 20 s → same EIP;
+boot → `kite-token-refresh` done in 5 s → `trader` started 0 s later → 9 positions restored
+with held_bars/peak/max_gain 75 s after power-on; Tailscale up; next power-off 23:55.
+**Found:** `kite.margins()` fails before Zerodha's RMS is up (`GetRmsLimitsResponse Failed :
+UNKNOWN_REQUEST` at 01:26 IST; it worked at 00:53 Thu and 08:40 Mon). Old code then skipped
+BOTH the cumulative-P&L seed and the effective-capital cap → the day would have traded on the
+₹6L config ceiling. Fixed same night: P&L seeded from SQLite unconditionally; margins cap
+retried in `pre_market()` at 09:00 (`_fetch_kite_cash` / `_apply_effective_capital`).
+Watch the Monday 09:00 log for `Effective capital set (pre_market)` if the 06:45 fetch fails.
+
 **Implications accepted with Phase 1:**
 - **Daily restart is back.** This reverses the July decision for weekly restarts
   (memory `project_weekly_restart_architecture`): the live retrain cadence is again

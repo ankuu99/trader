@@ -62,21 +62,32 @@ def main():
     risk = RiskManager()
 
     _kite_cash: float | None = None
-    if config.env == "live":
+
+    def _fetch_kite_cash() -> float | None:
+        """Free equity cash from Kite margins, or None if the call fails.
+        Zerodha's RMS is offline overnight/weekends (observed 01:26 IST Sat
+        2026-09-05: "GetRmsLimitsResponse Failed : UNKNOWN_REQUEST"); the box
+        now boots at ~06:45 IST, so a startup failure is expected and is
+        retried by pre_market() at 09:00."""
         try:
             margins = kite.margins(segment="equity")
-            _kite_cash = float(margins.get("available", {}).get("cash", 0.0))
-            persisted_pnl = store.get_state("cumulative_pnl", 0.0)
-            # Seed lifetime realised P&L untouched. The buying-power cap is applied
-            # separately, after position reconciliation, via set_effective_capital()
-            # — so a config ceiling above available cash never corrupts cumulative P&L.
-            risk.seed_cumulative_pnl(persisted_pnl)
-            logger.info(
-                "Cumulative P&L seeded | persisted_pnl=%.2f | kite_cash=%.0f",
-                persisted_pnl, _kite_cash,
-            )
+            return float(margins.get("available", {}).get("cash", 0.0))
         except Exception as e:
-            logger.warning("Failed to fetch Kite margins — cumulative P&L not seeded: %s", e)
+            logger.warning("Failed to fetch Kite margins: %s", e)
+            return None
+
+    if config.env == "live":
+        # Seed lifetime realised P&L from SQLite — independent of the margins call.
+        # The buying-power cap is applied separately, after position reconciliation,
+        # via set_effective_capital() — so a config ceiling above available cash
+        # never corrupts cumulative P&L.
+        persisted_pnl = store.get_state("cumulative_pnl", 0.0)
+        risk.seed_cumulative_pnl(persisted_pnl)
+        _kite_cash = _fetch_kite_cash()
+        logger.info(
+            "Cumulative P&L seeded | persisted_pnl=%.2f | kite_cash=%s",
+            persisted_pnl, f"{_kite_cash:.0f}" if _kite_cash is not None else "unavailable",
+        )
     orders = OrderManager(
         kite=kite, store=store, mode=config.env,
         position_lookup=lambda: list(risk._open_positions.keys()),
@@ -450,29 +461,38 @@ def main():
                 instrument, qty, estimated_cost,
             )
 
+    def _apply_effective_capital(kite_cash: float, source: str = "startup"):
         # Cap buying power at real account equity (free cash + already-deployed
-        # holdings), bounded by the config ceiling. Run here — after reconciliation —
+        # holdings), bounded by the config ceiling. Run after reconciliation —
         # so capital_deployed is known and not double-counted (capital_available
         # already subtracts it). Cumulative P&L is left intact.
-        if _kite_cash is not None:
-            config_ceiling = config.total_capital
-            account_equity = _kite_cash + risk.capital_deployed
-            effective = min(config_ceiling, account_equity)
-            config.set_effective_capital(effective)
-            logger.info(
-                "Effective capital set | config_cap=%.0f account_equity=%.0f "
-                "(cash=%.0f + deployed=%.0f) effective=%.0f",
-                config_ceiling, account_equity, _kite_cash,
-                risk.capital_deployed, effective,
+        config_ceiling = config.total_capital
+        account_equity = kite_cash + risk.capital_deployed
+        effective = min(config_ceiling, account_equity)
+        config.set_effective_capital(effective)
+        logger.info(
+            "Effective capital set (%s) | config_cap=%.0f account_equity=%.0f "
+            "(cash=%.0f + deployed=%.0f) effective=%.0f",
+            source, config_ceiling, account_equity, kite_cash,
+            risk.capital_deployed, effective,
+        )
+        # Scale-in budget sits ON TOP of base capital — warn if the account
+        # can't actually cover base + budget (add-on orders would fail at Kite).
+        if config.scale_in_enabled and account_equity < effective + config.scale_in_budget:
+            logger.warning(
+                "Scale-in budget not fully covered by account equity | "
+                "equity=%.0f < base=%.0f + budget=%.0f — add-ons may be rejected by broker",
+                account_equity, effective, config.scale_in_budget,
             )
-            # Scale-in budget sits ON TOP of base capital — warn if the account
-            # can't actually cover base + budget (add-on orders would fail at Kite).
-            if config.scale_in_enabled and account_equity < effective + config.scale_in_budget:
-                logger.warning(
-                    "Scale-in budget not fully covered by account equity | "
-                    "equity=%.0f < base=%.0f + budget=%.0f — add-ons may be rejected by broker",
-                    account_equity, effective, config.scale_in_budget,
-                )
+
+    if config.env == "live" and _kite_cash is not None:
+        _apply_effective_capital(_kite_cash)
+    elif config.env == "live":
+        logger.warning(
+            "Effective capital NOT capped at startup (Kite margins unavailable) — "
+            "running on config capital %.0f until pre_market retries at 09:00",
+            config.total_capital,
+        )
 
     # Dashboard (read-only UI)
     if config.ui_enabled:
@@ -796,7 +816,15 @@ def main():
     bot_state.reload_token = _reload_kite_token
 
     def pre_market():
+        nonlocal _kite_cash
         _reload_kite_token()
+        if config.env == "live" and _kite_cash is None:
+            # Boot-time margins fetch failed (RMS offline before ~07:00 IST) —
+            # retry now that the token is fresh and Zerodha's systems are up.
+            cash = _fetch_kite_cash()
+            if cash is not None:
+                _kite_cash = cash
+                _apply_effective_capital(cash, source="pre_market")
         logger.info("Pre-market: warming up candle cache")
         for symbol in valid_watchlist:
             token = symbol_to_token[symbol]
