@@ -497,8 +497,9 @@ Functions: `notify_order_filled`, `notify_order_rejected`, `notify_daily_pnl`, `
 - Service: `systemd` unit at `scripts/trader.service`, managed as `trader` user
 - Deploy: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo systemctl restart trader"`
 - Deploy with deps change: `ssh trader "cd /opt/trader && sudo -u trader git pull && sudo -u trader .venv/bin/pip install -r requirements.txt && sudo systemctl restart trader"`
-- Token refresh: automated via TOTP cron (runs daily 08:15 IST). Manual fallback: `python scripts/kite_auth_server.py` on EC2
-- KITE_ACCESS_TOKEN expires midnight IST — auto-refreshed by cron at 02:45 UTC (08:15 IST) via `scripts/kite_totp_refresh.py`
+- **The box is OFF outside trading hours (since 2026-09-05, cost: ₹1,660 → ~₹900/mo).** Started 06:45 IST Mon–Fri by the GitHub Actions workflow `.github/workflows/ec2-schedule.yml` (repo secrets `AWS_ACCESS_KEY_ID/SECRET`); powered off by the on-box `scripts/trader-poweroff.timer` at 16:00 IST Mon–Fri and 23:55 daily (catch-all), with a 16:30 IST backup stop from the workflow. **Evening release?** Actions → "EC2 schedule" → Run workflow → `start`, deploy, then `stop` (or let 23:55 do it). SSH/dashboard are unreachable while stopped. Elastic IP, EBS and host key survive stop/start. Plan + implications: `infra_cost_plan.md`
+- Token refresh: **boot-time** `scripts/kite-token-refresh.service` (oneshot, `RemainAfterExit`, retried every 120 s on failure; `trader.service` is `After=`/`Wants=` it) — every morning is a fresh boot. The 08:15 IST TOTP cron (`--no-restart`) stays as the independent second attempt; the bot hot-reloads `config/.env` at 09:00 either way. Manual fallback: `python scripts/kite_auth_server.py` on EC2
+- KITE_ACCESS_TOKEN expires midnight IST — `scripts/kite_totp_refresh.py` does the TOTP login (boot unit + 08:15 cron)
 
 ---
 

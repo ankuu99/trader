@@ -102,7 +102,7 @@ these ledger/execution fixes the ONLY live path to capturing the rejected dips:
   async (`callFromThread`), so `is_connected()` is still False on the second call
   and it double-connects. The watchdog is the right home for this too.
 
-## Infra cost — leaving AWS free tier (raised 2026-08-28) — PLAN: `infra_cost_plan.md`
+## Infra cost — leaving AWS free tier (raised 2026-08-28) — Phase 1 IMPLEMENTED 2026-09-05 (box off 16:00→06:45 IST; see `infra_cost_plan.md` "As built"). Aug bill $19.18/₹1,660 → expect ~₹900. Later: scoped IAM user for the GitHub secret; Phase 2 (t4g) only worth ~₹180/mo more
 - Today: t2.micro x86 (ap-south-1b), 20 GB EBS, Elastic IP 13.202.187.191,
   Tailscale for SSH/dashboard, fail2ban, TOTP cron 08:15 IST. Bot RSS ~254 MB.
   Est. on-demand: ~$9 compute + ~$3.6 public IPv4 (charged since Feb-2024, even

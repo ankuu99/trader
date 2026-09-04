@@ -1,0 +1,45 @@
+# Boot-time Kite token refresh — runs ONCE per boot, before trader.service.
+#
+# Why: the box is stopped 16:00→07:00 IST on weekdays (see infra_cost_plan.md),
+# so every morning is a fresh boot on yesterday's (midnight-expired) token.
+# Without this, trader.service crash-loops every 60 s until the 08:15 cron.
+#
+# Install (as root on EC2):
+#   sudo cp scripts/kite-token-refresh.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable kite-token-refresh.service
+# trader.service carries After=/Wants= on this unit. RemainAfterExit keeps a
+# successful run "active" so a later `systemctl restart trader` does NOT trigger
+# another Zerodha login; a FAILED run is retried by Restart= below, and the 08:15
+# cron (`--no-restart`) remains the independent second attempt.
+
+[Unit]
+Description=Kite access token refresh via TOTP (boot-time)
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=trader
+Group=trader
+WorkingDirectory=/opt/trader
+ExecStart=/opt/trader/.venv/bin/python scripts/kite_totp_refresh.py --no-restart
+Restart=on-failure
+RestartSec=120
+StartLimitIntervalSec=0
+TimeoutStartSec=180
+
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Kolkata
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trader/config /opt/trader/logs /opt/trader/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kite-token-refresh
+
+[Install]
+WantedBy=multi-user.target

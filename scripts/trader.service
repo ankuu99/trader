@@ -1,7 +1,10 @@
 [Unit]
 Description=Python Trading Bot
-After=network-online.target
-Wants=network-online.target
+# kite-token-refresh.service: boot-time TOTP login (the box boots fresh every
+# trading morning at 07:00 IST). Wants= not Requires=: if the login fails the bot
+# must still start and crash-loop until a refresh lands (08:15 cron / retries).
+After=network-online.target kite-token-refresh.service
+Wants=network-online.target kite-token-refresh.service
 
 [Service]
 Type=simple
@@ -15,6 +18,9 @@ ExecStart=/opt/trader/.venv/bin/python main.py
 Restart=always
 RestartSec=60
 StartLimitIntervalSec=0
+# SIGTERM is a hard kill for main.py (only KeyboardInterrupt is handled); all
+# state is persisted to SQLite as it happens, so 30 s is plenty.
+TimeoutStopSec=30
 
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=Asia/Kolkata

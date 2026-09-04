@@ -52,53 +52,126 @@ Verify these numbers against the AWS Pricing Calculator for ap-south-1 before
 committing — they are from memory and the IPv4 charge is the one most likely to
 have moved.
 
+**Actual bill, August 2026 (screenshot `reviews/aws_bill_aug2026.png`, 2026-09-05): $19.18
+≈ ₹1,660 (₹86.5/$).**
+
+| Line | $ | Maps to |
+|---|---|---|
+| EC2 – Compute | 10.14 | t2.micro × 744 h (plan said 9.2) |
+| Virtual Private Cloud | 4.10 | public IPv4 on the EIP (plan said 3.6) |
+| EC2 – Other | 2.01 | 20 GB gp3 + small data transfer (plan said 1.7) |
+| Tax | 2.93 | 18% GST on 16.25 |
+
+Every line landed ~10% above the estimate; the model is right, the rates were stale.
+Inventory confirmed read-only via `aws ec2 describe-*`: one t2.micro, one 20 GB gp3, one
+EIP, no snapshots, nothing in other regions. **Compute is the only lever** (₹1,035/mo
+incl. GST); IPv4 + EBS are a ₹625/mo floor that survives a stopped instance (an EIP on a
+stopped box is still billed). Re-derived targets incl. GST: Phase 1 ≈ $10.4 / ₹900;
+Phase 2 t4g.micro ≈ $8.3 / ₹720; Phase 2 with 8 GB root ≈ $6.9 / ₹600. Phase 1 is
+~80% of the achievable saving. The IAM user `abhishek` lacks `ce:GetCostAndUsage` /
+`budgets:ViewBudget`, so Cost Explorer must be read from the console.
+
 ## Plan
 
 ### Phase 1 — Scheduled stop/start (biggest win, no migration)
 
-Target: same instance, off 16:00→07:00 IST on weekdays.
+**Status 2026-09-05: IMPLEMENTED (see "As built" below) — the console/EventBridge steps
+were replaced because IAM user `abhishek` cannot create roles or schedules.**
 
-1. **Make the boot sequence token-safe.** Today the box boots on yesterday's token and
-   `main.py` would crash-loop (`Restart=always`, 60 s) until the 08:15 cron writes a
-   fresh one. Fix in the unit, not in cron:
-   - Add `scripts/kite-token-refresh.service` (oneshot, `User=trader`, runs
-     `kite_totp_refresh.py --no-restart`) and make `trader.service`
-     `After=kite-token-refresh.service` + `Wants=kite-token-refresh.service`.
-     Alternative: `ExecStartPre=` on `trader.service` — simpler, but a TOTP failure
-     then blocks the bot start with no separate log; prefer the oneshot unit.
-   - Keep the 08:15 cron as a belt-and-braces second refresh (harmless: the bot
-     hot-reloads at 09:00 and `LiveFeed.reconnect()` is self-healing as of `588befd`).
-   - TOTP refresh needs the clock to be right at boot — confirm `chrony`/`systemd-timesyncd`
-     is active (TOTP drift = login failure).
-2. **Make shutdown clean.** `systemctl stop trader` sends SIGTERM; confirm `main.py`
-   handles it (flush, `feed.stop()`, close SQLite). Add `TimeoutStopSec=30` to the unit.
-   Post-market (15:35) must have completed — a 16:00 stop leaves 25 min; do not move
-   the stop earlier than 15:45.
-3. **Schedule.** Amazon EventBridge Scheduler, two rules on the instance id, timezone
-   `Asia/Kolkata`, `cron(0 7 ? * MON-FRI *)` → `ec2:StartInstances`,
-   `cron(0 16 ? * MON-FRI *)` → `ec2:StopInstances`. Needs a small IAM role for the
-   scheduler. Free tier for EventBridge Scheduler covers this many invocations
-   indefinitely.
-   - Holiday skipping (later, optional): a Lambda that reads the NSE holiday list and
-     skips the 07:00 start, or simply pre-seed one-off "disable" rules per holiday.
-     Not worth it in v1 (~$0.06/holiday-day).
-4. **Verify the EIP survives stop/start.** It does for EIPs (not for auto-assigned
-   IPs) — check once after the first cycle that `public-ipv4` metadata is unchanged
-   and Kite login/orders still work.
-5. **Dashboard while stopped.** The Tailscale node is off overnight → dashboard
-   unreachable 16:00–07:00. Options: (a) accept; (b) have post-market write a static
-   HTML snapshot of `/` to S3 (public-read, or behind a signed URL) so the day's
-   closing state is viewable on the phone. Start with (a).
-6. **Daily restart consequences** (this reverts the weekly-restart direction chosen for
-   retrain cadence — see memory `project_weekly_restart_architecture`):
-   - Live LRExtrema retrains from warm-up every morning; ~25 live bars/day of live
-     cadence. Either accept (the 09:00 warm-up already replays 400 d of candles so the
-     model is not "cold", only its live-tail is) or persist per-stock model/position
-     state across restarts. Decide after observing a week of Phase 1.
-   - The 2026-08-28 reconnect bug class is moot here (fresh process + fresh token
-     each morning), but keep the fix — it protects the manual-restart-at-night case.
-7. **Rollback:** disable the two scheduler rules; the box is back to 24/7 with no other
-   change.
+**As built:** stop = on-box `scripts/trader-poweroff.timer` (16:00 IST Mon–Fri + 23:55
+daily catch-all → `systemctl poweroff`; instance-initiated shutdown behaviour is `stop`,
+no AWS rights needed). Start = GitHub Actions `.github/workflows/ec2-schedule.yml`
+(06:45 IST Mon–Fri `ec2:StartInstances` with the existing user's keys as repo secrets;
+also a 16:30 IST backup stop and a manual start/stop/status button). Boot-time token =
+`scripts/kite-token-refresh.service`. Caveats: GitHub cron is best-effort (minutes late
+at busy hours — harmless, nothing needs the box before 08:15); GitHub disables schedules
+on a public repo after 60 days without commits (it emails first); the repo secret is a
+broad EC2 key — a scoped IAM user (Start/Stop/Describe on this instance only) is a
+2-minute console job for later. `trader-restart.timer` (weekly) disabled as redundant.
+Target: same instance, off 16:00→07:00 IST Mon–Fri. Expected bill ≈ $10.4 / ₹900.
+
+**What exists today (verified 2026-09-05):**
+- There is **no boot-time token refresh** — only the 08:15 IST cron
+  (`45 2 * * 1-5 kite_totp_refresh.py --no-restart`) plus the 09:00 `pre_market`
+  hot-reload. The earlier daily flow was *refresh-then-restart*, never
+  *refresh-at-boot*. The box has not rebooted since launch (uptime 139 d); the only
+  boot in the journal (2026-04-18) crash-looped on a missing `.env`.
+- `trader.service` has `Restart=always`/`RestartSec=60`; `create_kite()` raises on an
+  invalid token, so a 07:00 boot on yesterday's token would crash-loop every 60 s
+  until 08:15 (≈75 failed starts, each one a Kite login attempt).
+- **Shutdown is already a hard kill.** `main.py` only catches `KeyboardInterrupt`;
+  SIGTERM (what `systemctl stop` / EC2 stop send) terminates without running the
+  `finally`. Every release restart for five months has been exactly this, and it is
+  safe because all state is written to SQLite as it happens: open positions, add-on
+  lots, `<sym>.peak_close`, `<sym>.max_gain_pct`, `cumulative_pnl`, 15m candles.
+  The 2026-09-03 restart log shows it: `Live position restored | CUMMINSIND x7 |
+  held_bars=26 peak=5593 max_gain=2.59%`.
+- Startup cost: candle-cache refresh + warm-up ≈ 1–3 min (positions seeded 52 s after
+  `Started`). Box has 331 MB free with the bot running; a fresh boot has more.
+- `timedatectl`: NTP synchronised (TOTP needs this at boot — Ubuntu's timesyncd is on).
+- Last scheduled job of the day is `post_market` at 15:35 (holdings reconcile,
+  benchmark refresh, daily-P&L Telegram); nothing runs after it. 16:00 stop is safe.
+- `trader-restart.timer` (Mon 08:40) becomes redundant under daily boots — disable it.
+- IAM user `abhishek` **can** `ec2:StopInstances` / `StartInstances` on this instance
+  (dry-run passed) but has **no** IAM, EventBridge Scheduler, Cost Explorer or Budgets
+  rights → the scheduler role + rules must be created from the console as the
+  account owner. Manual rehearsal from the Mac needs nothing new.
+
+**Steps:**
+
+1. **Boot-time token refresh unit (repo change, no Python change).**
+   `scripts/kite-token-refresh.service`: `Type=oneshot`, `User=trader`,
+   `After=network-online.target time-sync.target`, `ExecStart=.venv/bin/python
+   scripts/kite_totp_refresh.py --no-restart`, logs to journal. In `trader.service`
+   add `After=kite-token-refresh.service` + `Wants=kite-token-refresh.service`
+   (Wants, not Requires: if Zerodha login fails at boot the bot must still start and
+   crash-loop until the 08:15 cron's second attempt — that is the existing self-heal).
+   A oneshot runs once per boot, unlike `ExecStartPre=`, which would re-login on every
+   crash-restart. Keep the 08:15 cron as belt-and-braces; the bot hot-reloads
+   whatever is in `.env` at 09:00 regardless.
+   Open point to confirm on day 1: whether the 08:15 re-login invalidates the 07:00
+   token. Harmless either way (nothing trades before 09:00 and `pre_market`
+   hot-reloads first), but the dashboard token badge at ~08:20 will tell.
+2. **Optional hygiene:** a SIGTERM handler in `main.py` that raises `KeyboardInterrupt`
+   so `feed.stop()`/`scheduler.stop()` run, and `TimeoutStopSec=30` in the unit.
+   Not a prerequisite — see "shutdown is already a hard kill" above.
+3. **Deploy** via `release.sh`, then on the box: copy the new unit to
+   `/etc/systemd/system/`, `daemon-reload`, `enable kite-token-refresh.service`,
+   `disable --now trader-restart.timer`.
+4. **Rehearse once by hand, after 16:00 on a trading day, from the Mac:**
+   `aws ec2 stop-instances` → wait → `start-instances`. Check: same `13.202.187.191`,
+   journal shows `kite-token-refresh` → `Started trader` → positions restored →
+   dashboard token VALID via Tailscale. This is the go/no-go for step 5.
+5. **Schedule (console, account owner):** IAM role trusted by
+   `scheduler.amazonaws.com` with `ec2:StartInstances`/`ec2:StopInstances` on this
+   instance ARN; two EventBridge Scheduler rules, timezone `Asia/Kolkata`,
+   `cron(0 7 ? * MON-FRI *)` → start, `cron(0 16 ? * MON-FRI *)` → stop.
+   EventBridge Scheduler is free at this volume. 07:00 rather than 08:00 buys a
+   75-min buffer for a failed boot-time login (the 08:15 cron retries) for ≈ ₹28/mo.
+6. **First-week watch:** Telegram startup message each morning ~07:03; token badge at
+   08:20; 15:35 daily P&L arrives before 16:00; positions match Kite holdings;
+   Cost Explorer in October in the ₹900 band.
+7. **Rollback:** disable the two scheduler rules (or `aws ec2 start-instances` from the
+   Mac); the box is 24/7 again with no other change.
+
+**Implications accepted with Phase 1:**
+- **Daily restart is back.** This reverses the July decision for weekly restarts
+  (memory `project_weekly_restart_architecture`): the live retrain cadence is again
+  capped at ~25 bars/day because every morning's warm-up retrains from scratch. The
+  model is not "cold" — warm-up replays the same persisted candle history (400 d 15m,
+  725 d for day-TF names) — but backtests at `retrain_every` > 25 stay not-quite
+  live-faithful. If that ever matters, the fix is per-stock model/state persistence,
+  not keeping the box on.
+- **Dashboard and SSH are off 16:00–07:00.** No evening phone check. Post-market
+  Telegram is the closing-state record. (An S3 snapshot page is possible later.)
+- **NSE holidays** on weekdays: box boots, bot idles, post-market reconciles holdings
+  against itself, stops at 16:00. ≈ ₹30 each, ~15/yr. Not worth a holiday calendar
+  in v1. Weekends: never started.
+- **T2 CPU credits** are forfeited on stop; launch credits cover the ~2-min warm-up.
+- **The 08:30 token-reminder Telegram** becomes noise (boot already refreshed).
+- Elastic IP, EBS root, host key, Tailscale node identity all survive stop/start.
+  Tailscale reconnects at boot; `release.sh` / `/live-review` / `/missed-opportunities`
+  unchanged during the day.
 
 ### Phase 2 — arm64 (t4g.micro)
 
@@ -146,8 +219,10 @@ in-place resize).
 - Does the registered-IP requirement also cover the **Tailscale** path? (No — Tailscale
   is only used inbound for SSH/dashboard; orders go out via the EIP. Confirm the SG
   still allows nothing inbound on the public IP except SSH 9654.)
-- Is `main.py`'s SIGTERM handling actually clean today, or does the 60 s
-  `Restart=always` mask a hard kill? Check before Phase 1 step 2.
+- ~~Is `main.py`'s SIGTERM handling clean?~~ Answered 2026-09-05: it is a hard kill and
+  has been for every release restart; safe because state is persisted as it happens.
+- Does a second TOTP login (08:15 cron) invalidate the 07:00 boot token? Observe on
+  day 1 via the dashboard token badge; harmless either way.
 - Do we want the S3 snapshot dashboard (Phase 1 step 5b) at all, or is the phone check
   only ever during market hours?
 
