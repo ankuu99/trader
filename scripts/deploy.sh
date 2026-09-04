@@ -28,7 +28,7 @@ echo "=== Checking for requirements changes ==="
 ssh "$EC2_HOST" "sudo -u trader /opt/trader/.venv/bin/pip install --no-cache-dir -r /opt/trader/requirements.txt 2>&1 | grep -E 'Installing|already satisfied|Successfully' | tail -5"
 
 echo "=== Installing systemd units (no-op unless changed) ==="
-ssh "$EC2_HOST" "cd /opt/trader/scripts && for u in trader.service kite-token-refresh.service trader-poweroff.service trader-poweroff.timer; do sudo cp \$u /etc/systemd/system/\$u; done && sudo systemctl daemon-reload"
+ssh "$EC2_HOST" "for u in trader.service kite-token-refresh.service trader-poweroff.service trader-poweroff.timer; do sudo cp /opt/trader/scripts/\$u /etc/systemd/system/\$u; done && sudo systemctl daemon-reload"
 
 echo "=== Restarting service ==="
 ssh "$EC2_HOST" "sudo systemctl restart trader && sleep 5 && sudo systemctl status trader --no-pager -l"
