@@ -425,6 +425,31 @@ class Store:
                 ),
             )
 
+    def mark_signal_broker_rejected(self, instrument: str, direction: str, reason: str) -> bool:
+        """Flip the signal row behind a broker-rejected order to accepted=0 with
+        reject_reason "BROKER: <reason>". log_signal() records accepted=1 at
+        risk approval, before the order is placed, so without this the signals
+        table shows a trade that never happened (CAS 15:15 block, margin…).
+
+        Targets the instrument's LATEST signal row, and only if it is an
+        accepted row in the same direction — the reject arrives seconds after
+        placement, so that row is the one. Id-ordered on purpose: no wall-clock
+        comparison (logged_at is the candle timestamp, and the server is UTC).
+        Returns True when a row was updated."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, accepted, direction FROM signals WHERE instrument = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (instrument,),
+            ).fetchone()
+            if row is None or not row[1] or row[2] != direction:
+                return False
+            conn.execute(
+                "UPDATE signals SET accepted = 0, reject_reason = ? WHERE id = ?",
+                (f"BROKER: {reason}"[:300], row[0]),
+            )
+            return True
+
     # ------------------------------------------------------------------ #
     # Open positions (paper mode persistence)                              #
     # ------------------------------------------------------------------ #

@@ -511,6 +511,16 @@ def main():
 
         if status in ("REJECTED", "CANCELLED"):
             risk.on_order_cancelled(instrument)
+            if status == "REJECTED":
+                # The signal row was logged accepted=1 at risk approval, before
+                # placement. Make the signals table say what actually happened.
+                try:
+                    store.mark_signal_broker_rejected(
+                        instrument, direction,
+                        update.get("status_message") or "rejected by broker",
+                    )
+                except Exception as e:
+                    logger.debug("signal reject stamp skipped | %s | %s", instrument, e)
             telegram.notify_order_rejected(
                 instrument, direction,
                 update.get("status_message", status), config.env,
@@ -649,6 +659,17 @@ def main():
             getattr(strategy, "_max_gain_pct", 0.0),
         )
 
+    def _place_order(order):
+        """orders.place() for the decision paths. A synchronous broker refusal
+        (no order id — CAS block, margin, network) has already been dispatched
+        as REJECTED by OrderManager (strategy state restored, signal row
+        stamped, Telegram sent); swallow the re-raise so it doesn't abort the
+        rest of the candle/tick handler."""
+        try:
+            orders.place(order)
+        except Exception:
+            pass
+
     def run_strategy_decision(strategy, bar: dict, decision_ts):
         """Strategy decision on a strategy-TF bar (base candle when passthrough).
         decision_ts = wall-clock decision time (the triggering base candle / the
@@ -721,7 +742,7 @@ def main():
         )
         if order is None:
             return
-        orders.place(order)
+        _place_order(order)
 
     # Candle handler
     def handle_candle(candle: dict):
@@ -833,7 +854,23 @@ def main():
             if config.get_strategy_params(symbol, "lr_extrema").get("ht_trend_gate_enabled"):
                 warm_up(kite, store, token, symbol, "4hour", config.historical_cache_days)
         refresh_benchmark(lookback_days=10)  # cache-hit except yesterday's close
+        refresh_auction_set()
         feed.reconnect()  # no-op on first startup; resumes after market-close disconnect
+
+    def refresh_auction_set():
+        """Which watchlist stocks are in NSE's Closing Auction Session (active
+        derivatives → no continuous trading after 15:15). Refreshed every
+        pre_market from Kite's NFO dump (~3 MB) so F&O inclusions/exclusions are
+        picked up automatically. On failure keep yesterday's set; with no set at
+        all the feed falls back to early-deciding every stock at 15:14:15."""
+        try:
+            fno = {i["name"] for i in kite.instruments("NFO") if i.get("instrument_type") == "FUT"}
+        except Exception as e:
+            logger.warning("Closing-auction set refresh failed (%s) — keeping previous set", e)
+            return
+        cas = sorted(s for s in valid_watchlist if s.split(":", 1)[1] in fno)
+        feed.set_auction_tokens({symbol_to_token[s] for s in cas})
+        logger.info("Closing-auction (F&O) watchlist stocks: %d %s", len(cas), cas)
 
     def eod_flush():
         # 15:16 IST. First: deliver the already-complete 15:00–15:15 base candle
@@ -939,6 +976,9 @@ def main():
     if config.candle_timeframe in _INTRADAY_TIMEFRAMES:
         # Last-candle decisions must beat the 15:30 CAS — see flush_open_partials_early.
         scheduler.on_pre_close(feed.flush_open_partials_early)
+        # CAS-eligible stocks: 15:00 candle (and day/4h bars ending on it) must
+        # decide before NSE's 15:15 order block — see flush_auction_partials_early.
+        scheduler.on_pre_auction(feed.flush_auction_partials_early)
     def handle_tick(tick: dict):
         token = tick.get("instrument_token")
         symbol = token_to_symbol.get(token)
@@ -975,7 +1015,7 @@ def main():
             )
             if order is None:
                 continue
-            orders.place(order)
+            _place_order(order)
 
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)

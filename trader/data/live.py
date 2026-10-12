@@ -25,6 +25,12 @@ from trader.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# NSE Closing Auction Session (live since 2026-08-03) for stocks with active
+# derivatives: continuous trading ends at 15:15 and fresh order entry is blocked
+# 15:15–15:20 (Kite: "Your order could not be converted to a After Market Order
+# (AMO)"). Any decision on a bucket starting at/after this time cannot be traded.
+_AUCTION_START = time(15, 15)
+
 # Type aliases
 TickHandler = Callable[[dict], None]
 CandleHandler = Callable[[dict], None]
@@ -68,6 +74,10 @@ class LiveFeed:
         # feed: the new ticker has never been connected, so the next reconnect()
         # must connect it even if the (stale) old socket looked alive.
         self._needs_reconnect = False
+        # Tokens of CAS-eligible (F&O) instruments. None = unknown (the NFO
+        # instruments fetch failed): pre_auction then early-emits every token and
+        # pre_close keeps its old all-token behaviour. See set_auction_tokens.
+        self._auction_tokens: set[int] | None = None
 
         self._bind_ticker_callbacks()
 
@@ -352,9 +362,14 @@ class LiveFeed:
             "volume": partial["volume"],
         }
         if partial.get("early_emitted"):
-            # This bucket was already delivered by flush_open_partials_early —
-            # strategies decided on it then. Tag the final OHLCV so the handler
-            # persists it (cache parity with Kite history) without deciding twice.
+            # This bucket was already delivered by an early flush (pre_auction /
+            # pre_close) — strategies decided on it then. Tag the final OHLCV so
+            # the handler persists it (cache parity with Kite history) without
+            # deciding twice.
+            candle["_early_final"] = True
+        elif self._in_auction(token, partial["candle_start"]):
+            # CAS-eligible instrument, bucket inside the closing auction (no
+            # continuous trading, orders blocked/rejected): persist, never decide.
             candle["_early_final"] = True
         logger.debug("Candle closed | token=%d | %s", token, candle)
         for handler in self._candle_handlers:
@@ -371,6 +386,43 @@ class LiveFeed:
                 self._emit_candle(token, partial)
             self._partials.clear()
 
+    def set_auction_tokens(self, tokens: set[int] | None):
+        """Install the CAS-eligible token set (instruments with active
+        derivatives, refreshed daily from Kite's NFO dump). None = unknown."""
+        with self._lock:
+            self._auction_tokens = set(tokens) if tokens is not None else None
+
+    def _in_auction(self, token: int, candle_start: datetime) -> bool:
+        return (self._auction_tokens is not None
+                and token in self._auction_tokens
+                and candle_start.time() >= _AUCTION_START)
+
+    def flush_auction_partials_early(self):
+        """Pre-auction (15:14:15 IST): deliver the still-open pre-15:15 partial
+        of every CAS-eligible instrument NOW as its decision candle, leaving it
+        open (flagged) so its real completion is emitted `_early_final`.
+
+        Why: CAS-eligible stocks stop continuous trading at 15:15 and NSE blocks
+        fresh orders 15:15–15:20. The 15:00–15:15 candle otherwise closes at
+        15:15:00 — and day/4hour bars emit on it — so every decision on it died
+        with Kite's "could not be converted to AMO" (12 rejects Aug 31–Oct 12:
+        CUMMINSIND day-TF entries 4 sessions running, ATHERENERG scale-out
+        2026-10-12). Same mechanism and trade-off as flush_open_partials_early.
+        Unknown auction set → every token is flushed (deciding 45s early is
+        harmless for a non-CAS stock; never deciding at all is not)."""
+        with self._lock:
+            for token, partial in list(self._partials.items()):
+                if partial.get("early_emitted"):
+                    continue
+                if partial["candle_start"].time() >= _AUCTION_START:
+                    continue
+                if self._auction_tokens is not None and token not in self._auction_tokens:
+                    continue
+                logger.info("Pre-auction early-emit open partial | token=%d | %s",
+                            token, partial["candle_start"])
+                self._emit_candle(token, partial)
+                partial["early_emitted"] = True
+
     def flush_open_partials_early(self):
         """Pre-close (15:29:15 IST): deliver every still-open partial NOW as the
         decision candle, leaving it open so late ticks still shape the persisted
@@ -382,10 +434,15 @@ class LiveFeed:
         which rejects every new order (CGPOWER 2026-08-27: 50% scale-out lost).
         Deciding ~45s early on a 14¾-minute candle is well inside the noise of
         the backtest's candle-close decision; the exit fills before CAS instead
-        of never. Idempotent: an already early-emitted partial is skipped."""
+        of never. Idempotent: an already early-emitted partial is skipped.
+        CAS-eligible instruments are skipped: their 15:15 bucket is inside the
+        closing auction (flat, near-zero volume, orders rejected) and its final
+        emission is persist-only — see _in_auction."""
         with self._lock:
             for token, partial in list(self._partials.items()):
                 if partial.get("early_emitted"):
+                    continue
+                if self._in_auction(token, partial["candle_start"]):
                     continue
                 logger.info("Pre-close early-emit open partial | token=%d | %s",
                             token, partial["candle_start"])

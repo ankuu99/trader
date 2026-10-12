@@ -1388,7 +1388,11 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     )
     _acc_today = _read_db(
         config.db_path,
-        "SELECT instrument, logged_at FROM signals WHERE accepted = 1 AND logged_at >= ?",
+        # BROKER: rows = accepted at risk, then refused by Kite (mark_signal_broker_rejected);
+        # the ±120s order-row check below separates sync refusals (no order id) from
+        # async rejects (order row exists, already counted as a broker reject).
+        "SELECT instrument, logged_at FROM signals "
+        "WHERE (accepted = 1 OR reject_reason LIKE 'BROKER:%') AND logged_at >= ?",
         (_today_local.isoformat(),),
     )
     _ord_today = _read_db(
@@ -2254,6 +2258,10 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             reject_reason = s.get("reject_reason") or ""
             exit_reason = s.get("exit_reason") or ""
             reason_display = exit_reason if s.get("signal_type") == "EXIT" else reject_reason
+            if reject_reason.startswith("BROKER:"):
+                # Approved, then refused by Kite — show why it never traded.
+                reason_display = " — ".join(x for x in (exit_reason, reject_reason) if x)
+            reason_display = _html.escape(reason_display)
             display_dir = "SELL" if s.get("signal_type") == "EXIT" else s["direction"]
             dir_class = "green" if display_dir == "BUY" else "red"
             logged = s.get("logged_at", "")[:16]
@@ -2746,6 +2754,9 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
             rr = sg.get("reject_reason") or ""
             kind = "green" if acc else ("dim" if rr.startswith("FILTER:") else "red")
             reason = (sg.get("exit_reason") or "") if sg.get("signal_type") == "EXIT" else rr
+            if rr.startswith("BROKER:"):
+                reason = " — ".join(x for x in (sg.get("exit_reason") or "", rr) if x)
+            reason = _html.escape(reason)
             ph = sg.get("price_hint")
             srows += (f"<tr><td class='dim'>{_fmt_ist(_parse_ist_naive(sg.get('logged_at')))}</td>"
                       f"<td class='{'green' if sg.get('direction') == 'BUY' else 'red'}'>{sg.get('direction')}</td>"

@@ -4,6 +4,7 @@ Scheduler — market-hours automation using APScheduler.
 Jobs:
   pre_market  : 09:00 IST — warm up data cache
   midday      : 13:20 IST — refresh 4h candle cache for ht_trend gate
+  pre_auction : 15:14:15 IST — early-decide CAS-eligible stocks before the 15:15 auction block
   eod_flush   : 15:16 IST — flush in-progress aggregated (4hour/day) bars
   post_market : 15:35 IST — daily P&L report, reset state
 """
@@ -28,6 +29,7 @@ class Scheduler:
         self._midday_hooks: list = []
         self._eod_flush_hooks: list = []
         self._pre_close_hooks: list = []
+        self._pre_auction_hooks: list = []
         self._market_close_hooks: list = []
         self._post_market_hooks: list = []
         self._heartbeat_hooks: list = []
@@ -40,6 +42,9 @@ class Scheduler:
 
     def on_eod_flush(self, fn):
         self._eod_flush_hooks.append(fn)
+
+    def on_pre_auction(self, fn):
+        self._pre_auction_hooks.append(fn)
 
     def on_pre_close(self, fn):
         self._pre_close_hooks.append(fn)
@@ -68,6 +73,15 @@ class Scheduler:
             lambda: self._run(self._midday_hooks, "midday"),
             CronTrigger(day_of_week="mon-fri", hour=13, minute=20, timezone=_IST),
             id="midday",
+        )
+        self._scheduler.add_job(
+            # Pre-auction: CAS-eligible (F&O) stocks stop continuous trading at
+            # 15:15 and NSE blocks fresh orders 15:15–15:20, so their 15:00–15:15
+            # candle (and day/4h bars ending on it) must decide ~45s early.
+            # See LiveFeed.flush_auction_partials_early.
+            lambda: self._run(self._pre_auction_hooks, "pre_auction"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=14, second=15, timezone=_IST),
+            id="pre_auction",
         )
         self._scheduler.add_job(
             # Aggregated-timeframe (4hour/day) end-of-day flush: emit any

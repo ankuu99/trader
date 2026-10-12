@@ -224,6 +224,8 @@ class OrderManager:
             "partial": getattr(original, "partial", False) if original else False,
             # Scale-in: BUY fills for add-on lots must not re-anchor strategy state.
             "addon": getattr(original, "addon", False) if original else False,
+            # Broker's reason (REJECTED/CANCELLED) — Telegram + signals table.
+            "status_message": status_message,
         }
         self._store.upsert_order(record)
         if status == "REJECTED":
