@@ -140,6 +140,7 @@ a.chart-link:hover { text-decoration: underline; }
 .pane { flex: 1; min-width: 280px; }
 .pane-wide { flex: 1.6; min-width: 380px; }
 .pane-sm { min-width: 220px; }
+.pane-col { display: flex; flex-direction: column; gap: 12px; }
 .hdr { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .m-only { display: none; }
 .retrow { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0 6px; }
@@ -653,6 +654,128 @@ def _render_utilisation_svg(rows: list[dict], capital: float,
         f'<circle cx="{sx(n - 1):.1f}" cy="{syu(util_vals[-1]):.1f}" r="2" fill="#58a6ff"/>'
         f'</svg>'
     )
+
+
+def _fmt_k(v: float) -> str:
+    """Signed compact rupees for chart labels: +₹18.9k, −₹3.1k, +₹640."""
+    sign = "+" if v >= 0 else "&#8722;"
+    a = abs(v)
+    body = f"{a / 1000:.1f}k" if a >= 1000 else f"{a:.0f}"
+    return f"{sign}&#8377;{body}"
+
+
+def _round_top_bar(x: float, w: float, y0: float, y1: float, r: float = 2.0) -> str:
+    """Bar from baseline y0 to value end y1, rounded only at the value end."""
+    h = abs(y1 - y0)
+    r = min(r, w / 2, h)
+    if y1 <= y0:   # grows upward
+        return (f"M{x:.1f},{y0:.1f} V{y1 + r:.1f} Q{x:.1f},{y1:.1f} {x + r:.1f},{y1:.1f} "
+                f"H{x + w - r:.1f} Q{x + w:.1f},{y1:.1f} {x + w:.1f},{y1 + r:.1f} V{y0:.1f} Z")
+    return (f"M{x:.1f},{y0:.1f} V{y1 - r:.1f} Q{x:.1f},{y1:.1f} {x + r:.1f},{y1:.1f} "
+            f"H{x + w - r:.1f} Q{x + w:.1f},{y1:.1f} {x + w:.1f},{y1 - r:.1f} V{y0:.1f} Z")
+
+
+def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
+    """Monthly round-trip view as two stacked panels on one shared month axis
+    (never a dual-axis chart — ₹ and % get their own panels):
+      top    — net P&L bars (green above / red below zero), ₹ labels on the best
+               and worst month only, month label (+ "*" if partial) and the
+               round-trip count under each bar;
+      bottom — ₹-weighted win % (blue, filled dots) and win % (gold, hollow
+               dots) on a fixed 0–100% scale with a dashed 50% guide.
+    Each month carries a full-height hover target with every number."""
+    n = len(rows)
+    if n == 0:
+        return "<span class='dim'>no closed round trips in this window</span>"
+    left, right = 36, 6
+    plot_w = width - left - right
+    slot = plot_w / n
+    bar_w = max(3.0, min(26.0, slot * 0.6))
+    cx = [left + slot * (i + 0.5) for i in range(n)]
+
+    # top panel: net P&L
+    t0, t1 = 14, 104                      # value range (y px)
+    vals = [r["net_pnl"] for r in rows]
+    hi_v, lo_v = max(max(vals), 0.0), min(min(vals), 0.0)
+    span = (hi_v - lo_v) or 1.0
+
+    def sy(v: float) -> float:
+        return t1 - (v - lo_v) / span * (t1 - t0)
+
+    zero = sy(0.0)
+    every = 2 if n > 12 else 1
+    # Month labels sit below the room a negative bar's value label needs.
+    lab_y, cnt_y = t1 + 24, t1 + 34
+
+    # bottom panel: win rates
+    b0, b1 = cnt_y + 16, cnt_y + 76
+
+    def sp(v: float) -> float:
+        return b1 - v / 100.0 * (b1 - b0)
+
+    height = b1 + 14
+    out = [f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+           f'style="display:block" font-family="inherit">']
+    txt = 'fill="#8b949e" font-size="9"'
+    # top panel axes / labels
+    out.append(f'<text x="{left}" y="9" {txt}>net P&amp;L</text>')
+    for v in sorted({hi_v, lo_v, 0.0}):
+        _ax = "0" if v == 0 else (f"{'&#8722;' if v < 0 else ''}{abs(v) / 1000:.1f}k"
+                                  if abs(v) >= 1000 else f"{v:.0f}".replace("-", "&#8722;"))
+        out.append(f'<text x="{left - 3}" y="{sy(v) + 3:.1f}" {txt} text-anchor="end">{_ax}</text>')
+    out.append(f'<line x1="{left}" y1="{zero:.1f}" x2="{width - right}" y2="{zero:.1f}" '
+               f'stroke="#30363d" stroke-width="1"/>')
+    best = max(range(n), key=lambda i: vals[i])
+    worst = min(range(n), key=lambda i: vals[i])
+    for i, r in enumerate(rows):
+        v = r["net_pnl"]
+        color = "#3fb950" if v >= 0 else "#f85149"
+        if v:
+            out.append(f'<path d="{_round_top_bar(cx[i] - bar_w / 2, bar_w, zero, sy(v))}" '
+                       f'fill="{color}" opacity="0.85"/>')
+        if i in (best, worst) and (n == 1 or vals[best] != vals[worst]):
+            ly = sy(v) - 3 if v >= 0 else sy(v) + 10
+            out.append(f'<text x="{cx[i]:.1f}" y="{ly:.1f}" fill="#c9d1d9" font-size="9" '
+                       f'text-anchor="middle">{_fmt_k(v)}</text>')
+        if i % every == 0 or i == n - 1:
+            out.append(f'<text x="{cx[i]:.1f}" y="{lab_y}" {txt} text-anchor="middle">'
+                       f'{r["label"]}{"*" if r["partial"] else ""}</text>')
+            out.append(f'<text x="{cx[i]:.1f}" y="{cnt_y}" fill="#6e7681" font-size="8" '
+                       f'text-anchor="middle">{r["trades"]} tr</text>')
+
+    # bottom panel
+    out.append(f'<text x="{left}" y="{b0 - 5}" {txt}>win rate</text>')
+    for pct, dash, op in ((100, "", "0.5"), (50, ' stroke-dasharray="3,3"', "0.9"), (0, "", "0.5")):
+        out.append(f'<line x1="{left}" y1="{sp(pct):.1f}" x2="{width - right}" y2="{sp(pct):.1f}" '
+                   f'stroke="#30363d" stroke-width="1"{dash} opacity="{op}"/>')
+        out.append(f'<text x="{left - 3}" y="{sp(pct) + 3:.1f}" {txt} text-anchor="end">{pct}%</text>')
+
+    def series(key: str, color: str, hollow: bool) -> None:
+        pts = [(cx[i], sp(r[key])) for i, r in enumerate(rows) if r.get(key) is not None]
+        if len(pts) >= 2:
+            out.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in pts)}" '
+                       f'fill="none" stroke="{color}" stroke-width="2"/>')
+        for x, y in pts:
+            fill = "#161b22" if hollow else color
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{fill}" '
+                       f'stroke="{color}" stroke-width="1.5"/>')
+
+    series("win_rate", "#d29922", hollow=True)
+    series("money_win_rate", "#58a6ff", hollow=False)
+
+    # hover targets (drawn last so they sit on top)
+    for i, r in enumerate(rows):
+        mwr = "—" if r["money_win_rate"] is None else f"{r['money_win_rate']:.0f}%"
+        net = f"{'+' if r['net_pnl'] >= 0 else '−'}₹{abs(r['net_pnl']):,.0f}"
+        tip = (f"{datetime.strptime(r['month'], '%Y-%m').strftime('%b %Y')}"
+               f"{' (partial — window edge)' if r['partial'] else ''}\n"
+               f"{r['trades']} round trips · {r['wins']} wins\n"
+               f"win {r['win_rate']:.0f}% · ₹-weighted {mwr}\n"
+               f"net {net} · charges ₹{r['costs']:,.0f}")
+        out.append(f'<rect x="{left + slot * i:.1f}" y="0" width="{slot:.1f}" height="{height}" '
+                   f'fill="transparent"><title>{_html.escape(tip)}</title></rect>')
+    out.append("</svg>")
+    return "".join(out)
 
 
 def _render_sparkline(closes: list[float], entry_price: float,
@@ -1528,6 +1651,53 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     else:
         util_section = ""
 
+    # ── monthly round trips (left column, under utilisation) ──────────────────
+    # Unit = round trip (entry → final exit; add-ons/scale-outs folded in), net of
+    # the same per-slice charges as the Cumulative card, bucketed by EXIT month and
+    # windowed by exit time like every other history view. Open positions are
+    # excluded until fully closed — hence the reconciliation footnote.
+    from trader.analytics import round_trips, monthly_round_trip_stats
+
+    def _slice_cost(t):
+        _ep, _xp, _q = t.get("entry_price"), t.get("exit_price"), t.get("quantity")
+        return round_trip_cost(config.product, _q, _ep, _xp) if (_ep and _xp and _q) else 0.0
+
+    _trips = _filter_trades(round_trips(_orders_for_match, cost_fn=_slice_cost), _lo, _hi)
+    for _t in _trips:
+        _t["exit_dt"] = _parse_ist_naive(_t["exit_time"])
+    _months = monthly_round_trip_stats(_trips, lo=_lo, hi=_hi or _now_naive)
+    if _months:
+        _mt = sum(m["trades"] for m in _months)
+        _mw = sum(m["wins"] for m in _months)
+        _won = sum(t["net_pnl"] for t in _trips if (t["net_pnl"] or 0) > 0)
+        _lost = -sum(t["net_pnl"] for t in _trips if (t["net_pnl"] or 0) <= 0)
+        _mnet = sum(m["net_pnl"] for m in _months)
+        _mwr = f"{_won / (_won + _lost) * 100:.0f}%" if (_won + _lost) else "—"
+        monthly_section = f"""
+    <div class="card">
+        <h2>Monthly &middot; round trips <span class="dim"
+            style="font-weight:normal;text-transform:none">· net of costs</span></h2>
+        <div class="dim" style="margin-bottom:6px;font-size:11px">
+            window: {_mt} round trip{'s' if _mt != 1 else ''} &nbsp;·&nbsp; win {_mw / _mt * 100:.0f}%
+            &nbsp;·&nbsp; &#8377;-weighted {_mwr}
+            &nbsp;·&nbsp; net <span class="{_pnl_class(_mnet)}">{_fmt_k(_mnet)}</span>
+        </div>
+        {_render_monthly_svg(_months)}
+        <div class="dim" style="font-size:11px;margin-top:4px">
+            <span style="color:#58a6ff">&#9679;</span> &#8377;-weighted win %
+            &nbsp;·&nbsp; <span style="color:#d29922">&#9675;</span> win %
+            &nbsp;·&nbsp; hover a month for details
+        </div>
+        <div class="dim" style="font-size:10px;margin-top:4px">
+            Round trip = entry &rarr; final exit (add-ons &amp; scale-outs folded in), counted in its
+            exit month; win = net &gt; 0. Open positions are excluded until fully closed, so the
+            window net can differ from Cumulative P&amp;L by their booked scale-outs.
+            {'* partial month (window edge).' if any(m["partial"] for m in _months) else ''}
+        </div>
+    </div>"""
+    else:
+        monthly_section = ""
+
     # ── return stats (cumulative + annualized) + selected benchmark ───────────
     # Span anchors: start = later of the window start and the FIRST fill (idle
     # time before the bot's first trade must not dilute the figure); end = now
@@ -1728,8 +1898,8 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
     # ── graph row: capital utilisation + merged P&L/drawdown side by side ──
     _graph_panes = ""
-    if util_section:
-        _graph_panes += f'<div class="pane">{util_section}</div>'
+    if util_section or monthly_section:
+        _graph_panes += f'<div class="pane pane-col">{util_section}{monthly_section}</div>'
     if equity_section:
         _graph_panes += f'<div class="pane pane-wide">{equity_section}</div>'
     graph_row = f'<div class="toprow">{_graph_panes}</div>' if _graph_panes else ""

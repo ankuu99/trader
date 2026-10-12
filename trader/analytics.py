@@ -66,6 +66,117 @@ def match_trades(orders: list[dict]) -> list[dict]:
     return trades
 
 
+def round_trips(orders: list[dict], cost_fn=None) -> list[dict]:
+    """Group fills into CLOSED round trips: per instrument, a round trip opens
+    on the BUY that takes holdings 0 → >0 and closes on the SELL that brings
+    them back to 0. Scale-in add-ons and partial scale-outs fold into the one
+    round trip, so a scale-out winner counts as ONE win (the monthly card's
+    unit), not one per FIFO slice. A still-open position (holdings > 0 at the
+    end of the order history) is not returned — its booked scale-outs count
+    only once the position fully closes.
+
+    Each segment is FIFO-matched with match_trades(), so slices — and the
+    per-slice charges from `cost_fn(slice) -> float` — are exactly the ones the
+    rest of the dashboard uses; round-trip totals therefore reconcile with the
+    slice-based Cumulative P&L. Same input contract as match_trades (qty <= 0
+    skipped; a SELL with no open holding ignored).
+
+    Returns, oldest exit first:
+        {instrument, entry_time, exit_time, gross_pnl, costs, net_pnl,
+         n_slices, n_buys, n_sells}
+    """
+    by_inst: dict[str, list] = defaultdict(list)
+    for o in sorted(orders, key=lambda x: str(x.get("ts") or "")):
+        if int(o.get("quantity") or 0) > 0:
+            by_inst[o["instrument"]].append(o)
+    out: list[dict] = []
+    for inst, fills in by_inst.items():
+        held, seg = 0, []
+        for o in fills:
+            qty = int(o["quantity"])
+            if o["direction"] == "BUY":
+                held += qty
+                seg.append(o)
+                continue
+            if held == 0:
+                continue                      # orphan SELL — match_trades ignores it too
+            seg.append(o)
+            held -= min(qty, held)
+            if held:
+                continue
+            slices = match_trades(seg)
+            gross = sum(t["gross_pnl"] or 0.0 for t in slices)
+            costs = sum(cost_fn(t) for t in slices) if cost_fn else 0.0
+            out.append({
+                "instrument": inst,
+                "entry_time": seg[0]["ts"],
+                "exit_time": seg[-1]["ts"],
+                "gross_pnl": gross,
+                "costs": costs,
+                "net_pnl": gross - costs,
+                "n_slices": len(slices),
+                "n_buys": sum(1 for x in seg if x["direction"] == "BUY"),
+                "n_sells": sum(1 for x in seg if x["direction"] == "SELL"),
+            })
+            seg = []
+    out.sort(key=lambda r: str(r["exit_time"]))
+    return out
+
+
+def monthly_round_trip_stats(trips: list[dict], lo: datetime | None = None,
+                             hi: datetime | None = None) -> list[dict]:
+    """Bucket closed round trips by calendar month of their EXIT (the same
+    clock the dashboard's range filter uses). `trips` carry `exit_dt` (an
+    IST-naive datetime) and `net_pnl`; the caller has already windowed them.
+    Win = net_pnl > 0 (net of charges: +₹20 gross / −₹5 net is a loss).
+
+    Per month, oldest first:
+        {month: "YYYY-MM", label: "Oct", trades, wins, win_rate,
+         money_win_rate, net_pnl, costs, partial}
+    win_rate        = wins / trades × 100
+    money_win_rate  = ₹ won / (₹ won + |₹ lost|) × 100 (None if both zero)
+    partial         = the window [lo, hi] covers only part of the month
+                      (hi None = the window runs to now, judged by `hi` the
+                      caller passes; pass hi=now for a live window).
+    """
+    months: dict[tuple, dict] = {}
+    for t in trips:
+        x = t.get("exit_dt")
+        if x is None:
+            continue
+        m = months.setdefault((x.year, x.month), {
+            "trades": 0, "wins": 0, "won": 0.0, "lost": 0.0,
+            "net_pnl": 0.0, "costs": 0.0,
+        })
+        pnl = t.get("net_pnl") or 0.0
+        m["trades"] += 1
+        m["net_pnl"] += pnl
+        m["costs"] += t.get("costs") or 0.0
+        if pnl > 0:
+            m["wins"] += 1
+            m["won"] += pnl
+        else:
+            m["lost"] += -pnl
+    rows = []
+    for (y, mo) in sorted(months):
+        m = months[(y, mo)]
+        start = datetime(y, mo, 1)
+        end = datetime(y + (mo == 12), mo % 12 + 1, 1)      # exclusive
+        denom = m["won"] + m["lost"]
+        rows.append({
+            "month": f"{y:04d}-{mo:02d}",
+            "label": start.strftime("%b"),
+            "trades": m["trades"],
+            "wins": m["wins"],
+            "win_rate": m["wins"] / m["trades"] * 100.0,
+            "money_win_rate": (m["won"] / denom * 100.0) if denom else None,
+            "net_pnl": m["net_pnl"],
+            "costs": m["costs"],
+            "partial": bool((lo and lo > start) or (hi and hi < end)),
+        })
+    return rows
+
+
 def _parse_iso(ts) -> datetime | None:
     try:
         return datetime.fromisoformat(str(ts))
