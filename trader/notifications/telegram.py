@@ -69,6 +69,12 @@ def _send(text: str) -> bool:
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
             timeout=_TIMEOUT,
         )
+        if resp.status_code == 400 and "parse entities" in resp.text:
+            # Markdown broke on interpolated text (e.g. an underscore in a reason
+            # code opens an unclosed italic). Deliver it as plain text rather than
+            # dropping the alert.
+            logger.warning("Telegram Markdown rejected — resending as plain text | %s", resp.text)
+            resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=_TIMEOUT)
         if not resp.ok:
             logger.warning("Telegram send failed | status=%d | %s", resp.status_code, resp.text)
             return False
@@ -231,7 +237,7 @@ def notify_trailing_activated(instrument: str, entry_price: float, peak: float,
         f"Entry      : ₹{entry_price:,.2f}\n"
         f"Peak       : ₹{peak:,.2f} (+{gain_pct:.2f}%)\n"
         f"Trail stop : ₹{trail_stop:,.2f} (-{trail_pct:.1f}% from peak)\n"
-        f"Type       : {trigger_type}\n"
+        f"Type       : `{trigger_type}`\n"  # code span: PATTERN_TOP's "_" broke Markdown
         f"Time       : {datetime.now().strftime('%H:%M:%S')}"
     )
     _send(text)

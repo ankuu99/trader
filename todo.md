@@ -40,7 +40,15 @@ these ledger/execution fixes the ONLY live path to capturing the rejected dips:
   restores them on startup via `strat.seed_position_state()` (`main.py:402-407`,
   live block; `main.py:291-295`, paper block).
 
-- **Persist `trailing_active` across restarts** — `peak_close` and `max_gain_pct`
+- ~~**Persist `trailing_active` across restarts**~~ — DONE 2026-10-14 (live evidence:
+  MAYURUNIQ scaled out 10-12, restart dropped the 4% remainder trail — 10-13 low 770.45
+  under the ~779.5 trail, no exit — then sold half AGAIN on 10-14 15:15).
+  `open_positions` now carries `trailing_active`, `pattern_top_trailing`,
+  `partial_taken`, `breakeven_active` (written per decision candle AND at the
+  scale-out fill via `store.save_exit_flags`, since a CAS 15:15 bar is persist-only);
+  both restore paths pass them to `seed_position_state(..., exit_flags)`. Migration
+  backfills `partial_taken=1` where `pattern_top_trailing=1`.
+  `tests/test_exit_flag_restore.py`. Original note: `peak_close` and `max_gain_pct`
   survive a restart, but `trailing_active` does not: `seed_position_state()` takes
   only those two, so `PositionState.trailing_active` comes back `False`. It re-arms
   on the first tick where `pct >= profit_pct` (`trader/policy/extrema_exit.py:320`),

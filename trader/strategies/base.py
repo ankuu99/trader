@@ -100,7 +100,8 @@ class Strategy(ABC):
             # Order didn't go through — leave position state unchanged
             pass
 
-    def seed_position_state(self, peak_close: float, max_gain_pct: float) -> None:
+    def seed_position_state(self, peak_close: float, max_gain_pct: float,
+                            exit_flags: dict | None = None) -> None:
         """Restore in-memory position state after a restart. No-op by default."""
         pass
 

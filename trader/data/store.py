@@ -119,7 +119,9 @@ class Store:
                     trailing_active      INTEGER DEFAULT 0,
                     low_since_entry      REAL    DEFAULT 0,
                     pattern_top_trailing INTEGER DEFAULT 0,
-                    addon_lots           TEXT
+                    addon_lots           TEXT,
+                    partial_taken        INTEGER DEFAULT 0,
+                    breakeven_active     INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -158,11 +160,19 @@ class Store:
                 ("low_since_entry",      "REAL DEFAULT 0"),
                 ("pattern_top_trailing", "INTEGER DEFAULT 0"),
                 ("addon_lots",           "TEXT"),  # scale-in add-on lots (JSON list)
+                ("partial_taken",        "INTEGER DEFAULT 0"),  # exit flags restored on restart
+                ("breakeven_active",     "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
                 except sqlite3.OperationalError:
-                    pass  # column already exists
+                    continue  # column already exists
+                if col == "partial_taken":
+                    # Positions already scaled out before this column existed: a
+                    # pattern-top trail is only armed by the scale-out, so carry the
+                    # once-per-position guard over (else the first restart re-arms it).
+                    conn.execute("UPDATE open_positions SET partial_taken = 1 "
+                                 "WHERE pattern_top_trailing = 1")
             # Migration: add exit_reason to signals for existing DBs
             try:
                 conn.execute("ALTER TABLE signals ADD COLUMN exit_reason TEXT")
@@ -478,7 +488,10 @@ class Store:
                                 current_price: float, pct_change: float,
                                 unrealised_pnl: float, peak_close: float,
                                 trailing_active: bool, candle_low: float = 0.0,
-                                pattern_top_trailing: bool = False):
+                                pattern_top_trailing: bool = False,
+                                partial_taken: bool | None = None,
+                                breakeven_active: bool | None = None):
+        # partial_taken / breakeven_active: None leaves the stored value unchanged.
         with self._conn() as conn:
             conn.execute(
                 """UPDATE open_positions
@@ -486,11 +499,33 @@ class Store:
                        unrealised_pnl = ?, peak_close = MAX(peak_close, ?), trailing_active = ?,
                        low_since_entry = CASE WHEN low_since_entry = 0 THEN ?
                                               ELSE MIN(low_since_entry, ?) END,
-                       pattern_top_trailing = ?
+                       pattern_top_trailing = ?,
+                       partial_taken = COALESCE(?, partial_taken),
+                       breakeven_active = COALESCE(?, breakeven_active)
                    WHERE instrument = ?""",
                 (held_bars, current_price, pct_change, unrealised_pnl,
                  peak_close, int(trailing_active), candle_low, candle_low,
-                 int(pattern_top_trailing), instrument),
+                 int(pattern_top_trailing),
+                 None if partial_taken is None else int(partial_taken),
+                 None if breakeven_active is None else int(breakeven_active),
+                 instrument),
+            )
+
+    def save_exit_flags(self, instrument: str, trailing_active: bool,
+                        pattern_top_trailing: bool, partial_taken: bool,
+                        breakeven_active: bool):
+        """Persist the exit-policy flags immediately (e.g. at a scale-out fill) —
+        update_position_metrics only runs on decision candles, and a CAS stock's
+        15:15 auction bar is persist-only, so a restart could otherwise land before
+        the flags are written."""
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE open_positions
+                   SET trailing_active = ?, pattern_top_trailing = ?,
+                       partial_taken = ?, breakeven_active = ?
+                   WHERE instrument = ?""",
+                (int(trailing_active), int(pattern_top_trailing),
+                 int(partial_taken), int(breakeven_active), instrument),
             )
 
     def add_position_lot(self, instrument: str, fill_price: float, quantity: int,
@@ -563,12 +598,15 @@ class Store:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT instrument, entry_price, quantity, held_bars, entry_time,"
-                " low_since_entry, addon_lots FROM open_positions"
+                " low_since_entry, addon_lots, trailing_active, pattern_top_trailing,"
+                " partial_taken, breakeven_active FROM open_positions"
             ).fetchall()
         out = []
         for r in rows:
             d = dict(r)
             d["addon_lots"] = json.loads(d["addon_lots"]) if d.get("addon_lots") else []
+            for k in ("trailing_active", "pattern_top_trailing", "partial_taken", "breakeven_active"):
+                d[k] = bool(d.get(k))
             out.append(d)
         return out
 

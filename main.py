@@ -49,6 +49,17 @@ _MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
 _INTRADAY_TIMEFRAMES = {"5minute", "15minute", "30minute", "60minute"}
 
+_EXIT_FLAG_KEYS = ("trailing_active", "pattern_top_trailing", "partial_taken", "breakeven_active")
+
+
+def _exit_flags(strategy) -> dict:
+    """Exit-policy flags to persist in open_positions so a restart restores them
+    (seed_position_state). Strategies without a PositionState report none."""
+    pos = getattr(strategy, "_pos", None)
+    if pos is None:
+        return {}
+    return {k: bool(getattr(pos, k, False)) for k in _EXIT_FLAG_KEYS}
+
 
 def main():
     logger.info(
@@ -319,9 +330,10 @@ def main():
             }
             _peak_close   = store.get_state(f"{instrument}.peak_close", 0.0)
             _max_gain_pct = store.get_state(f"{instrument}.max_gain_pct", 0.0)
+            _flags = {k: pos[k] for k in _EXIT_FLAG_KEYS if k in pos}
             for strat in strats_for_instrument:
                 strat.on_order_update(synthetic_fill)
-                strat.seed_position_state(_peak_close, _max_gain_pct)
+                strat.seed_position_state(_peak_close, _max_gain_pct, _flags)
             # Scale-in: DB quantity is blended (parent + add-ons). Seed risk with the
             # parent lot first, then layer the add-on lots so the pool/tier state and
             # blended qty are restored exactly.
@@ -430,13 +442,16 @@ def main():
             }
             _peak_close   = store.get_state(f"{instrument}.peak_close", 0.0)
             _max_gain_pct = store.get_state(f"{instrument}.max_gain_pct", 0.0)
+            _flags = {k: pos[k] for k in _EXIT_FLAG_KEYS if k in pos}
             for strat in strategies:
                 if strat.instrument == instrument:
                     strat.on_order_update(synthetic_fill)
-                    strat.seed_position_state(_peak_close, _max_gain_pct)
+                    strat.seed_position_state(_peak_close, _max_gain_pct, _flags)
             logger.info(
-                "Live position restored | %s x%d @ %.2f | held_bars=%d peak=%.2f max_gain=%.2f%%",
+                "Live position restored | %s x%d @ %.2f | held_bars=%d peak=%.2f max_gain=%.2f%% | "
+                "flags=%s",
                 instrument, qty, avg, held_bars, _peak_close, _max_gain_pct,
+                ",".join(k for k, v in _flags.items() if v) or "none",
             )
 
         # Clear residual phantom state for instruments not in DB positions
@@ -578,6 +593,14 @@ def main():
         for strat in strategies:
             if strat.instrument == instrument:
                 strat.on_order_update(update)
+                if (update.get("partial") and direction == "SELL"
+                        and config.env in ("paper", "live")):
+                    # Scale-out consumed partial_taken and armed the remainder trail
+                    # at emission. Persist now — the next decision candle may never
+                    # come before a restart (CAS 15:15 bar is persist-only).
+                    _f = _exit_flags(strat)
+                    if _f:
+                        store.save_exit_flags(instrument, **_f)
 
     orders.register_update_callback(handle_order_update)
 
@@ -648,9 +671,12 @@ def main():
         _upnl = (_close - _avg_cost) * _qty if _avg_cost else 0.0
         _peak = getattr(strategy, "_peak_close", None) or _close
         _trail = getattr(strategy, "_trailing_active", False)
+        _flags = _exit_flags(strategy)
         store.update_position_metrics(
             strategy.instrument, held, _close, _pct, _upnl, _peak, _trail, candle["low"],
             pattern_top_trailing=getattr(strategy, "_pattern_top_trailing", False),
+            partial_taken=_flags.get("partial_taken"),
+            breakeven_active=_flags.get("breakeven_active"),
         )
         # Persist peak_close and max_gain_pct so they survive daily restarts.
         store.set_state(f"{strategy.instrument}.peak_close", _peak)

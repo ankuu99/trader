@@ -402,14 +402,22 @@ class LRExtremaStrategy(Strategy):
             return self._exit_signal(decision)
         return None
 
-    def seed_position_state(self, peak_close: float, max_gain_pct: float) -> None:
+    def seed_position_state(self, peak_close: float, max_gain_pct: float,
+                            exit_flags: dict | None = None) -> None:
         """Restore in-memory position state after a restart.
         Called by main.py after on_order_update re-seeds entry price and held_bars.
         peak_close: 0.0 means not persisted (stock price can never be 0).
-        max_gain_pct: always restored — 0.0 is valid (position never went positive)."""
+        max_gain_pct: always restored — 0.0 is valid (position never went positive).
+        exit_flags: trailing_active / pattern_top_trailing / partial_taken /
+        breakeven_active from open_positions. Without them a scaled-out remainder
+        came back with no trail and the once-per-position scale-out re-armed
+        (MAYURUNIQ 2026-10-12 → 14: trail lost on restart, second 50% sale)."""
         if peak_close > 0:
             self._pos.peak_close = peak_close
         self._pos.max_gain_pct = max_gain_pct
+        for key in ("trailing_active", "pattern_top_trailing", "partial_taken", "breakeven_active"):
+            if exit_flags and key in exit_flags:
+                setattr(self._pos, key, bool(exit_flags[key]))
 
     def _reset_position_state(self) -> None:
         """Clear all position-tracking fields. Called on any exit path."""
