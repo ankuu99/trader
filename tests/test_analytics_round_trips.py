@@ -91,6 +91,7 @@ def test_monthly_buckets_by_exit_month_with_net_win_definition():
     assert round(sep["win_rate"], 1) == 33.3
     assert round(sep["money_win_rate"], 2) == round(100 / 105 * 100, 2)
     assert sep["net_pnl"] == 95.0 and sep["costs"] == 30.0
+    assert (sep["won"], sep["lost"]) == (100.0, 5.0)          # winners-only ₹ / losers ₹
     assert (oct_["trades"], oct_["win_rate"], oct_["money_win_rate"]) == (1, 100.0, 100.0)
 
 
@@ -117,6 +118,10 @@ def test_monthly_card_renders_on_dashboard(tmp_path):
     from trader.ui.template import render_page, _render_monthly_svg
 
     assert "no closed round trips" in _render_monthly_svg([])
+    svg = _render_monthly_svg(monthly_round_trip_stats(
+        [_trip(400.0, datetime(2026, 9, 3)), _trip(-300.0, datetime(2026, 9, 9))]))
+    assert 'stroke-dasharray="3,2"' in svg and "winners only" in svg
+    assert "winners +₹400 · losers −₹300" in svg
 
     orig = config._data["data"]["db_path"]
     config._data["data"]["db_path"] = str(tmp_path / "ui.db")

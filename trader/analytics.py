@@ -132,8 +132,10 @@ def monthly_round_trip_stats(trips: list[dict], lo: datetime | None = None,
 
     Per month, oldest first:
         {month: "YYYY-MM", label: "Oct", trades, wins, win_rate,
-         money_win_rate, net_pnl, costs, partial}
+         money_win_rate, net_pnl, won, lost, costs, partial}
     win_rate        = wins / trades × 100
+    won / lost      = ₹ summed over winning / losing trips only (lost ≥ 0);
+                      net_pnl = won − lost
     money_win_rate  = ₹ won / (₹ won + |₹ lost|) × 100 (None if both zero)
     partial         = the window [lo, hi] covers only part of the month
                       (hi None = the window runs to now, judged by `hi` the
@@ -171,6 +173,8 @@ def monthly_round_trip_stats(trips: list[dict], lo: datetime | None = None,
             "win_rate": m["wins"] / m["trades"] * 100.0,
             "money_win_rate": (m["won"] / denom * 100.0) if denom else None,
             "net_pnl": m["net_pnl"],
+            "won": m["won"],
+            "lost": m["lost"],
             "costs": m["costs"],
             "partial": bool((lo and lo > start) or (hi and hi < end)),
         })

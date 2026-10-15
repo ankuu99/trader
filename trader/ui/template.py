@@ -678,9 +678,11 @@ def _round_top_bar(x: float, w: float, y0: float, y1: float, r: float = 2.0) -> 
 def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
     """Monthly round-trip view as two stacked panels on one shared month axis
     (never a dual-axis chart — ₹ and % get their own panels):
-      top    — net P&L bars (green above / red below zero), ₹ labels on the best
-               and worst month only, month label (+ "*" if partial) and the
-               round-trip count under each bar;
+      top    — net P&L bars (green above / red below zero) drawn over a dotted
+               green outline of the month's winners-only ₹ (the gap between the
+               outline top and the net bar is what the losers took back), ₹
+               labels on the best and worst month only, month label (+ "*" if
+               partial) and the round-trip count under each bar;
       bottom — ₹-weighted win % (blue, filled dots) and win % (gold, hollow
                dots) on a fixed 0–100% scale with a dashed 50% guide.
     Each month carries a full-height hover target with every number."""
@@ -696,7 +698,8 @@ def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
     # top panel: net P&L
     t0, t1 = 14, 104                      # value range (y px)
     vals = [r["net_pnl"] for r in rows]
-    hi_v, lo_v = max(max(vals), 0.0), min(min(vals), 0.0)
+    won = [r.get("won") or 0.0 for r in rows]
+    hi_v, lo_v = max(max(vals), max(won), 0.0), min(min(vals), 0.0)
     span = (hi_v - lo_v) or 1.0
 
     def sy(v: float) -> float:
@@ -719,6 +722,10 @@ def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
     txt = 'fill="#8b949e" font-size="9"'
     # top panel axes / labels
     out.append(f'<text x="{left}" y="9" {txt}>net P&amp;L</text>')
+    if any(won):
+        out.append(f'<rect x="{width - right - 60}" y="2" width="7" height="8" fill="none" '
+                   f'stroke="#3fb950" stroke-width="1" stroke-dasharray="2,1.5"/>'
+                   f'<text x="{width - right}" y="9" {txt} text-anchor="end">winners only</text>')
     for v in sorted({hi_v, lo_v, 0.0}):
         _ax = "0" if v == 0 else (f"{'&#8722;' if v < 0 else ''}{abs(v) / 1000:.1f}k"
                                   if abs(v) >= 1000 else f"{v:.0f}".replace("-", "&#8722;"))
@@ -730,6 +737,12 @@ def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
     for i, r in enumerate(rows):
         v = r["net_pnl"]
         color = "#3fb950" if v >= 0 else "#f85149"
+        if won[i]:
+            # winners-only ₹: dotted outline behind the solid net bar
+            out.append(f'<rect x="{cx[i] - bar_w / 2 + 0.5:.1f}" y="{sy(won[i]):.1f}" '
+                       f'width="{bar_w - 1:.1f}" height="{zero - sy(won[i]):.1f}" fill="#3fb950" '
+                       f'fill-opacity="0.06" stroke="#3fb950" stroke-width="1" '
+                       f'stroke-dasharray="3,2" opacity="0.8"/>')
         if v:
             out.append(f'<path d="{_round_top_bar(cx[i] - bar_w / 2, bar_w, zero, sy(v))}" '
                        f'fill="{color}" opacity="0.85"/>')
@@ -771,6 +784,7 @@ def _render_monthly_svg(rows: list[dict], width: int = 300) -> str:
                f"{' (partial — window edge)' if r['partial'] else ''}\n"
                f"{r['trades']} round trips · {r['wins']} wins\n"
                f"win {r['win_rate']:.0f}% · ₹-weighted {mwr}\n"
+               f"winners +₹{r.get('won') or 0:,.0f} · losers −₹{r.get('lost') or 0:,.0f}\n"
                f"net {net} · charges ₹{r['costs']:,.0f}")
         out.append(f'<rect x="{left + slot * i:.1f}" y="0" width="{slot:.1f}" height="{height}" '
                    f'fill="transparent"><title>{_html.escape(tip)}</title></rect>')
@@ -1680,6 +1694,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         <div class="dim" style="margin-bottom:6px;font-size:11px">
             window: {_mt} round trip{'s' if _mt != 1 else ''} &nbsp;·&nbsp; win {_mw / _mt * 100:.0f}%
             &nbsp;·&nbsp; &#8377;-weighted {_mwr}
+            &nbsp;·&nbsp; winners {_fmt_k(_won)}
             &nbsp;·&nbsp; net <span class="{_pnl_class(_mnet)}">{_fmt_k(_mnet)}</span>
         </div>
         {_render_monthly_svg(_months)}
