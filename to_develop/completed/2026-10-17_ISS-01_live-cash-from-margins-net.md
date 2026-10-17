@@ -1,5 +1,5 @@
 # Read live free cash from Kite margins `net`, not the opening `cash`
-Written: 2026-10-17 · Tag: ISS-01 · Status: OPEN
+Written: 2026-10-17 · Tag: ISS-01 · Status: DONE (pending release + field validation)
 
 ## Source
 
@@ -101,4 +101,8 @@ Suites that must stay green: whole `python -m pytest -q` except the known pre-ex
 - [ ] owner's uncommitted work untouched (`git diff --stat` shows only manager.py, main.py, the new test)
 
 ## Completion record
-(appended at archive)
+- **Completed:** 2026-10-17 — implementer (general-purpose, sonnet, role file `.claude/agents/trader-implementer.md`); validated by the main session.
+- **Commit:** the commit that moved this file to `completed/` (see `git log -- to_develop/completed/2026-10-17_ISS-01_live-cash-from-margins-net.md`).
+- **Deviations:** none.
+- **Validation:** diff read against every step; `python -m pytest -q` → 533 passed, 1 failed (`test_pipeline_golden`, ISS-10, pre-existing); 7 new tests in `tests/test_free_cash_from_margins.py`. Only `main.py`, `trader/risk/manager.py` and the new test touched. Backtest path unaffected (new function unused by the engine).
+- **Notes:** not yet released. Field validation owed on the first live session with a buy: the `Kite margins |` log line must show `net` falling by the buy amount (opening `cash` unchanged). CLAUDE.md "Effective capital in live mode" updated.

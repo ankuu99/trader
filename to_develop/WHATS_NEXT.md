@@ -1,8 +1,7 @@
 # What's next (suggested pickup order — owner decides)
 
-1. **ISS-01** (live cash from margins `net`) — guide in `to_develop/`, implementer dispatched 2026-10-17; validate,
-   archive, release. After the first live session with a buy, confirm in the "Kite margins |" log line that `net`
-   dropped by the buy → flip to FIXED.
+1. **ISS-01** — FIXED in code 2026-10-17, **not released**. Release on the owner's go; after the first live buy confirm the
+   "Kite margins |" log line shows `net` dropping by the buy.
 2. **ISS-04** (cumulative_pnl double count) — owner approved; needs one answer before the guide: do realised
    profits grow the base sleeve (matches the backtest) or fund the scale-in pool (owner's ₹6L-floor rule)?
 3. **ISS-02 + ISS-13 + TD-001** — rejected add-on / entry re-fire. Owner: record the attempt, don't block while the

@@ -62,6 +62,24 @@ def scale_in_pool(account_equity: float, base_capital: float, cap: float) -> flo
     return min(cap, max(0.0, account_equity - base_capital))
 
 
+def free_cash_from_margins(margins: dict) -> float | None:
+    """Live free cash from a Kite ``margins(segment="equity")`` payload.
+
+    ``net`` first: it moves with same-day buys and pay-ins. ``available.cash`` is the
+    day's OPENING balance — a mid-session restart after buys would count them twice
+    (cash + deployed). Falls back to ``available.live_balance``, then ``available.cash``.
+    None when no usable numeric field exists."""
+    if not isinstance(margins, dict):
+        return None
+    avail = margins.get("available")
+    if not isinstance(avail, dict):
+        avail = {}
+    for value in (margins.get("net"), avail.get("live_balance"), avail.get("cash")):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
 class RiskManager:
     def __init__(self):
         self._open_positions: dict[str, int] = {}     # instrument → filled quantity

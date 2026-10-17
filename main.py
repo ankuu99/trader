@@ -36,7 +36,7 @@ from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
-from trader.risk.manager import RiskManager, scale_in_pool
+from trader.risk.manager import RiskManager, free_cash_from_margins, scale_in_pool
 from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
@@ -75,17 +75,29 @@ def main():
     _kite_cash: float | None = None
 
     def _fetch_kite_cash() -> float | None:
-        """Free equity cash from Kite margins, or None if the call fails.
+        """Live free equity cash from Kite margins (`net`), or None if the call fails.
         Zerodha's RMS is offline overnight/weekends (observed 01:26 IST Sat
         2026-09-05: "GetRmsLimitsResponse Failed : UNKNOWN_REQUEST"); the box
         now boots at ~06:45 IST, so a startup failure is expected and is
         retried by pre_market() at 09:00."""
         try:
             margins = kite.margins(segment="equity")
-            return float(margins.get("available", {}).get("cash", 0.0))
         except Exception as e:
             logger.warning("Failed to fetch Kite margins: %s", e)
             return None
+        avail = margins.get("available", {}) if isinstance(margins, dict) else {}
+        cash = free_cash_from_margins(margins)
+        logger.info(
+            "Kite margins | net=%s live_balance=%s opening=%s cash=%s intraday_payin=%s debits=%s -> using %s",
+            margins.get("net") if isinstance(margins, dict) else None,
+            avail.get("live_balance"), avail.get("opening_balance"), avail.get("cash"),
+            avail.get("intraday_payin"),
+            (margins.get("utilised") or {}).get("debits") if isinstance(margins, dict) else None,
+            f"{cash:.0f}" if cash is not None else "none",
+        )
+        if cash is None:
+            logger.warning("Kite margins payload had no usable cash field: %s", margins)
+        return cash
 
     if config.env == "live":
         # Seed lifetime realised P&L from SQLite — independent of the margins call.
