@@ -4,10 +4,10 @@ One folder per reported problem under `ISSUES/ISS-NN-<slug>/` (SUMMARY · DETAIL
 
 | ID | Status | Area | Title |
 |---|---|---|---|
-| [ISS-01](ISSUES/ISS-01-scalein-pool-opening-cash-double-count/DETAIL.md) | FIXED (unreleased, pending field validation) | live capital / scale-in | Scale-in pool & effective capital use Kite opening cash — same-day restart double-counts buys |
-| [ISS-02](ISSUES/ISS-02-rejected-addon-refires-every-candle/DETAIL.md) | FIXED via TD-001 (unreleased) | live orders / scale-in | Broker-rejected add-on is re-placed on every decision candle |
+| [ISS-01](ISSUES/ISS-01-scalein-pool-opening-cash-double-count/DETAIL.md) | FIXED (release-20261017c, pending field validation) | live capital / scale-in | Scale-in pool & effective capital use Kite opening cash — same-day restart double-counts buys |
+| [ISS-02](ISSUES/ISS-02-rejected-addon-refires-every-candle/DETAIL.md) | FIXED via TD-001 (release-20261017d) | live orders / scale-in | Broker-rejected add-on is re-placed on every decision candle |
 | [ISS-03](ISSUES/ISS-03-partial-scaleout-addon-restart-divergence/DETAIL.md) | FIXED 2026-10-17 | risk ledger / persistence | Partial scale-out on an add-on position: pro-rata in memory vs FIFO in DB — reboot changes avg entry, pool, loss-block arming |
-| [ISS-04](ISSUES/ISS-04-cumulative-pnl-double-count/DETAIL.md) | FIXED (unreleased) | risk ledger / live capital | `capital_available` adds cumulative_pnl on top of Kite equity that already contains it |
+| [ISS-04](ISSUES/ISS-04-cumulative-pnl-double-count/DETAIL.md) | FIXED (release-20261017d) | risk ledger / live capital | `capital_available` adds cumulative_pnl on top of Kite equity that already contains it |
 | [ISS-05](ISSUES/ISS-05-loss-block-wall-clock-sessions/DETAIL.md) | PENDING | risk / scheduler | Loss block counts sessions by weekday wall clock, not the NSE trading calendar |
 | [ISS-06](ISSUES/ISS-06-unfunded-pool-fallback-on-margins-failure/DETAIL.md) | PENDING | live capital / scale-in | Pool falls back to an unfunded 10% × base if Kite margins fail at boot and at 09:00 |
 | [ISS-07](ISSUES/ISS-07-addon-fills-outside-normal-path/DETAIL.md) | PENDING | live orders / persistence | Add-on fills outside the normal path (pending at restart, fill while down, unknown order id, partial-then-cancel, no qty reconcile) |

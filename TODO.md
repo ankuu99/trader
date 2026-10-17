@@ -6,7 +6,7 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 
 | ID | Status | Point |
 |---|---|---|
-| [TD-001](TODO/TD-001-pre-order-real-margin-check/DETAIL.md) | DONE 2026-10-17 (unreleased) | Pre-order real-margin check before live ENTRY (clamp qty to Kite available cash) |
+| [TD-001](TODO/TD-001-pre-order-real-margin-check/DETAIL.md) | DONE 2026-10-17 (release-20261017d) | Pre-order real-margin check before live ENTRY (clamp qty to Kite available cash) |
 
 ## Trailing stop
 
@@ -70,4 +70,4 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 
 | ID | Status | Point |
 |---|---|---|
-| [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | DONE 2026-10-17 (unreleased) | Persist original parent notional (add-on sizing after scale-out + reboot) |
+| [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | DONE 2026-10-17 (release-20261017e) | Persist original parent notional (add-on sizing after scale-out + reboot) |
