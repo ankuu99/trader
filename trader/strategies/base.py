@@ -82,6 +82,10 @@ class Strategy(ABC):
         """
         return None
 
+    def tick_exit_level(self) -> "tuple[float, str] | None":
+        """Backtest-only hook (ISS-14): the highest armed tick-exit price, or None."""
+        return None
+
     def on_order_update(self, order: dict) -> None:
         """
         Called when an order linked to this strategy changes status.

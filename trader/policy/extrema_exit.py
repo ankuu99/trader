@@ -375,6 +375,29 @@ class ExtremaExitPolicy:
     # Tick-speed exits
     # ------------------------------------------------------------------
 
+    def tick_exit_level(self, strat) -> "tuple[float, str] | None":
+        """Highest price at which tick_exit would fire on the CURRENT (pre-candle) state,
+        excluding the hard stop (the backtest engine owns that via its own low check).
+        Returns (level, reason_code) or None. Pure — mutates nothing. Used by the backtest
+        engine to test the candle low (ISS-14); live sees every tick and never calls it."""
+        pos = strat._pos
+        if pos.entry_price is None:
+            return None
+        cands: list[tuple[float, str]] = []
+        if self._breakeven_stop_enabled and pos.breakeven_active:
+            cands.append((pos.entry_price * (1.0 + self._breakeven_buffer_pct / 100.0), "BREAKEVEN"))
+        if pos.trailing_active and pos.peak_close is not None:
+            cands.append((pos.peak_close * (1.0 - self._effective_trail_pct(strat) / 100.0), "TRAILING"))
+        if pos.trailing_active:
+            _pt_trail = pos.pattern_top_trailing or pos.guard_trailing
+            _use_floor = (not _pt_trail) or self._pattern_top_floor_enabled
+            _floor_pct = self._sell_min_pct if _pt_trail else self._profit_pct
+            if _use_floor:
+                cands.append((pos.entry_price * (1.0 + _floor_pct / 100.0), "TRAILING"))
+        if not cands:
+            return None
+        return max(cands, key=lambda c: c[0])
+
     def tick_exit(self, strat, tick: dict, last_price: float) -> ExitDecision | None:
         """Evaluate tick-granularity exits. Assumes the caller has already checked
         position/window/last_price guards. Mutates trailing/peak/breakeven state."""

@@ -378,6 +378,12 @@ class LRExtremaStrategy(Strategy):
             exit_fraction=getattr(decision, "exit_fraction", None),
         )
 
+    def tick_exit_level(self):
+        """Backtest-only hook (ISS-14): highest armed tick-exit level on pre-candle state."""
+        if self.is_flat() or self._pos.entry_price is None:
+            return None
+        return self._exit_policy.tick_exit_level(self)
+
     def on_tick(self, tick: dict) -> Signal | None:
         """
         Called on every raw tick (live) or simulated tick (backtest).

@@ -650,7 +650,12 @@ def run_backtest(
             continue
 
         # Trailing stop simulation via on_tick.
-        # Feed candle high first (updates _peak_close), then close (checks trail).
+        # ISS-14: first test the candle LOW against the highest tick-exit level (trail /
+        # trailing floor / breakeven) armed BEFORE this candle — live sees every tick, so a
+        # low piercing that level exits there even if the candle closes back above it. Fill
+        # is min(level, open). Levels armed by this candle's own high are not tested against
+        # its low (intrabar order unknowable). Hard SL is handled above, untouched.
+        # Otherwise: feed candle high first (updates _peak_close), then close (checks trail).
         # Hard SL is already handled intrabar above; if it fired, strategy state
         # is already reset and on_tick returns None safely.
         #
@@ -664,7 +669,35 @@ def run_backtest(
         if candle.get("_is_eod"):
             _eod_ts = datetime.combine(candle["timestamp"].date(), config.trading_end)
             _ticks.append((candle["close"], _eod_ts, True))
+
+        def _tick_exit_fill(exit_price: float, tick_reason: str) -> None:
+            pos = open_positions.pop(symbol)
+            _full_qty = pos["qty"]
+            _consume_lots(symbol, pos, _full_qty, exit_price, tick_reason,
+                          candle["timestamp"])
+            risk.close_position(symbol, exit_price)
+            strategy.on_order_update({
+                "status": "COMPLETE",
+                "instrument": symbol,
+                "direction": "SELL",
+                "signal_type": "EXIT",
+                "quantity": _full_qty,
+                "price": exit_price,
+                "fill_price": exit_price,
+            })
+
         if symbol in open_positions and _in_window and current_ts[0] != open_positions[symbol]["entry_date"]:
+            _lvl_fn = getattr(strategy, "tick_exit_level", None)
+            _lvl = _lvl_fn() if _lvl_fn else None
+            if _lvl is not None and candle["low"] <= _lvl[0]:
+                _low_signal = strategy.on_tick({
+                    "last_price": candle["low"],
+                    "instrument_token": candle.get("instrument_token"),
+                    "timestamp": candle["timestamp"],
+                })
+                if _low_signal is not None:
+                    _tick_exit_fill(min(_lvl[0], candle["open"]), _lvl[1])
+                    _ticks = []
             for tick_price, tick_ts, _is_eod_tick in _ticks:
                 if symbol not in open_positions:
                     break
@@ -674,24 +707,11 @@ def run_backtest(
                     "timestamp": tick_ts,
                 })
                 if tick_signal is not None:
-                    pos = open_positions.pop(symbol)
                     # Intraday trail exits gap-adjust to the open; the EOD force-close
                     # fills at the closing price (the last tradeable price of the day).
                     exit_price = candle["close"] if _is_eod_tick else min(tick_price, candle["open"])
                     tick_reason = getattr(tick_signal, "exit_reason", None) or "TRAILING"
-                    _full_qty = pos["qty"]
-                    _consume_lots(symbol, pos, _full_qty, exit_price, tick_reason,
-                                  candle["timestamp"])
-                    risk.close_position(symbol, exit_price)
-                    strategy.on_order_update({
-                        "status": "COMPLETE",
-                        "instrument": symbol,
-                        "direction": "SELL",
-                        "signal_type": "EXIT",
-                        "quantity": _full_qty,
-                        "price": exit_price,
-                        "fill_price": exit_price,
-                    })
+                    _tick_exit_fill(exit_price, tick_reason)
                     break
 
         # Strategy decision — on the base candle (passthrough) or only when the
