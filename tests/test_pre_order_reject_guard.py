@@ -38,7 +38,7 @@ def _pending_strategy() -> LRExtremaStrategy:
 
 
 @pytest.mark.parametrize("reason", ["quantity_zero", "max_positions", "stock_paused",
-                                    "daily_halt", "slow_tf_limit", None])
+                                    "daily_halt", "slow_tf_limit", "insufficient_cash", None])
 def test_pre_order_reject_clears_pending_entry_guard(reason):
     strat = _pending_strategy()
     strat.on_pre_order_reject(_signal(), reason)

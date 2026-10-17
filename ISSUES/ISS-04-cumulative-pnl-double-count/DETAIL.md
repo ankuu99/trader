@@ -19,3 +19,9 @@ Source: Independent production-safety review 2026-10-17, finding 3; previously `
   one order more than can be funded. Fix: when the equity cap binds, seed the ledger
   so `total_capital + cumulative_pnl` equals real equity (e.g. set effective capital
   to `equity − cumulative_pnl`), or stop adding pnl when capital was set from equity.
+
+## Addendum 2026-10-17 — decided
+
+> Item 4 should be a.
+
+(a) = realised profits grow the base sleeve first; pool = equity above base + realised P&L. Guide: `to_develop/2026-10-17_ISS-04_cumulative-pnl-live-capital-split.md`.

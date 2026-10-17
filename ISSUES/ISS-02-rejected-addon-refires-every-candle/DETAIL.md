@@ -15,3 +15,9 @@ Source: Independent production-safety review 2026-10-17, finding 2. Reproduced v
 > 2 note it was tried, but dont block, given the model continues to remain bullish on that. let;s discuss this beofre we dicde
 
 Related: ISS-13 (same loop for parent entries), TD-001 (pre-order real-margin check).
+
+## Addendum 2026-10-17 — decided
+
+> Item 2 should be built.
+
+Fix = pre-order cash check (TD-001): `to_develop/2026-10-17_TD-001_pre-order-cash-check.md`.

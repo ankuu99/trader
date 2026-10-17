@@ -21,3 +21,7 @@ these ledger/execution fixes the ONLY live path to capturing the rejected dips:
   source and serialises same-candle signal races honestly (2026-08-14: CHENNPETRO
   filled at 15:15:02, MAYURUNIQ rejected at 15:15:03 with ₹1,430 available — the
   ATHERENERG sale proceeds hadn't settled into usable margin yet).
+
+## Addendum 2026-10-17 — built
+
+Built as a skip (not a clamp), owner-approved ("Item 2 should be built"). Guide: `to_develop/completed/2026-10-17_TD-001_pre-order-cash-check.md`.

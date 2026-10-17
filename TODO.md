@@ -6,7 +6,7 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 
 | ID | Status | Point |
 |---|---|---|
-| [TD-001](TODO/TD-001-pre-order-real-margin-check/DETAIL.md) | PENDING | Pre-order real-margin check before live ENTRY (clamp qty to Kite available cash) |
+| [TD-001](TODO/TD-001-pre-order-real-margin-check/DETAIL.md) | DONE 2026-10-17 (unreleased) | Pre-order real-margin check before live ENTRY (clamp qty to Kite available cash) |
 
 ## Trailing stop
 

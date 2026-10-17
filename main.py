@@ -36,7 +36,7 @@ from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
-from trader.risk.manager import RiskManager, free_cash_from_margins, scale_in_pool
+from trader.risk.manager import RiskManager, free_cash_from_margins, scale_in_pool, unfunded_entry
 from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
@@ -716,12 +716,31 @@ def main():
             getattr(strategy, "_max_gain_pct", 0.0),
         )
 
-    def _place_order(order):
+    def _place_order(order, strategy=None, signal=None):
         """orders.place() for the decision paths. A synchronous broker refusal
         (no order id — CAS block, margin, network) has already been dispatched
         as REJECTED by OrderManager (strategy state restored, signal row
         stamped, Telegram sent); swallow the re-raise so it doesn't abort the
-        rest of the candle/tick handler."""
+        rest of the candle/tick handler. Live ENTRY orders the account can't
+        fund are skipped before placement (TD-001)."""
+        if config.env == "live":
+            cash = _fetch_kite_cash() if order.signal_type == SignalType.ENTRY else None
+            need = unfunded_entry(order, cash)
+            if need is not None:
+                reason = f"insufficient_cash: need ₹{need:,.0f}, have ₹{cash:,.0f}"
+                logger.info("Order skipped — %s | %s%s", reason, order.instrument,
+                            " (add-on)" if order.addon else "")
+                risk.on_order_cancelled(order.instrument)
+                try:
+                    store.mark_signal_rejected(order.instrument, order.direction.value, reason)
+                except Exception:
+                    logger.debug("mark_signal_rejected failed for %s", order.instrument,
+                                 exc_info=True)
+                if strategy is not None and signal is not None:
+                    hook = getattr(strategy, "on_pre_order_reject", None)
+                    if hook is not None:
+                        hook(signal, "insufficient_cash")
+                return
         try:
             orders.place(order)
         except Exception:
@@ -802,7 +821,7 @@ def main():
             if _reject_hook is not None:
                 _reject_hook(signal, risk._last_reject_reason)
             return
-        _place_order(order)
+        _place_order(order, strategy, signal)
 
     # Candle handler
     def handle_candle(candle: dict):
@@ -1079,7 +1098,7 @@ def main():
                 if _reject_hook is not None:
                     _reject_hook(signal, risk._last_reject_reason)
                 continue
-            _place_order(order)
+            _place_order(order, strat, signal)
 
     feed.subscribe(tokens)
     feed.register_candle_handler(handle_candle)

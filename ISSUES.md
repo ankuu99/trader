@@ -5,7 +5,7 @@ One folder per reported problem under `ISSUES/ISS-NN-<slug>/` (SUMMARY · DETAIL
 | ID | Status | Area | Title |
 |---|---|---|---|
 | [ISS-01](ISSUES/ISS-01-scalein-pool-opening-cash-double-count/DETAIL.md) | FIXED (unreleased, pending field validation) | live capital / scale-in | Scale-in pool & effective capital use Kite opening cash — same-day restart double-counts buys |
-| [ISS-02](ISSUES/ISS-02-rejected-addon-refires-every-candle/DETAIL.md) | PENDING | live orders / scale-in | Broker-rejected add-on is re-placed on every decision candle |
+| [ISS-02](ISSUES/ISS-02-rejected-addon-refires-every-candle/DETAIL.md) | FIXED via TD-001 (unreleased) | live orders / scale-in | Broker-rejected add-on is re-placed on every decision candle |
 | [ISS-03](ISSUES/ISS-03-partial-scaleout-addon-restart-divergence/DETAIL.md) | PENDING | risk ledger / persistence | Partial scale-out on an add-on position: pro-rata in memory vs FIFO in DB — reboot changes avg entry, pool, loss-block arming |
 | [ISS-04](ISSUES/ISS-04-cumulative-pnl-double-count/DETAIL.md) | PENDING | risk ledger / live capital | `capital_available` adds cumulative_pnl on top of Kite equity that already contains it |
 | [ISS-05](ISSUES/ISS-05-loss-block-wall-clock-sessions/DETAIL.md) | PENDING | risk / scheduler | Loss block counts sessions by weekday wall clock, not the NSE trading calendar |

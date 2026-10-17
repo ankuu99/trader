@@ -456,8 +456,11 @@ class Store:
             )
 
     def mark_signal_broker_rejected(self, instrument: str, direction: str, reason: str) -> bool:
-        """Flip the signal row behind a broker-rejected order to accepted=0 with
-        reject_reason "BROKER: <reason>". log_signal() records accepted=1 at
+        return self.mark_signal_rejected(instrument, direction, f"BROKER: {reason}")
+
+    def mark_signal_rejected(self, instrument: str, direction: str, reason: str) -> bool:
+        """Flip the signal row behind a refused order to accepted=0 with
+        reject_reason stored as given (broker path prefixes "BROKER: "). log_signal() records accepted=1 at
         risk approval, before the order is placed, so without this the signals
         table shows a trade that never happened (CAS 15:15 block, margin…).
 
@@ -476,7 +479,7 @@ class Store:
                 return False
             conn.execute(
                 "UPDATE signals SET accepted = 0, reject_reason = ? WHERE id = ?",
-                (f"BROKER: {reason}"[:300], row[0]),
+                (reason[:300], row[0]),
             )
             return True
 

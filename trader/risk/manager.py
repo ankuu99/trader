@@ -55,6 +55,21 @@ class Order:
     addon: bool = False    # ENTRY only: True = scale-in add-on lot on an open position
 
 
+CASH_CHECK_BUFFER = 1.01  # charges + market-order slippage headroom for the pre-order cash check
+
+
+def unfunded_entry(order: Order, free_cash: float | None,
+                   buffer: float = CASH_CHECK_BUFFER) -> float | None:
+    """₹ needed when a live ENTRY order can't be funded from `free_cash`, else None.
+
+    None (= go ahead) for non-ENTRY orders and when free cash is unknown (margins call
+    failed → fail open, place as before). Needed = quantity × price_hint × buffer."""
+    if order.signal_type != SignalType.ENTRY or free_cash is None:
+        return None
+    need = order.quantity * order.price_hint * buffer
+    return need if free_cash < need else None
+
+
 def scale_in_pool(account_equity: float, base_capital: float, cap: float) -> float:
     """Live scale-in pool: funded ONLY by account equity above the base capital,
     capped at `cap` — never reserved out of the base (₹6.3L equity on a ₹6L base
