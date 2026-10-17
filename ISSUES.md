@@ -17,3 +17,4 @@ One folder per reported problem under `ISSUES/ISS-NN-<slug>/` (SUMMARY · DETAIL
 | [ISS-11](ISSUES/ISS-11-health-strip-test-weekday-blind/DETAIL.md) | PENDING | dashboard / tests | `test_render_page_health_strip` fails 09:15–15:30 on any day incl. weekends — dashboard 'market open' check ignores weekday |
 | [ISS-12](ISSUES/ISS-12-offgrid-15m-candles-on-ec2/DETAIL.md) | PENDING | data / historical fetch | Same-day re-warm-ups write off-grid '15minute' rows (15:16..15:25) into the EC2 candle cache |
 | [ISS-13](ISSUES/ISS-13-broker-reject-entry-refire-loop/DETAIL.md) | PENDING | live orders | Broker-rejected ENTRY (insufficient funds) re-fires every candle |
+| [ISS-14](ISSUES/ISS-14-backtest-trailing-ignores-candle-low/DETAIL.md) | PENDING | backtest engine | Backtest trailing/breakeven exits ignore the candle low — live exits on intrabar pierces the backtest never sees |

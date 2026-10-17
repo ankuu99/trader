@@ -8,4 +8,7 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
 3. **TD-009** dated re-checks: AJANTPHARM ~10-21, CEATLTD after 10-22, RBLBANK ~10-26.
 4. **TD-015** — released 2026-10-17 (release-20261017e). Positions bought before it (all 12 current) have parent_notional 0 → remainder-based sizing; only MAYURUNIQ is actually affected.
 5. **TD-014** — golden harness reads the live config.yaml.
-6. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13 (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
+6. **Trough/peak model campaign** — baseline inventory `reviews/extrema_model_research_inventory_20261018.md`;
+   evaluation plan proposed 2026-10-18, awaiting owner review. **ISS-14** (backtest trailing ignores candle low)
+   should be assessed first — every exit-sensitive A/B inherits it.
+7. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13 (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
