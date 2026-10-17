@@ -15,3 +15,7 @@ Source: Independent production-safety review 2026-10-17, finding 1 (`reviews/pro
 ## Addendum 2026-10-17 — Kite margins evidence (Saturday read)
 
 `kite.margins('equity')` after the owner's ₹1L top-up: `available.cash` 25,102.9 = `opening_balance`; `intraday_payin` 100,000; `live_balance` 125,102.9; `net` 125,102.9. The field the bot reads (`cash`) missed the same-day payin as well as same-day buys.
+
+## Addendum 2026-10-17 — fixed (1756139)
+
+`free_cash_from_margins` (trader/risk/manager.py) reads `net` → `available.live_balance` → `available.cash`; `main.py::_fetch_kite_cash` uses it and logs all raw fields. Guide: `to_develop/completed/2026-10-17_ISS-01_live-cash-from-margins-net.md`. Not yet released.
