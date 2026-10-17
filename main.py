@@ -767,6 +767,9 @@ def main():
             exit_reason=signal.exit_reason if order is not None else None,
         )
         if order is None:
+            _reject_hook = getattr(strategy, "on_pre_order_reject", None)
+            if _reject_hook is not None:
+                _reject_hook(signal, risk._last_reject_reason)
             return
         _place_order(order)
 
@@ -1040,6 +1043,9 @@ def main():
                 exit_reason=signal.exit_reason if order is not None else None,
             )
             if order is None:
+                _reject_hook = getattr(strat, "on_pre_order_reject", None)
+                if _reject_hook is not None:
+                    _reject_hook(signal, risk._last_reject_reason)
                 continue
             _place_order(order)
 

@@ -539,6 +539,9 @@ def run_backtest(
                 pending_exit_reasons[symbol] = reason
         order = risk.validate(signal)
         if order is None:
+            _reject_hook = getattr(strategy, "on_pre_order_reject", None)
+            if _reject_hook is not None:
+                _reject_hook(signal, risk._last_reject_reason)
             return
         orders.place(order)
 

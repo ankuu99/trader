@@ -100,6 +100,26 @@ class Strategy(ABC):
             # Order didn't go through — leave position state unchanged
             pass
 
+    # Pre-order reject reasons where an order or position for this instrument really
+    # exists, so the pending-entry guard must stay armed.
+    _GUARD_KEEP_REASONS = frozenset({"already_in_position", "pending_order_exists"})
+
+    def on_pre_order_reject(self, signal: "Signal", reason: str | None) -> None:
+        """RiskManager refused an ENTRY before any order was placed, so no order
+        update will ever arrive. Clear the pending-entry guard (set at signal time)
+        through the normal REJECTED path; otherwise the strategy waits for a fill
+        forever and emits nothing more for this instrument — the rest of the run in
+        a backtest, until restart live (QUESS/TVSMOTOR frozen Jan→Oct 2026 by one
+        `quantity_zero`). EXITs and in-position add-on ENTRYs are left alone."""
+        if signal.signal_type != SignalType.ENTRY or self.position is not None:
+            return
+        if reason in self._GUARD_KEEP_REASONS:
+            return
+        self.on_order_update({
+            "instrument": signal.instrument, "status": "REJECTED",
+            "signal_type": SignalType.ENTRY, "reject_reason": reason,
+        })
+
     def seed_position_state(self, peak_close: float, max_gain_pct: float,
                             exit_flags: dict | None = None) -> None:
         """Restore in-memory position state after a restart. No-op by default."""
