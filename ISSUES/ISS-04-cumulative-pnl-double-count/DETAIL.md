@@ -25,3 +25,7 @@ Source: Independent production-safety review 2026-10-17, finding 3; previously `
 > Item 4 should be a.
 
 (a) = realised profits grow the base sleeve first; pool = equity above base + realised P&L. Guide: `to_develop/2026-10-17_ISS-04_cumulative-pnl-live-capital-split.md`.
+
+## Addendum 2026-10-17 — fixed
+
+`risk.manager.live_capital_split` used by `main._apply_effective_capital`; dashboard shows equity vs base + realised P&L. Guide: `to_develop/completed/2026-10-17_ISS-04_cumulative-pnl-live-capital-split.md`.

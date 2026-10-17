@@ -36,7 +36,7 @@ from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
-from trader.risk.manager import RiskManager, free_cash_from_margins, scale_in_pool, unfunded_entry
+from trader.risk.manager import RiskManager, free_cash_from_margins, live_capital_split, unfunded_entry
 from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
@@ -499,30 +499,38 @@ def main():
         # Cap buying power at real account equity (free cash + already-deployed
         # holdings), bounded by the config ceiling. Run after reconciliation —
         # so capital_deployed is known and not double-counted (capital_available
-        # already subtracts it). Cumulative P&L is left intact.
+        # already subtracts it). Cumulative P&L is left intact and is NOT added on
+        # top of equity (Kite equity already contains it): effective_total + cum_pnl
+        # = min(base + cum_pnl, equity), so profits grow the base sleeve first and
+        # only equity above that sleeve funds the scale-in pool (ISS-04).
         # Ceiling = the config-FILE capital: total_capital is already the previous
         # effective value on a pre_market retry and could never grow back.
         config_ceiling = config.base_capital
         account_equity = kite_cash + risk.capital_deployed + risk.scale_in_deployed
-        effective = min(config_ceiling, account_equity)
+        effective, pool = live_capital_split(
+            account_equity, config_ceiling, risk.cumulative_pnl, config.scale_in_budget_cap,
+        )
+        sleeve = config_ceiling + risk.cumulative_pnl
         config.set_effective_capital(effective)
         logger.info(
             "Effective capital set (%s) | config_cap=%.0f account_equity=%.0f "
-            "(cash=%.0f + deployed=%.0f + addons=%.0f) effective=%.0f",
+            "(cash=%.0f + deployed=%.0f + addons=%.0f) effective=%.0f cum_pnl=%.0f sleeve=%.0f",
             source, config_ceiling, account_equity, kite_cash,
             risk.capital_deployed, risk.scale_in_deployed, effective,
+            risk.cumulative_pnl, sleeve,
         )
         bot_state.account_equity = account_equity
-        # Scale-in pool is funded ONLY by equity above the base — never reserved out
-        # of it: ₹6.3L in the account → ₹30k pool; ≥ ₹6.6L → the full ₹60k cap.
+        bot_state.capital_floor = sleeve
+        # Scale-in pool is funded ONLY by equity above base + realised P&L — never
+        # reserved out of the sleeve: cum_pnl 0, ₹6.3L in the account → ₹30k pool;
+        # ≥ ₹6.6L → the full ₹60k cap.
         if config.scale_in_enabled:
-            pool = scale_in_pool(account_equity, config_ceiling, config.scale_in_budget_cap)
             config.set_scale_in_budget(pool)
             log = logger.info if pool >= config.scale_in_budget_cap else logger.warning
             log(
-                "Scale-in pool (%s) | funded=%.0f of cap=%.0f (equity %.0f above base %.0f)%s",
-                source, pool, config.scale_in_budget_cap, max(0.0, account_equity - config_ceiling),
-                config_ceiling, "" if pool > 0 else " — no add-ons until the account holds more than the base",
+                "Scale-in pool (%s) | funded=%.0f of cap=%.0f (equity %.0f above sleeve %.0f)%s",
+                source, pool, config.scale_in_budget_cap, max(0.0, account_equity - sleeve),
+                sleeve, "" if pool > 0 else " — no add-ons until the account holds more than base + realised P&L",
             )
 
     if config.env == "live" and config.loss_reentry_block_enabled:

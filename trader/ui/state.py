@@ -25,7 +25,9 @@ class BotState:
     #   "source": "startup"|"hot-reload"|"heartbeat"|"ui-reload"}
     account_equity: float | None = None
     # live: Kite cash + deployed (base + add-ons), set with the effective-capital cap;
-    # the dashboard derives the scale-in pool funding from it (equity above the base)
+    # the dashboard derives the scale-in pool funding from it (equity above capital_floor)
+    capital_floor: float | None = None
+    # live: base + realised P&L — equity above it funds scale-in (ISS-04)
     reload_token: object = None
     # callable set by main.py — dashboard's POST /token/reload invokes it to re-read
     # config/.env and hot-swap the Kite token without a restart (weekly-restart ops)

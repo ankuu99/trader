@@ -77,6 +77,21 @@ def scale_in_pool(account_equity: float, base_capital: float, cap: float) -> flo
     return min(cap, max(0.0, account_equity - base_capital))
 
 
+def live_capital_split(account_equity: float, base_capital: float,
+                       cumulative_pnl: float, pool_cap: float) -> tuple[float, float]:
+    """(effective total_capital, scale-in pool) for live mode.
+
+    The base sleeve is total_capital + cumulative_pnl (what capital_available and the
+    compounding per-stock cap use), so realised profits grow the sleeve first — as in the
+    backtest — and only equity above base + profits funds the add-on pool. Kite equity
+    already contains realised P&L: setting total_capital = equity would count it twice.
+    effective_total + cumulative_pnl = min(base + cumulative_pnl, equity); floor 0."""
+    sleeve = base_capital + cumulative_pnl
+    effective = max(0.0, min(base_capital, account_equity - cumulative_pnl))
+    pool = scale_in_pool(account_equity, sleeve, pool_cap)
+    return effective, pool
+
+
 def free_cash_from_margins(margins: dict) -> float | None:
     """Live free cash from a Kite ``margins(segment="equity")`` payload.
 

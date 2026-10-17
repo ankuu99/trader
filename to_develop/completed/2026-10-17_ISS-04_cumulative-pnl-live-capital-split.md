@@ -1,5 +1,5 @@
 # Live capital split: stop double-counting realised P&L; profits grow the base sleeve first
-Written: 2026-10-17 · Tag: ISS-04 · Status: OPEN
+Written: 2026-10-17 · Tag: ISS-04 · Status: DONE (pending release)
 
 ## Source
 
@@ -98,4 +98,11 @@ Whole suite green (`python -m pytest -q`; only ISS-11 may fail 09:15–15:30 IST
 - [ ] only manager.py, main.py, trader/ui/state.py, trader/ui/template.py and tests touched
 
 ## Completion record
-(appended at archive)
+- **Completed:** 2026-10-17 — implementer (general-purpose, sonnet); validated by the main session (diff vs every step; `python -m pytest -q` 548 passed).
+- **Commit:** see `git log -- to_develop/completed/2026-10-17_ISS-04_cumulative-pnl-live-capital-split.md`.
+- **Deviations:** none by the implementer (wrote `P&amp;L` HTML-escaped). Main-session touch-ups at validation: state.py
+  comment order (the new field had split `account_equity` from its comment), the stale "funded only by equity above the
+  base" comment in main.py, the dashboard's "no add-ons until … more than the base" note → "base + realised P&L".
+  CLAUDE.md scale-in live-funding text + new TD-001 bullet.
+- **Notes:** no render test covers the Account equity row (none existed; guide said not to build one). With live
+  cum_pnl = 0 the outputs are unchanged — verify the "Effective capital set" line shows `cum_pnl=0 sleeve=600000` after release.

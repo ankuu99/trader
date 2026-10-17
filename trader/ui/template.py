@@ -1616,14 +1616,19 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             f' (cap &#8377;{_si_cap:,.0f})</span></td></tr>'
         )
         if _equity is not None:
-            _base = getattr(config, "base_capital", total)
+            _cfg_base = getattr(config, "base_capital", total)
+            _floor = getattr(bot_state, "capital_floor", None)
+            _base = _floor if _floor is not None else _cfg_base
             _above = _equity - _base
             _note = ("" if _above > 0 else
-                     ' — <span class="orange">no add-ons until the account holds more than the base</span>')
+                     ' — <span class="orange">no add-ons until the account holds more than base + realised P&amp;L</span>')
+            _vs = (f'&#8377;{_base:,.0f} base + realised P&amp;L'
+                   if _floor is not None and abs(_floor - _cfg_base) >= 1
+                   else f'&#8377;{_base:,.0f} base')
             scale_in_row += (
                 f'<tr><td class="dim">Account equity</td><td class="val">&#8377; {_equity:,.0f}'
                 f' <span class="dim">({"+" if _above >= 0 else "&#8722;"}&#8377;{abs(_above):,.0f} vs'
-                f' &#8377;{_base:,.0f} base — only the excess funds scale-in){_note}</span></td></tr>'
+                f' {_vs} — only the excess funds scale-in){_note}</span></td></tr>'
             )
     else:
         scale_in_row = ""
