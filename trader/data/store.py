@@ -121,7 +121,8 @@ class Store:
                     pattern_top_trailing INTEGER DEFAULT 0,
                     addon_lots           TEXT,
                     partial_taken        INTEGER DEFAULT 0,
-                    breakeven_active     INTEGER DEFAULT 0
+                    breakeven_active     INTEGER DEFAULT 0,
+                    parent_notional      REAL    DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS signals (
@@ -162,6 +163,8 @@ class Store:
                 ("addon_lots",           "TEXT"),  # scale-in add-on lots (JSON list)
                 ("partial_taken",        "INTEGER DEFAULT 0"),  # exit flags restored on restart
                 ("breakeven_active",     "INTEGER DEFAULT 0"),
+                # original parent ₹ notional — sizes the first add-on after a scale-out + reboot (TD-015)
+                ("parent_notional",      "REAL DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
@@ -490,21 +493,25 @@ class Store:
     def upsert_open_position(self, instrument: str, entry_price: float,
                              quantity: int, held_bars: int, entry_time: datetime,
                              low_since_entry: float | None = None):
+        """Insert/replace a parent lot (only caller is a parent BUY fill); also records parent_notional."""
         _low = low_since_entry if low_since_entry is not None else entry_price
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time, low_since_entry)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time, low_since_entry,
+                                            parent_notional)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(instrument) DO UPDATE SET
                     entry_price     = excluded.entry_price,
                     quantity        = excluded.quantity,
                     held_bars       = excluded.held_bars,
                     entry_time      = excluded.entry_time,
-                    low_since_entry = excluded.low_since_entry
+                    low_since_entry = excluded.low_since_entry,
+                    parent_notional = excluded.parent_notional
                 """,
                 (instrument, entry_price, quantity, held_bars,
-                 self._to_naive(entry_time).isoformat(), _low),
+                 self._to_naive(entry_time).isoformat(), _low,
+                 entry_price * quantity),
             )
 
     def update_position_metrics(self, instrument: str, held_bars: int,
@@ -633,7 +640,7 @@ class Store:
             rows = conn.execute(
                 "SELECT instrument, entry_price, quantity, held_bars, entry_time,"
                 " low_since_entry, addon_lots, trailing_active, pattern_top_trailing,"
-                " partial_taken, breakeven_active FROM open_positions"
+                " partial_taken, breakeven_active, parent_notional FROM open_positions"
             ).fetchall()
         out = []
         for r in rows:
@@ -641,6 +648,7 @@ class Store:
             d["addon_lots"] = json.loads(d["addon_lots"]) if d.get("addon_lots") else []
             for k in ("trailing_active", "pattern_top_trailing", "partial_taken", "breakeven_active"):
                 d[k] = bool(d.get(k))
+            d["parent_notional"] = float(d.get("parent_notional") or 0.0)
             out.append(d)
         return out
 

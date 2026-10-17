@@ -70,4 +70,4 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 
 | ID | Status | Point |
 |---|---|---|
-| [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | PENDING | Persist original parent notional (add-on sizing after scale-out + reboot) |
+| [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | DONE 2026-10-17 (unreleased) | Persist original parent notional (add-on sizing after scale-out + reboot) |

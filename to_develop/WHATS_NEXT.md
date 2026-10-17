@@ -6,6 +6,6 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
    dropping by the buy; TD-001 — any `Order skipped — insufficient_cash` shows as a rejected signal, not a broker reject/Telegram.
 2. **TD-013** — owner funds the pool: equity ₹5.79L; add-ons start above ₹6L (+ realised P&L); full ₹60k pool at ₹6.6L.
 3. **TD-009** dated re-checks: AJANTPHARM ~10-21, CEATLTD after 10-22, RBLBANK ~10-26.
-4. **TD-015** — persist the original parent notional (add-on sizing after a scale-out + reboot, positions without add-ons).
+4. **TD-015** — built 2026-10-17, awaiting release (owner funding the pool on 10-18).
 5. **TD-014** — golden harness reads the live config.yaml.
 6. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13 (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.

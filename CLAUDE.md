@@ -177,7 +177,7 @@ investment buys an add-on lot sized `fraction_pct`% of the **previous** lot's no
   costs/MIS-CNC detection and the `addon_tier` key (0 = parent).
 - **Persistence** — add-on lots live in the `open_positions.addon_lots` JSON column
   (`store.add_position_lot`; each lot keeps its original `notional`); parent entry_price/entry_time untouched. Partial scale-outs reduce the parent and every lot **proportionally** (`store.consume_position_lots`, whole shares by largest remainder, zero-qty lots kept) — the same as `RiskManager.reduce_position`, so the daily reboot never changes avg cost, pool usage, realised/cumulative P&L or loss-block arming (ISS-03, `tests/test_scaleout_reboot_parity.py`). Restart seeding:
-  `risk.seed_position(parent)` + `risk.seed_scale_in(addon_lots)`.
+  `risk.seed_position(parent)` + `risk.restore_parent_notional(open_positions.parent_notional)` + `risk.seed_scale_in(addon_lots)` — the parent's ORIGINAL ₹ notional is persisted at the parent fill so the first add-on after a scale-out + reboot is sized like the no-reboot path (TD-015; legacy rows = 0 → sized off the remainder).
 - **calibrate.py / screen.py force `scale_in.enabled=false`** — per-stock param search and
   screening stay un-levered; validate scale-in via backtest.py / backtest_rolling.py.
 - No GTT is ever placed for add-on lots.

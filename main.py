@@ -359,6 +359,7 @@ def main():
                 _parent_qty, _addon_lots = pos["quantity"], []
             risk.on_order_filled(instrument, pos["entry_price"], _parent_qty,
                                  fill_ts=entry_time_dt)
+            risk.restore_parent_notional(instrument, pos.get("parent_notional") or 0.0)
             if _addon_lots:
                 risk.seed_scale_in(instrument, _addon_lots)
             restored.append(pos)
@@ -432,6 +433,7 @@ def main():
             _entry_ts = (datetime.fromisoformat(pos["entry_time"])
                          if pos.get("entry_time") else None)
             risk.seed_position(instrument, _parent_qty, avg, entry_ts=_entry_ts)
+            risk.restore_parent_notional(instrument, pos.get("parent_notional") or 0.0)
             if _addon_lots:
                 risk.seed_scale_in(instrument, _addon_lots)
             open_instruments.add(instrument)

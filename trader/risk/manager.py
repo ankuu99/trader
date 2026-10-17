@@ -606,6 +606,15 @@ class RiskManager:
             instrument, qty, avg_price, self._capital_deployed,
         )
 
+    def restore_parent_notional(self, instrument: str, notional: float) -> None:
+        """Restart seeding: put back the parent lot's ORIGINAL ₹ notional (the base of the first add-on's
+        geometric size). seed_position / on_order_filled rebuild it from the remaining quantity, which a
+        pattern-top scale-out has shrunk (TD-015). No-op when notional <= 0 (legacy rows) or untracked."""
+        state = self._scale_in.get(instrument)
+        if state is None or not notional or notional <= 0:
+            return
+        state["last_lot_notional"] = float(notional)
+
     def seed_scale_in(self, instrument: str, addon_lots: list[dict]):
         """Restore scale-in lot state on startup from persisted addon lots.
 
