@@ -23,6 +23,9 @@ class BotState:
     token_status: dict = field(default_factory=dict)
     # token_status shape: {"valid": bool, "user_id": str, "checked_at": datetime,
     #   "source": "startup"|"hot-reload"|"heartbeat"|"ui-reload"}
+    account_equity: float | None = None
+    # live: Kite cash + deployed (base + add-ons), set with the effective-capital cap;
+    # the dashboard derives the scale-in pool funding from it (equity above the base)
     reload_token: object = None
     # callable set by main.py — dashboard's POST /token/reload invokes it to re-read
     # config/.env and hot-swap the Kite token without a restart (weekly-restart ops)

@@ -1599,17 +1599,41 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     </div>
     {health_strip}"""
 
-    # Scale-in pool row — shown only when the feature is on (or money is still parked)
+    # Scale-in pool rows — shown only when the feature is on (or money is still parked).
+    # Live, the pool is funded only by account equity ABOVE the base capital
+    # (main.py sets config.scale_in_budget from Kite margins), capped at budget_pct.
+    _si_on = getattr(config, "scale_in_enabled", False)
     _si_deployed = getattr(risk, "scale_in_deployed", 0.0)
-    _si_budget = config.scale_in_budget if getattr(config, "scale_in_enabled", False) else 0.0
-    if _si_budget or _si_deployed:
-        _si_pct = (_si_deployed / _si_budget * 100) if _si_budget else 100.0
+    _si_budget = config.scale_in_budget if _si_on else 0.0
+    _si_cap = getattr(config, "scale_in_budget_cap", _si_budget) if _si_on else 0.0
+    _equity = getattr(bot_state, "account_equity", None)
+    if _si_on or _si_deployed:
+        _si_free = max(0.0, _si_budget - _si_deployed)
+        _si_cls = "green" if _si_free > 0 else "orange"
         scale_in_row = (
-            f'<tr><td class="dim">Scale-in pool</td><td class="val">&#8377; {_si_deployed:,.0f}'
-            f' <span class="dim">/ &#8377;{_si_budget:,.0f} ({_si_pct:.0f}%)</span></td></tr>'
+            f'<tr><td class="dim">Scale-in pool</td><td class="val {_si_cls}">&#8377; {_si_free:,.0f} free'
+            f' <span class="dim">· used &#8377;{_si_deployed:,.0f} of &#8377;{_si_budget:,.0f} funded'
+            f' (cap &#8377;{_si_cap:,.0f})</span></td></tr>'
         )
+        if _equity is not None:
+            _base = getattr(config, "base_capital", total)
+            _above = _equity - _base
+            _note = ("" if _above > 0 else
+                     ' — <span class="orange">no add-ons until the account holds more than the base</span>')
+            scale_in_row += (
+                f'<tr><td class="dim">Account equity</td><td class="val">&#8377; {_equity:,.0f}'
+                f' <span class="dim">({"+" if _above >= 0 else "&#8722;"}&#8377;{abs(_above):,.0f} vs'
+                f' &#8377;{_base:,.0f} base — only the excess funds scale-in){_note}</span></td></tr>'
+            )
     else:
         scale_in_row = ""
+    _lb = getattr(risk, "loss_reentry_state", {}) if getattr(config, "loss_reentry_block_enabled", False) else {}
+    if _lb:
+        scale_in_row += (
+            '<tr><td class="dim">Loss block</td><td class="val orange">'
+            + ", ".join(f"{k.split(':')[-1]} ({v})" for k, v in sorted(_lb.items()))
+            + ' <span class="dim">sessions left</span></td></tr>'
+        )
 
     capital_card = f"""
     <div class="card">

@@ -55,6 +55,13 @@ class Order:
     addon: bool = False    # ENTRY only: True = scale-in add-on lot on an open position
 
 
+def scale_in_pool(account_equity: float, base_capital: float, cap: float) -> float:
+    """Live scale-in pool: funded ONLY by account equity above the base capital,
+    capped at `cap` — never reserved out of the base (₹6.3L equity on a ₹6L base
+    → ₹30k; ≥ ₹6.6L → the full ₹60k; ≤ ₹6L → 0, no add-ons)."""
+    return min(cap, max(0.0, account_equity - base_capital))
+
+
 class RiskManager:
     def __init__(self):
         self._open_positions: dict[str, int] = {}     # instrument → filled quantity

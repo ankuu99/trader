@@ -211,6 +211,26 @@ class Store:
         with self._conn() as conn:
             conn.execute("DELETE FROM state WHERE key = ?", (key,))
 
+    def save_loss_reentry(self, state: dict[str, int], instruments) -> None:
+        """Persist the loss re-entry countdown (instrument -> sessions left) as
+        `<instrument>.loss_reentry_sessions` keys; clears the key for every other
+        instrument in `instruments`, so expired blocks don't resurrect on restart."""
+        for inst in set(instruments) | set(state):
+            key = f"{inst}.loss_reentry_sessions"
+            if state.get(inst):
+                self.set_state(key, float(state[inst]))
+            else:
+                self.delete_state(key)
+
+    def load_loss_reentry(self, instruments) -> dict[str, int]:
+        """Read back the countdown written by save_loss_reentry (0 = not blocked)."""
+        out = {}
+        for inst in instruments:
+            left = int(self.get_state(f"{inst}.loss_reentry_sessions", 0))
+            if left > 0:
+                out[inst] = left
+        return out
+
     def clear_backtest_data(self):
         """Delete all data from all tables."""
         with self._conn() as conn:

@@ -36,7 +36,7 @@ from trader.features.indicators import htf_trend_regime
 from trader.notifications import telegram
 from trader.orders.manager import OrderManager
 from trader.portfolio.tracker import PortfolioTracker
-from trader.risk.manager import RiskManager
+from trader.risk.manager import RiskManager, scale_in_pool
 from trader.scheduler.jobs import Scheduler
 from trader.strategies.base import SignalType
 from trader.strategies.registry import build_strategies
@@ -476,29 +476,47 @@ def main():
                 instrument, qty, estimated_cost,
             )
 
+    def _persist_loss_reentry():
+        """Mirror risk's loss re-entry countdown into the state table. The box
+        reboots every morning, so an in-memory countdown would expire overnight
+        and the 3-session block would only ever cover the rest of the exit day."""
+        if config.env == "live":
+            store.save_loss_reentry(risk.loss_reentry_state, config.watchlist)
+
     def _apply_effective_capital(kite_cash: float, source: str = "startup"):
         # Cap buying power at real account equity (free cash + already-deployed
         # holdings), bounded by the config ceiling. Run after reconciliation —
         # so capital_deployed is known and not double-counted (capital_available
         # already subtracts it). Cumulative P&L is left intact.
-        config_ceiling = config.total_capital
-        account_equity = kite_cash + risk.capital_deployed
+        # Ceiling = the config-FILE capital: total_capital is already the previous
+        # effective value on a pre_market retry and could never grow back.
+        config_ceiling = config.base_capital
+        account_equity = kite_cash + risk.capital_deployed + risk.scale_in_deployed
         effective = min(config_ceiling, account_equity)
         config.set_effective_capital(effective)
         logger.info(
             "Effective capital set (%s) | config_cap=%.0f account_equity=%.0f "
-            "(cash=%.0f + deployed=%.0f) effective=%.0f",
+            "(cash=%.0f + deployed=%.0f + addons=%.0f) effective=%.0f",
             source, config_ceiling, account_equity, kite_cash,
-            risk.capital_deployed, effective,
+            risk.capital_deployed, risk.scale_in_deployed, effective,
         )
-        # Scale-in budget sits ON TOP of base capital — warn if the account
-        # can't actually cover base + budget (add-on orders would fail at Kite).
-        if config.scale_in_enabled and account_equity < effective + config.scale_in_budget:
-            logger.warning(
-                "Scale-in budget not fully covered by account equity | "
-                "equity=%.0f < base=%.0f + budget=%.0f — add-ons may be rejected by broker",
-                account_equity, effective, config.scale_in_budget,
+        bot_state.account_equity = account_equity
+        # Scale-in pool is funded ONLY by equity above the base — never reserved out
+        # of it: ₹6.3L in the account → ₹30k pool; ≥ ₹6.6L → the full ₹60k cap.
+        if config.scale_in_enabled:
+            pool = scale_in_pool(account_equity, config_ceiling, config.scale_in_budget_cap)
+            config.set_scale_in_budget(pool)
+            log = logger.info if pool >= config.scale_in_budget_cap else logger.warning
+            log(
+                "Scale-in pool (%s) | funded=%.0f of cap=%.0f (equity %.0f above base %.0f)%s",
+                source, pool, config.scale_in_budget_cap, max(0.0, account_equity - config_ceiling),
+                config_ceiling, "" if pool > 0 else " — no add-ons until the account holds more than the base",
             )
+
+    if config.env == "live" and config.loss_reentry_block_enabled:
+        risk.seed_loss_reentry(store.load_loss_reentry(config.watchlist))
+        if risk.loss_reentry_state:
+            logger.info("Loss re-entry block restored | %s", risk.loss_reentry_state)
 
     if config.env == "live" and _kite_cash is not None:
         _apply_effective_capital(_kite_cash)
@@ -579,6 +597,7 @@ def main():
                 store.set_state("cumulative_pnl", risk.cumulative_pnl)
         else:
             risk.close_position(instrument, fill_price)
+            _persist_loss_reentry()
             if config.env in ("paper", "live"):
                 store.delete_open_position(instrument)
                 store.set_state(f"{instrument}.peak_close", 0.0)
@@ -977,6 +996,7 @@ def main():
             capital=config.total_capital,
         )
         risk.reset_day()
+        _persist_loss_reentry()
         orders.clear_pending()
         feed.disconnect()
 

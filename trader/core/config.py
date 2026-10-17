@@ -199,6 +199,9 @@ class Config:
         self._base_capital: float = float(data["capital"]["total"])
         # instrument -> bool memo for is_aggregated_tf (deep-merge is per-call otherwise)
         self._aggregated_tf_cache: dict[str, bool] = {}
+        # Live: scale-in pool funded only by account equity ABOVE the config base
+        # (set by main.py from Kite margins). None = backtest/paper → budget_pct of capital.
+        self._scale_in_budget_override: float | None = None
 
     def reload(self, path) -> None:
         """Replace the loaded config with an alternate YAML file (backtest.py
@@ -209,6 +212,7 @@ class Config:
         self._data = data
         self._base_capital = float(data["capital"]["total"])
         self._aggregated_tf_cache = {}
+        self._scale_in_budget_override = None
 
     def reload_env(self) -> str | None:
         """Re-source config/.env with override so a KITE_ACCESS_TOKEN written by
@@ -456,11 +460,28 @@ class Config:
         return int(self._data.get("scale_in", {}).get("min_spacing_days", 1))
 
     @property
+    def scale_in_budget_pct(self) -> float:
+        return float(self._data.get("scale_in", {}).get("budget_pct", 20.0))
+
+    @property
+    def scale_in_budget_cap(self) -> float:
+        """Most the scale-in pool can ever be: budget_pct % of the config-file base
+        capital (₹6L × 10 % = ₹60k)."""
+        return self.base_capital * self.scale_in_budget_pct / 100
+
+    @property
     def scale_in_budget(self) -> float:
-        """Scale-in pool cap in ₹ — budget_pct % of total capital, ON TOP of base capital.
-        Base entry sizing never sees this pool; add-ons never consume base capital."""
-        pct = float(self._data.get("scale_in", {}).get("budget_pct", 20.0))
-        return self.total_capital * pct / 100
+        """Scale-in pool in ₹, ON TOP of base capital. Base entry sizing never sees
+        this pool; add-ons never consume base capital. Live, main.py sets it to the
+        account equity above the base (capped at scale_in_budget_cap) — the pool is
+        never reserved out of the base. Backtest/paper: budget_pct % of capital."""
+        if self._scale_in_budget_override is not None:
+            return self._scale_in_budget_override
+        return self.total_capital * self.scale_in_budget_pct / 100
+
+    def set_scale_in_budget(self, amount: float) -> None:
+        """Live override of the scale-in pool (see scale_in_budget)."""
+        self._scale_in_budget_override = max(0.0, float(amount))
 
     @property
     def product(self) -> str:

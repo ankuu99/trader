@@ -32,7 +32,9 @@ risk:
                                    # (time-avg util 61.8% -> 36.7% at 1.5%).
                                    # See reviews/reentry_discount_ab_20260826.md.
   loss_reentry_block:              # block re-entry for N sessions after a LOSING full exit.
-    enabled: false                 # OFF pending rolling validation. Recovery-profile study
+    enabled: true                  # ON 2026-10-17 with scale-in (reviews/combo_scalein_reentry_20261017.md):
+                                   # fixed-engine A/B — the old −₹69k "falsification" was the reject-freeze bug.
+                                   # Was: OFF pending rolling validation. Recovery-profile study
     sessions: 3                    # 2026-08-16: 105 rebuys <=3 sessions after a losing exit
                                    # = net -10.2k at 52% WR (vs 68% baseline), floor -5.3%/rung.
   order_type: market          # market | limit  (live mode only; paper always fills at next open)
@@ -54,7 +56,8 @@ risk:
   trading_start: "09:15"      # no ENTRY signals accepted before this time (IST)
   trading_end: "15:30"        # no ENTRY signals accepted after this time (IST)
 scale_in:                     # portfolio-level geometric add-ons (validated 2026-07-07 counterfactual)
-  enabled: false                # master switch — enable in paper first
+  enabled: true                 # ON 2026-10-17 paired with risk.loss_reentry_block — scale-in + loss block
+                                # beat baseline on P&L AND DD 4/4 half-years (reviews/combo_scalein_reentry_20261017.md)
   fraction_pct: 50            # add-on notional = this % of the PREVIOUS lot's notional
   max_addons: 2               # max add-on lots per position
   min_spacing_days: 1         # add-on must fill >= this many calendar days after last investment
@@ -749,6 +752,90 @@ per_stock_params:
           min_gain_pct: 0.5         # with these, so config matches the backtest.
         stale_2:                    # Other day/4h blocks use the ×2 values (2026-07-06).
           check_bars: 15
+          min_gain_pct: -2.0
+
+  # ——— Blocks below added by 2026-10-15 discovery calibration (reviews/discover_20261015.md).
+  # NOT in the watchlist yet — inert until added. Standard template, stale ×2 (10/30).
+  # AJANTPHARM — 4hour @0.82: ₹37.9k/59t (2023+), ₹17.7k/27t (2025+) vs 15m ₹17.1k / −₹4.2k. Plateau 0.82–0.85 only.
+  NSE:AJANTPHARM:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.82
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  # ABCAPITAL — 4hour @0.85: ₹36.8k/39t (2023+), ₹32.2k/26t (2025+) vs 15m ₹20.8k / ₹18.8k. Flat 0.80–0.90.
+  NSE:ABCAPITAL:
+    lr_extrema:
+      timeframe: 4hour
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.85
+      retrain_every: 2
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  # TATASTEEL — day @0.82: ₹27.5k/24t (2023+), ₹21.7k/15t (2025+) vs 15m ₹20.9k / ₹9.1k. All thresholds profitable.
+  NSE:TATASTEEL:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 100
+      lookback_bars: 400
+      threshold: 0.82
+      retrain_every: 1
+      extrema_order: 5
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.85
+          min_hold_before_exit: 2
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
           min_gain_pct: -2.0
 
 data:

@@ -34,7 +34,9 @@ def _gate(enabled=True, pct=1.5):
     with patch.object(type(config), "reentry_discount_enabled",
                       new_callable=PropertyMock, return_value=enabled), \
          patch.object(type(config), "reentry_discount_pct",
-                      new_callable=PropertyMock, return_value=pct):
+                      new_callable=PropertyMock, return_value=pct), \
+         patch.object(type(config), "loss_reentry_block_enabled",   # isolate from live config
+                      new_callable=PropertyMock, return_value=False):
         yield
 
 
