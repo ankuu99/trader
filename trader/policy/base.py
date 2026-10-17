@@ -24,6 +24,7 @@ class PositionState:
     max_gain_pct: float = 0.0
     breakeven_active: bool = False
     partial_taken: bool = False  # Step 2: a pattern-top scale-out has already fired
+    guard_trailing: bool = False  # trend guard suppressed a top and armed the trail instead
     # Full-state capture taken at FULL-exit signal emission (survives reset(), like
     # fill_price) so a REJECTED/CANCELLED exit order can restore the position's
     # clocks and trail state — e.g. a last-candle exit dying in Zerodha's Closing
@@ -42,6 +43,7 @@ class PositionState:
         self.max_gain_pct = 0.0
         self.breakeven_active = False
         self.partial_taken = False
+        self.guard_trailing = False
 
     def snapshot(self) -> None:
         """Capture every position-tracking field WITHOUT resetting. Called at a
@@ -59,6 +61,7 @@ class PositionState:
             "max_gain_pct": self.max_gain_pct,
             "breakeven_active": self.breakeven_active,
             "partial_taken": self.partial_taken,
+            "guard_trailing": self.guard_trailing,
         }
 
     def snapshot_and_reset(self) -> None:

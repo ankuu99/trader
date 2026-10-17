@@ -154,6 +154,13 @@ def flatten_strategy_params(params: dict) -> dict:
             _set(p, "stoch_rsi_period", s, "period")
             _set(p, "stoch_rsi_smooth_k", s, "smooth_k")
             _set(p, "stoch_rsi_gate_max", s, "max")
+        if "turn" in gates:
+            # Turn trigger: the previous bar must be the lowest close of the last
+            # `lowest_of` bars and the current bar must close above it (fire on the
+            # first up-close after a swing low). reviews/ather_minima_diagnosis_20260927.md
+            p["turn_gate_enabled"] = True
+            t = gates["turn"] or {}
+            _set(p, "turn_gate_lowest_of", t, "lowest_of")
         if "macd" in gates:
             p["macd_gate_enabled"] = True
             m = gates["macd"] or {}

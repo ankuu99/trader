@@ -78,6 +78,21 @@ class ExtremaExitPolicy:
         self._trend_guard_min_slope_pct: float = float(
             params.get("pattern_top_trend_guard_min_slope_pct", 0.1)
         )
+        # Trailing-instead-of-unloading experiments (2026-10-12). All default off.
+        # pattern_top_trail_pct: trail distance once a pattern-top has armed the trail
+        #   (None = the shared trail_pct). pattern_top_trail_overnight: that trail
+        #   survives the EOD force-close. trend_guard arm_trail: a guard-SUPPRESSED top
+        #   arms a trail (own width / overnight rule) instead of doing nothing.
+        _ptt = params.get("pattern_top_trail_pct")
+        self._pt_trail_pct: float | None = float(_ptt) if _ptt is not None else None
+        self._pt_trail_overnight: bool = bool(params.get("pattern_top_trail_overnight", False))
+        self._tg_arm_trail: bool = bool(params.get("pattern_top_trend_guard_arm_trail", False))
+        self._tg_trail_pct: float = float(
+            params.get("pattern_top_trend_guard_trail_pct", self._trail_pct)
+        )
+        self._tg_trail_overnight: bool = bool(
+            params.get("pattern_top_trend_guard_trail_overnight", False)
+        )
 
         self._stale_exit_enabled: bool = bool(params.get("stale_exit_enabled", False))
         self._stale_check_bars: int = int(params.get("stale_check_bars", 20))
@@ -119,7 +134,13 @@ class ExtremaExitPolicy:
         Regime widening (if enabled) then takes the max with trail_wide while the
         cached close-level uptrend flag holds — riding a leg never uses a trail
         tighter than trail_wide, and the normal distance resumes when it fades."""
-        if not self._trail_conf_enabled:
+        pos = getattr(strat, "_pos", None)
+        _ptt = bool(getattr(pos, "pattern_top_trailing", False))
+        if _ptt and self._pt_trail_pct is not None:
+            base = self._pt_trail_pct
+        elif getattr(pos, "guard_trailing", False) and not _ptt:
+            base = self._tg_trail_pct
+        elif not self._trail_conf_enabled:
             base = self._trail_pct
         else:
             p_max = getattr(strat, "_last_p_max", 0.0) or 0.0
@@ -277,6 +298,12 @@ class ExtremaExitPolicy:
                     # stale / hold-bars / hard-stop remain as backstops, and pattern-top
                     # re-arms naturally once the trend slope decays.
                     if self._trend_guard_enabled and self._in_uptrend(strat._candles):
+                        if (self._tg_arm_trail and self._trailing_enabled
+                                and not pos.guard_trailing and not pos.pattern_top_trailing):
+                            pos.trailing_active = True
+                            pos.guard_trailing = True
+                            if pos.peak_close is None:
+                                pos.peak_close = close
                         strat.signal_log.append({
                             "timestamp": ts,
                             "close": close,
@@ -367,7 +394,10 @@ class ExtremaExitPolicy:
             )
 
         # Force close trailing positions before overnight gap risk (tick-level precision)
-        if pos.trailing_active and self._force_trailing_close is not None:
+        _overnight = ((pos.pattern_top_trailing and self._pt_trail_overnight)
+                      or (pos.guard_trailing and not pos.pattern_top_trailing
+                          and self._tg_trail_overnight))
+        if pos.trailing_active and self._force_trailing_close is not None and not _overnight:
             _tick_ts = tick.get("timestamp")
             _tick_time = _tick_ts.time() if hasattr(_tick_ts, "time") else None
             if _tick_time is not None and _tick_time >= self._force_trailing_close:
@@ -405,8 +435,9 @@ class ExtremaExitPolicy:
                 reason = f"trailing stop {drawdown:.2f}% from peak {pos.peak_close:.2f} (dist={trail_dist:.2f}%)"
                 reason_code = "TRAILING"
         # Trailing floor — pattern-top trailing uses sell_min_pct as floor; regular uses profit_pct.
-        _use_floor = (not pos.pattern_top_trailing) or self._pattern_top_floor_enabled
-        _floor_pct = self._sell_min_pct if pos.pattern_top_trailing else self._profit_pct
+        _pt_trail = pos.pattern_top_trailing or pos.guard_trailing
+        _use_floor = (not _pt_trail) or self._pattern_top_floor_enabled
+        _floor_pct = self._sell_min_pct if _pt_trail else self._profit_pct
         if reason is None and pos.trailing_active and _use_floor and pct < _floor_pct:
             reason = f"trailing floor pct={pct:.2f}% < {_floor_pct:.2f}%"
             reason_code = "TRAILING"

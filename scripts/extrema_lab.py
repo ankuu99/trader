@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 import streamlit as st
 
 from scripts.lab.generator import (
+    LAB_DATA_DIR,
     SCENARIOS,
     load_scenario,
     save_scenario,
@@ -95,16 +96,24 @@ def _candles_mtime(scenario: str) -> float:
 
 st.sidebar.title("Extrema Lab")
 
-scenario = st.sidebar.selectbox("Scenario", list(SCENARIOS), index=0)
+# Real-stock scenarios: any lab_data/<name>/ dir with candles.csv + meta.json that
+# is not a synthetic generator spec (exported by scripts/lab/export_stock.py).
+_REAL = sorted(
+    d.name for d in LAB_DATA_DIR.iterdir()
+    if d.is_dir() and d.name not in SCENARIOS and (d / "candles.csv").exists()
+    and (d / "meta.json").exists()
+) if LAB_DATA_DIR.exists() else []
+scenario = st.sidebar.selectbox("Scenario", list(SCENARIOS) + _REAL, index=0)
 
-with st.sidebar.expander("Generate / regenerate"):
-    seed = st.number_input("Seed", value=SCENARIOS[scenario].seed, step=1)
-    if st.button("Generate scenario", width="stretch"):
-        spec = SCENARIOS[scenario]
-        spec.seed = int(seed)
-        save_scenario(spec)
-        st.cache_data.clear()
-        st.rerun()
+if scenario in SCENARIOS:
+    with st.sidebar.expander("Generate / regenerate"):
+        seed = st.number_input("Seed", value=SCENARIOS[scenario].seed, step=1)
+        if st.button("Generate scenario", width="stretch"):
+            spec = SCENARIOS[scenario]
+            spec.seed = int(seed)
+            save_scenario(spec)
+            st.cache_data.clear()
+            st.rerun()
 
 if not scenario_exists(scenario):
     st.info("Scenario not generated yet — use **Generate / regenerate** in the "
@@ -355,7 +364,7 @@ with tab_label:
         n = store.clear_range(w["timestamp"].iloc[0], w["timestamp"].iloc[-1])
         st.toast(f"Removed {n} labels")
         st.rerun()
-    with b4.popover("Pre-seed window"):
+    with b4.popover("Pre-seed window", disabled="true_extrema" not in meta):
         st.write("Seed this window's labels from the generator's noise-free "
                  "extrema, then correct them by hand.")
         if st.button("Seed from generator extrema"):

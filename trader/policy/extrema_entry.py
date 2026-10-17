@@ -33,6 +33,12 @@ class ExtremaEntryPolicy:
         self._stoch_rsi_smooth_k: int = int(params.get("stoch_rsi_smooth_k", 3))
         self._stoch_rsi_gate_max: float = float(params.get("stoch_rsi_gate_max", 20.0))
 
+        # Turn trigger (entry_gates.turn): previous bar is the lowest close of the last
+        # `lowest_of` bars AND this bar closes above it. Fires one bar after the swing
+        # low — trades a bar of lag for confirmation that the turn happened.
+        self._turn_gate_enabled: bool = bool(params.get("turn_gate_enabled", False))
+        self._turn_gate_lowest_of: int = int(params.get("turn_gate_lowest_of", 20))
+
         self._macd_gate_enabled: bool = bool(params.get("macd_gate_enabled", False))
         self._macd_fast: int = int(params.get("macd_fast", 12))
         self._macd_slow: int = int(params.get("macd_slow", 26))
@@ -59,6 +65,18 @@ class ExtremaEntryPolicy:
             blocks.append(f"norm_price={x[1]:.2f}<{self._entry_min_norm_price}")
         if self._entry_require_prior_decline and x[5] >= 0:
             blocks.append(f"slope20={x[5]:.4f}>=0 (no prior decline)")
+
+        if self._turn_gate_enabled:
+            n = self._turn_gate_lowest_of
+            if len(candles) < n + 2:
+                blocks.append("turn=N/A(insufficient data)")
+            else:
+                prev_close = candles[-2]["close"]
+                window_min = min(c["close"] for c in candles[-2 - n:-2])
+                if prev_close > window_min:
+                    blocks.append(f"turn: prev_close={prev_close:.2f} not lowest of {n}")
+                elif close <= prev_close:
+                    blocks.append(f"turn: close={close:.2f}<=prev {prev_close:.2f} (no up-close)")
 
         if self._trend_gate_enabled and len(candles) >= self._trend_gate_lookback:
             close_ref = candles[-self._trend_gate_lookback]["close"]
