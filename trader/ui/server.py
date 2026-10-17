@@ -32,13 +32,15 @@ def build_app(bot_state, risk, store, config) -> Flask:
 
     @app.route("/chart/<symbol>")
     def chart(symbol):
-        html = render_chart_page(f"NSE:{symbol}", store, config)
+        html = render_chart_page(f"NSE:{symbol}", store, config,
+                                 range_params=request.args.to_dict())
         return Response(html, mimetype="text/html")
 
     @app.route("/stock/<symbol>")
     def stock(symbol):
         html = render_stock_page(f"NSE:{symbol}", bot_state, risk, store, config,
-                                 bench=request.args.get("bench"))
+                                 bench=request.args.get("bench"),
+                                 range_params=request.args.to_dict())
         return Response(html, mimetype="text/html")
 
     @app.route("/pause", methods=["POST"])

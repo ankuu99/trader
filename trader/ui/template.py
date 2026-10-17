@@ -341,6 +341,30 @@ def _read_model_scores(db_path, instrument: str, limit: int = 80) -> list[dict]:
     return list(reversed(rows))
 
 
+def _read_model_scores_window(db_path, instrument: str, lo, hi) -> list[dict]:
+    """Persisted scores within [lo, hi] (IST-naive, either may be None),
+    oldest-first, no row limit (the table keeps only the last 500 per stock)."""
+    q = "SELECT timestamp, p_min, p_max FROM model_scores WHERE instrument = ?"
+    args: list = [instrument]
+    if lo is not None:
+        q += " AND timestamp >= ?"
+        args.append(lo.isoformat())
+    if hi is not None:
+        q += " AND timestamp <= ?"
+        args.append(hi.isoformat())
+    return _read_db(db_path, q + " ORDER BY timestamp ASC", tuple(args))
+
+
+def _resolve_optional_range(range_params: dict | None):
+    """(lo, hi, label, key) when the URL carries a range/from/to param, else
+    (None, None, "Auto", "auto") — the stock/chart pages keep their legacy
+    windows (entry-3d chart, last 200 scores, ...) when no range is chosen."""
+    rp = range_params or {}
+    if any(rp.get(k) for k in ("range", "from", "to")):
+        return _resolve_range(rp)
+    return None, None, "Auto", "auto"
+
+
 def _hold_duration(entry_time_str: str, exit_time_str: str) -> str:
     try:
         entry_dt = datetime.fromisoformat(entry_time_str)
@@ -1142,11 +1166,52 @@ def _render_rolling_row(rows: list[dict], pnl_class,
             <th>{bench_label} B&amp;H</th><th>&Delta;</th></tr>{body}</table>"""
 
 
-def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
+def _range_bar(base_path: str, range_key: str, lo, hi, now_naive,
+               extra_qs: dict[str, str] | None = None, auto: bool = False,
+               link_qs: dict[str, str] | None = None, tail_html: str = "") -> str:
+    """Date-range control (quick buttons + custom from/to form), shared by the
+    dashboard, /stock/<sym> and /chart/<sym>. `extra_qs` is carried by the form
+    as hidden inputs and by the quick links; `link_qs` overrides what the links
+    carry (the dashboard omits the default benchmark there). `auto` prepends an
+    "Auto" button (bare URL, active when range_key == "auto"). `tail_html` is
+    appended inside the span (the dashboard's benchmark buttons)."""
+    extra_qs = extra_qs or {}
+    link_qs = extra_qs if link_qs is None else link_qs
+    link_extra = "".join(f"&{k}={_quote(str(v), safe='')}" for k, v in link_qs.items())
+    from_val = lo.strftime("%Y-%m-%d") if lo else ""
+    to_val = (hi or now_naive).strftime("%Y-%m-%d")
+
+    def _btn(key, label):
+        cls = "rbtn active" if key == range_key else "rbtn"
+        return f'<a href="{base_path}?range={key}{link_extra}" class="{cls}">{label}</a>'
+
+    btns = "".join(_btn(k, lb) for k, lb in (("1w", "1W"), ("1m", "1M"), ("1q", "1Q"), ("1y", "1Y"), ("all", "All")))
+    if auto:
+        auto_href = base_path + (("?" + link_extra[1:]) if link_extra else "")
+        cls = "rbtn active" if range_key == "auto" else "rbtn"
+        btns = f'<a href="{auto_href}" class="{cls}">Auto</a>' + btns
+    hidden = "".join(
+        f'\n                <input type="hidden" name="{k}" value="{_html.escape(str(v), quote=True)}">'
+        for k, v in extra_qs.items())
+    tail = f"\n            {tail_html}" if tail_html else ""
+    return f"""
+        <span class="rangebar">
+            <span class="dim" style="font-size:11px">Range:</span>
+            {btns}
+            <form method="GET" action="{base_path}" style="display:inline-flex;gap:4px;margin-left:6px;align-items:center">
+                <input type="date" name="from" value="{from_val}">
+                <input type="date" name="to" value="{to_val}">{hidden}
+                <button type="submit" class="rbtn{' active' if range_key == 'custom' else ''}">Apply</button>
+            </form>{tail}
+        </span>"""
+
+
+def _build_chart(instrument: str, config, width: int = 1100, height: int = 480, lo=None, hi=None):
     """Price chart (closes since 3 days before entry, or full cached history)
     with fill markers, in-position phantom signals and the strategy's levels.
     Returns (chart_svg, meta_parts, n_candles); chart_svg is None when there is
-    not enough candle data. Shared by /chart/<sym> and /stock/<sym>."""
+    not enough candle data. Shared by /chart/<sym> and /stock/<sym>.
+    lo/hi (IST-naive, optional) window the candles and drop markers outside it."""
     # Open position (may not exist)
     pos_rows = _read_db(
         config.db_path,
@@ -1165,17 +1230,21 @@ def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
 
     # Open position: show 3 days before entry for context.
     # Watchlist / history view: full cached history so all trades are visible.
-    if pos and pos.get("entry_time"):
+    if lo is not None:
+        from_dt = lo
+    elif pos and pos.get("entry_time"):
         from_dt = datetime.fromisoformat(pos["entry_time"]) - timedelta(days=3)
     else:
         from_dt = datetime(2000, 1, 1)
 
+    _hi_sql = " AND timestamp <= ?" if hi is not None else ""
     candle_rows = _read_db(
         config.db_path,
         "SELECT timestamp, close FROM candles "
-        "WHERE instrument = ? AND timeframe = ? AND timestamp >= ? "
+        f"WHERE instrument = ? AND timeframe = ? AND timestamp >= ?{_hi_sql} "
         "ORDER BY timestamp ASC",
-        (instrument, config.candle_timeframe, from_dt.isoformat()),
+        (instrument, config.candle_timeframe, from_dt.isoformat())
+        + ((hi.isoformat(),) if hi is not None else ()),
     )
 
     if len(candle_rows) < 2:
@@ -1185,9 +1254,13 @@ def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
     timestamps = [r["timestamp"] for r in candle_rows]
 
     # Match order fill timestamps to candle indices (use updated_at = fill time, not placed_at)
+    windowed = lo is not None or hi is not None
+    _first, _last = timestamps[0][:16], timestamps[-1][:16]
     buy_markers, sell_markers = [], []
     for o in order_rows:
         fill_ts = o.get("updated_at") or o["placed_at"]
+        if windowed and not (_first <= fill_ts[:16] <= _last):
+            continue
         idx = _find_candle_idx(fill_ts, timestamps)
         (buy_markers if o["direction"] == "BUY" else sell_markers).append((idx, o["price"]))
 
@@ -1202,6 +1275,8 @@ def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
     )
     phantom_markers = []
     for r in phantom_rows:
+        if windowed and not (_first <= r["logged_at"][:16] <= _last):
+            continue
         idx = _find_candle_idx(r["logged_at"], timestamps)
         phantom_markers.append((idx, r["price_hint"]))
 
@@ -1271,14 +1346,18 @@ def _build_chart(instrument: str, config, width: int = 1100, height: int = 480):
     return chart_svg, meta_parts, len(candle_rows)
 
 
-def render_chart_page(instrument: str, store, config) -> str:
+def render_chart_page(instrument: str, store, config, range_params=None) -> str:
     sym = instrument.split(":")[-1]
-    chart_svg, meta_parts, _n = _build_chart(instrument, config)
+    lo, hi, _label, rkey = _resolve_optional_range(range_params)
+    range_bar = _range_bar(f"/chart/{_quote(sym, safe='')}", rkey, lo, hi,
+                           _now_ist().replace(tzinfo=None), auto=True)
+    chart_svg, meta_parts, _n = _build_chart(instrument, config, lo=lo, hi=hi)
     if chart_svg is None:
         return (
             f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{sym}</title>"
             f"<style>{_CSS}</style></head><body>"
             f"<p class='dim'>Not enough candle data for {instrument}.</p>"
+            f"<div class='meta hdr'>{range_bar}</div>"
             f"<a href='/' class='chart-link'>← Dashboard</a></body></html>"
         )
     meta_parts = ['<a href="/" class="chart-link">← Dashboard</a>',
@@ -1298,6 +1377,7 @@ body {{ max-width: 1160px; margin: 0 auto; }}
 <body>
 <h1>{sym}</h1>
 <div class="meta">{"&nbsp;·&nbsp;".join(meta_parts)}</div>
+<div class="meta hdr">{range_bar}</div>
 <div style="margin-top:16px;overflow-x:auto">
 {chart_svg}
 </div>
@@ -1494,29 +1574,19 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     else:
         _range_qs = f"range={_range_key}"
 
-    def _rbtn(key, label):
-        cls = "rbtn active" if key == _range_key else "rbtn"
-        return f'<a href="/?range={key}{_bench_qs}" class="{cls}">{label}</a>'
-
     def _bbtn(key, spec):
         cls = "rbtn active" if key == _bench_key else "rbtn"
         title, short = spec["label"], spec["short"]
         return f'<a href="/?{_range_qs}&bench={key}" class="{cls}" title="vs {title}">{short}</a>'
 
     _bench_btns = "".join(_bbtn(k, sp) for k, sp in BENCHMARKS.items())
-    range_controls = f"""
-        <span class="rangebar">
-            <span class="dim" style="font-size:11px">Range:</span>
-            {_rbtn("1w", "1W")}{_rbtn("1m", "1M")}{_rbtn("1q", "1Q")}{_rbtn("1y", "1Y")}{_rbtn("all", "All")}
-            <form method="GET" action="/" style="display:inline-flex;gap:4px;margin-left:6px;align-items:center">
-                <input type="date" name="from" value="{_from_val}">
-                <input type="date" name="to" value="{_to_val}">
-                <input type="hidden" name="bench" value="{_bench_key}">
-                <button type="submit" class="rbtn{' active' if _range_key == 'custom' else ''}">Apply</button>
-            </form>
-            <span class="dim" style="font-size:11px;margin-left:10px">vs:</span>
-            {_bench_btns}
-        </span>"""
+    range_controls = _range_bar(
+        "/", _range_key, _lo, _hi, now.replace(tzinfo=None),
+        extra_qs={"bench": _bench_key},
+        link_qs={"bench": _bench_key} if _bench_key != DEFAULT_BENCHMARK else {},
+        tail_html=('<span class="dim" style="font-size:11px;margin-left:10px">vs:</span>\n'
+                   f'            {_bench_btns}'),
+    )
 
     # ── health strip: "is something wrong?" in one line ───────────────────────
     # Red only when non-zero. Sources: today's REJECTED orders (broker), today's
@@ -2779,7 +2849,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
 
 def render_stock_page(instrument: str, bot_state, risk, store, config,
-                      bench: str | None = None) -> str:
+                      bench: str | None = None, range_params: dict | None = None) -> str:
     """Per-stock drilldown (/stock/<sym>): everything about one name in one
     place — status + model reading, price chart with fills/levels, conviction
     history, open-position detail with stop-risk, this stock's closed trades
@@ -2791,6 +2861,10 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
     _bench_inst, _bench_label = _bench_spec["instrument"], _bench_spec["label"]
     sym = instrument.split(":")[-1]
     now = _now_ist()
+    lo, hi, _rlabel, rkey = _resolve_optional_range(range_params)
+    windowed = rkey != "auto"
+    range_bar = _range_bar(f"/stock/{_quote(sym, safe='')}", rkey, lo, hi, now.replace(tzinfo=None),
+                           extra_qs={"bench": bench} if bench else None, auto=True)
     params = config.get_strategy_params(instrument, "lr_extrema") or {}
     tf = config.strategy_timeframe(instrument)
     threshold = float(params.get("threshold", 0.70))
@@ -2854,11 +2928,12 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
                  if config.is_aggregated_tf(instrument) else "")
 
     # ── price chart + conviction history ────────────────────────────────────
-    chart_svg, meta_parts, n_candles = _build_chart(instrument, config, width=1100, height=420)
+    chart_svg, meta_parts, n_candles = _build_chart(instrument, config, width=1100, height=420, lo=lo, hi=hi)
     chart_block = chart_svg if chart_svg else (
         f'<span class="dim">Not enough {config.candle_timeframe} candles cached for {sym} '
         f'({n_candles} found).</span>')
-    hist = _read_model_scores(config.db_path, instrument, limit=200)
+    hist = (_read_model_scores_window(config.db_path, instrument, lo, hi) if windowed
+            else _read_model_scores(config.db_path, instrument, limit=200))
     conviction = (_render_prob_sparkline(hist, threshold, veto, width=600, height=90)
                   if len(hist) >= 2 else '<span class="dim">no persisted scores yet</span>')
     _hist_from = hist[0]["timestamp"][:16] if hist else "—"
@@ -2907,6 +2982,8 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
 
     # ── closed trades for this stock ────────────────────────────────────────
     matched, _ = _load_matched_trades(config.db_path, instrument)
+    if windowed:
+        matched = _filter_trades(matched, lo, hi)   # FIFO ran on the full set above
     trades = sorted((t for t in matched if t.get("exit_time")),
                     key=lambda t: str(t["exit_time"]), reverse=True)
     trades_block = ""
@@ -2949,7 +3026,7 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
                            f' → ours <span class="{_pnl_class(edge)}">{edge:+.1f} pp</span>')
         trades_block = f"""
     <div class="card full">
-        <h2 id="trades">Closed Trades ({len(trades)})
+        <h2 id="trades">Closed Trades ({len(trades)}){f' · {_rlabel}' if windowed else ''}
             <span class="dim" style="font-weight:normal;text-transform:none">
             gross <span class="{_pnl_class(tg)}">&#8377; {tg:+,.0f}</span> − costs &#8377;{tc:,.0f}
             = net <span class="{_pnl_class(tg - tc)}">&#8377; {tg - tc:+,.0f}</span>{tm_line}</span></h2>
@@ -2962,10 +3039,20 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
         trades_block = '<div class="card full"><h2>Closed Trades</h2><span class="dim">none yet</span></div>'
 
     # ── signals for this stock (incl. gate filters) ──────────────────────────
+    if windowed:
+        _q, _a, _lim = "", [instrument], 300
+        if lo is not None:
+            _q += " AND logged_at >= ?"
+            _a.append((lo - _NAIVE_TO_IST_DELTA).isoformat())
+        if hi is not None:
+            _q += " AND logged_at <= ?"
+            _a.append((hi - _NAIVE_TO_IST_DELTA).isoformat())
+    else:
+        _q, _a, _lim = "", [instrument], 40
     sigs = _read_db(
         config.db_path,
         "SELECT logged_at, direction, signal_type, price_hint, accepted, reject_reason, exit_reason "
-        "FROM signals WHERE instrument = ? ORDER BY id DESC LIMIT 40", (instrument,),
+        f"FROM signals WHERE instrument = ?{_q} ORDER BY id DESC LIMIT {_lim}", tuple(_a),
     )
     if sigs:
         srows = ""
@@ -3020,6 +3107,10 @@ def render_stock_page(instrument: str, bot_state, risk, store, config,
 <h1>{sym}{_tf_badge} &nbsp;{status}</h1>
 <div class="meta">{meta} &nbsp;·&nbsp; {now.strftime("%d %b %Y, %H:%M:%S IST")}
     &nbsp;·&nbsp; <span id="refresh-note" style="font-size:11px">auto-refresh 30s</span></div>
+<div class="meta hdr">
+    <span style="font-size:11px">Range: <span class="orange">{_rlabel}</span></span>
+    {range_bar}
+</div>
 <div class="toprow">
     <div class="card"><h2>Model now</h2><div class="val">{model_now}</div></div>
     {pos_block}
