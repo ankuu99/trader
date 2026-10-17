@@ -556,7 +556,8 @@ class Store:
         """Record a scale-in add-on lot: append to the addon_lots JSON list and bump
         the blended quantity. Parent entry_price / entry_time / trailing state are
         deliberately untouched — all exit anchors and UI sparklines stay on the
-        original entry."""
+        original entry. ``notional`` is the lot's original ₹ size and is never
+        reduced by scale-outs (seeds last_lot_notional after a reboot)."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT quantity, addon_lots FROM open_positions WHERE instrument = ?",
@@ -567,6 +568,7 @@ class Store:
             lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
             lots.append({
                 "price": fill_price, "qty": quantity,
+                "notional": fill_price * quantity,
                 "date": self._to_naive(fill_time).isoformat(),
             })
             conn.execute(
@@ -585,9 +587,13 @@ class Store:
 
     def consume_position_lots(self, instrument: str, sold_qty: int):
         """Partial SELL on a (possibly scaled-in) position: reduce quantity and
-        consume lots FIFO — parent shares first, then add-on lots in fill order
-        (same convention as the backtest engine and analytics.match_trades).
-        Keeps addon_lots consistent with quantity so restart seeding
+        reduce the parent and every add-on lot PROPORTIONALLY, like
+        RiskManager.reduce_position and the backtest's in-memory ledger — so the
+        daily reboot does not change avg cost, pool usage, realised/cumulative
+        P&L or loss-block arming (ISS-03). Whole shares via largest-remainder
+        allocation (ties to the lower index, parent first). Add-on lots that reach
+        0 are retained so the tier count and last-investment date survive a
+        reboot. Keeps addon_lots consistent with quantity so restart seeding
         (parent_qty = quantity − Σ addon lots) can never go negative."""
         with self._conn() as conn:
             row = conn.execute(
@@ -599,15 +605,20 @@ class Store:
             qty = int(row["quantity"])
             lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
             sold = min(max(int(sold_qty), 0), qty)
+            if sold == 0:
+                return
             parent_qty = max(qty - sum(int(l["qty"]) for l in lots), 0)
-            remaining = sold - min(parent_qty, sold)  # parent absorbs first
-            new_lots = []
-            for lot in lots:
-                lot_qty = int(lot["qty"])
-                take = min(lot_qty, remaining)
-                remaining -= take
-                if lot_qty - take > 0:
-                    new_lots.append({**lot, "qty": lot_qty - take})
+            parts = [parent_qty] + [int(l["qty"]) for l in lots]
+            total = sum(parts)
+            ideal = [p * sold / total for p in parts] if total else [0.0] * len(parts)
+            take = [int(x) for x in ideal]  # floor (non-negative)
+            leftover = sold - sum(take)
+            order = sorted(range(len(parts)), key=lambda i: (-(ideal[i] - take[i]), i))
+            for i in order[:leftover]:
+                take[i] += 1
+            new_lots = [
+                {**lot, "qty": parts[i + 1] - take[i + 1]} for i, lot in enumerate(lots)
+            ]
             conn.execute(
                 "UPDATE open_positions SET quantity = ?, addon_lots = ? WHERE instrument = ?",
                 (qty - sold, json.dumps(new_lots) if new_lots else None, instrument),

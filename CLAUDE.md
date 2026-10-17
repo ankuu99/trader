@@ -176,7 +176,7 @@ investment buys an add-on lot sized `fraction_pct`% of the **previous** lot's no
   trade record per lot via `_consume_lots` (FIFO for partial scale-outs), with per-lot
   costs/MIS-CNC detection and the `addon_tier` key (0 = parent).
 - **Persistence** — add-on lots live in the `open_positions.addon_lots` JSON column
-  (`store.add_position_lot`); parent entry_price/entry_time untouched. Restart seeding:
+  (`store.add_position_lot`; each lot keeps its original `notional`); parent entry_price/entry_time untouched. Partial scale-outs reduce the parent and every lot **proportionally** (`store.consume_position_lots`, whole shares by largest remainder, zero-qty lots kept) — the same as `RiskManager.reduce_position`, so the daily reboot never changes avg cost, pool usage, realised/cumulative P&L or loss-block arming (ISS-03, `tests/test_scaleout_reboot_parity.py`). Restart seeding:
   `risk.seed_position(parent)` + `risk.seed_scale_in(addon_lots)`.
 - **calibrate.py / screen.py force `scale_in.enabled=false`** — per-stock param search and
   screening stay un-levered; validate scale-in via backtest.py / backtest_rolling.py.

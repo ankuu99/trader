@@ -382,7 +382,10 @@ def position_entry_legs(open_positions: list[dict]) -> dict[str, dict]:
             {"qty": int(l.get("qty") or 0), "price": l.get("price"),
              "time": l.get("date"), "tier": i + 1}
             for i, l in enumerate(lots)
+            if int(l.get("qty") or 0) > 0  # fully scaled-out lot: no shares or cost
         ]
+        if len(legs) == 1:
+            continue
         cost = sum((l["price"] or 0.0) * l["qty"] for l in legs)
         out[inst] = {
             "legs": legs, "addon_qty": addon_qty, "parent_qty": parent_qty,

@@ -625,7 +625,7 @@ class RiskManager:
             addon_value += lot_value
             addon_qty += lot_qty
             state["addon_count"] += 1
-            state["last_lot_notional"] = lot_value
+            state["last_lot_notional"] = float(lot.get("notional") or lot_value)
             _d = str(lot.get("date") or "")[:10]
             if _d:
                 state["last_invest_date"] = datetime.fromisoformat(_d).date()

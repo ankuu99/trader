@@ -610,7 +610,7 @@ def main():
             # on_order_update sees the partial flag and does NOT reset position.
             risk.reduce_position(instrument, quantity, fill_price)
             if config.env in ("paper", "live"):
-                # Consumes lots FIFO (parent first, then add-ons) so addon_lots
+                # Consumes lots proportionally — same as risk.reduce_position — so addon_lots
                 # stays consistent with quantity for restart seeding.
                 store.consume_position_lots(instrument, quantity)
             if config.env == "live":

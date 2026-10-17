@@ -65,3 +65,9 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | ID | Status | Point |
 |---|---|---|
 | [TD-014](TODO/TD-014-isolate-golden-from-live-config/DETAIL.md) | PENDING | Isolate the parity golden harness from the live config.yaml |
+
+## Scale-in / persistence
+
+| ID | Status | Point |
+|---|---|---|
+| [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | PENDING | Persist original parent notional (add-on sizing after scale-out + reboot) |

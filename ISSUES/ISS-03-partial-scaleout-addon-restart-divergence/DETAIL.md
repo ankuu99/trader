@@ -43,3 +43,7 @@ Proposed fix: `Store.consume_position_lots` reduces the parent and every add-on 
 largest-remainder rounding, ≤ 1 share off the in-memory ₹ split); the reviewer's repro becomes a permanent
 reboot-vs-no-reboot equality test. RiskManager, backtest and dashboard code unchanged. No migration (no live add-on
 positions exist yet).
+
+## Addendum 2026-10-17 — fixed
+
+Guide: `to_develop/completed/2026-10-17_ISS-03_proportional-lot-consumption.md`. Follow-up TD-015 (parent-only notional after scale-out + reboot).

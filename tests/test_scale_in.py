@@ -327,33 +327,39 @@ def test_add_position_lot_appends_and_bumps_quantity(tmp_path):
     assert pos["addon_lots"][1]["qty"] == 6
 
 
-def test_consume_position_lots_fifo_parent_first(tmp_path):
-    """Partial exit on a scaled-in position consumes parent shares first, then
-    add-on lots in fill order — quantity and addon_lots stay consistent so
-    restart seeding (parent = quantity − Σ lots) can never go negative."""
+def test_consume_position_lots_proportional(tmp_path):
+    """Partial exit on a scaled-in position reduces the parent and every add-on
+    lot proportionally (largest remainder, whole shares) — same as
+    RiskManager.reduce_position, so a reboot reproduces the in-memory ledger."""
     store = Store(tmp_path / "t.db")
     store.upsert_open_position(INSTRUMENT, 100.0, 100, 0, DAY1)  # parent 100
     store.add_position_lot(INSTRUMENT, 95.0, 26, DAY2)           # blended 126
     store.add_position_lot(INSTRUMENT, 93.0, 6, DAY3)            # blended 132
+    before = store.read_open_positions()[0]["addon_lots"]
 
-    # Scale-out sells 110: parent 100 fully consumed + 10 of the first add-on
+    # ideal 83.33 / 21.67 / 5.0 -> takes 83 / 22 / 5 (sum 110)
     store.consume_position_lots(INSTRUMENT, 110)
 
     pos = store.read_open_positions()[0]
     assert pos["quantity"] == 22
     lots = pos["addon_lots"]
-    assert [l["qty"] for l in lots] == [16, 6]
-    # restart parent = 22 - 22 = 0 (non-negative) — seeding stays valid
-    assert pos["quantity"] - sum(l["qty"] for l in lots) == 0
+    assert [l["qty"] for l in lots] == [4, 1]
+    parent = pos["quantity"] - sum(l["qty"] for l in lots)
+    assert parent == 17
+    assert 100 - 17 + (26 - 4) + (6 - 1) == 110  # Σ take == sold
+    assert all(l["qty"] >= 0 for l in lots) and parent >= 0
+    for old, new in zip(before, lots):
+        assert (new["price"], new["date"], new["notional"]) == (
+            old["price"], old["date"], old["notional"])
 
-    # A small scale-out that only touches the parent leaves lots untouched
     store2 = Store(tmp_path / "t2.db")
     store2.upsert_open_position(INSTRUMENT, 100.0, 100, 0, DAY1)
     store2.add_position_lot(INSTRUMENT, 95.0, 26, DAY2)
-    store2.consume_position_lots(INSTRUMENT, 50)
+    store2.consume_position_lots(INSTRUMENT, 50)  # takes 40 / 10
     pos2 = store2.read_open_positions()[0]
     assert pos2["quantity"] == 76
-    assert [l["qty"] for l in pos2["addon_lots"]] == [26]
+    assert [l["qty"] for l in pos2["addon_lots"]] == [16]
+    assert pos2["quantity"] - 16 == 60
 
 
 def test_restart_seed_after_partial_scale_out(tmp_path):
@@ -364,7 +370,7 @@ def test_restart_seed_after_partial_scale_out(tmp_path):
         store = Store(tmp_path / "t.db")
         store.upsert_open_position(INSTRUMENT, 100.0, 100, 0, DAY1)
         store.add_position_lot(INSTRUMENT, 95.0, 26, DAY2)
-        store.consume_position_lots(INSTRUMENT, 110)  # parent gone + 10 of add-on
+        store.consume_position_lots(INSTRUMENT, 110)  # proportional: parent 13, add-on 3
 
         pos = store.read_open_positions()[0]
         lots = pos["addon_lots"]
@@ -374,9 +380,60 @@ def test_restart_seed_after_partial_scale_out(tmp_path):
         risk = RiskManager()
         risk.seed_position(INSTRUMENT, parent_qty, pos["entry_price"], entry_ts=DAY1)
         risk.seed_scale_in(INSTRUMENT, lots)
-        # blended 126 (parent 100 + addon 26), sold 110 → 16 addon shares survive
+        # blended 126 (parent 100 + addon 26), sold 110 -> proportional: 16 left
+        assert pos["quantity"] == 16
+        assert parent_qty == 13
         assert risk._open_positions[INSTRUMENT] == 16
-        assert risk.scale_in_deployed == pytest.approx(95.0 * 16)
+        assert risk.scale_in_deployed == pytest.approx(95.0 * 3)
+        # within one share's price of the in-memory (pro-rata) value
+        assert abs(risk.scale_in_deployed - 2470 * (1 - 110 / 126)) <= 95.0
+
+
+def test_zero_qty_lot_kept_and_tier_preserved(tmp_path):
+    from trader.analytics import position_entry_legs
+    with _scale_in_config():
+        store = Store(tmp_path / "t.db")
+        store.upsert_open_position(INSTRUMENT, 100.0, 3, 0, DAY1)
+        store.add_position_lot(INSTRUMENT, 95.0, 1, DAY2)  # qty 4
+        store.consume_position_lots(INSTRUMENT, 3)  # ideal 2.25/0.75 -> 2/1
+
+        pos = store.read_open_positions()[0]
+        lots = pos["addon_lots"]
+        assert pos["quantity"] == 1
+        assert len(lots) == 1 and lots[0]["qty"] == 0
+        parent_qty = pos["quantity"] - sum(l["qty"] for l in lots)
+        assert parent_qty == 1
+
+        risk = RiskManager()
+        risk.seed_position(INSTRUMENT, parent_qty, pos["entry_price"], entry_ts=DAY1)
+        risk.seed_scale_in(INSTRUMENT, lots)
+        assert risk._open_positions[INSTRUMENT] == 1
+        assert risk._scale_in[INSTRUMENT]["addon_count"] == 1
+
+        assert INSTRUMENT not in position_entry_legs([pos])
+
+
+def test_notional_survives_scale_out(tmp_path):
+    with _scale_in_config():
+        store = Store(tmp_path / "t.db")
+        store.upsert_open_position(INSTRUMENT, 100.0, 100, 0, DAY1)
+        store.add_position_lot(INSTRUMENT, 95.0, 26, DAY2)
+        assert store.read_open_positions()[0]["addon_lots"][0]["notional"] == pytest.approx(2470)
+        store.consume_position_lots(INSTRUMENT, 110)
+
+        pos = store.read_open_positions()[0]
+        lots = pos["addon_lots"]
+        risk = RiskManager()
+        risk.seed_position(INSTRUMENT, pos["quantity"] - sum(l["qty"] for l in lots),
+                           pos["entry_price"], entry_ts=DAY1)
+        risk.seed_scale_in(INSTRUMENT, lots)
+        assert risk._scale_in[INSTRUMENT]["last_lot_notional"] == pytest.approx(2470)
+
+        # Legacy lot without "notional" falls back to price x qty
+        risk2 = RiskManager()
+        risk2.seed_position(INSTRUMENT, 10, 100.0, entry_ts=DAY1)
+        risk2.seed_scale_in(INSTRUMENT, [{"price": 95.0, "qty": 26, "date": DAY2.isoformat()}])
+        assert risk2._scale_in[INSTRUMENT]["last_lot_notional"] == pytest.approx(2470)
 
 
 def test_add_position_lot_missing_position_is_noop(tmp_path):
