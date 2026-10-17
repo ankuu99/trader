@@ -59,3 +59,9 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | ID | Status | Point |
 |---|---|---|
 | [TD-013](TODO/TD-013-fund-scalein-pool/DETAIL.md) | PENDING | Fund the scale-in pool (account equity above the ₹6L base) |
+
+## Tests
+
+| ID | Status | Point |
+|---|---|---|
+| [TD-014](TODO/TD-014-isolate-golden-from-live-config/DETAIL.md) | PENDING | Isolate the parity golden harness from the live config.yaml |

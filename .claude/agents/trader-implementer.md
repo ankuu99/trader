@@ -14,8 +14,8 @@ session wrote it and will validate your work against its acceptance checklist.
 2. Implement the numbered steps exactly — same files, same function names/signatures, same seams.
    Match the surrounding code's style and comment density.
 3. Write every test listed under "Tests required", in the named test files.
-4. Run `python -m pytest -q` (whole suite). Known pre-existing failures: `test_parity_golden`
-   (ISS-10) and `test_render_page_health_strip` when the clock is 09:15–15:30 (ISS-11). Anything
+4. Run `python -m pytest -q` (whole suite). Known pre-existing failure: `test_render_page_health_strip` when the
+   clock is 09:15–15:30 (ISS-11). Anything
    else failing is yours to report.
 5. Report: per file what changed (with line refs), the test output summary, and any deviation from
    the guide with the reason. No deviation is too small to report.
@@ -28,7 +28,8 @@ session wrote it and will validate your work against its acceptance checklist.
   (they wipe the candle cache) — and only if the guide asks for a backtest at all.
 - Never touch the EC2 server (no ssh, no deploy, no `scripts/release.sh`).
 - Backtest↔live parity: change backtest-reachable behaviour only where the guide explicitly says so.
-- Do not modify golden/parity fixtures or regenerate them.
+- Do not modify golden/parity fixtures or regenerate them — unless the guide explicitly authorises it and
+  you have completed every attribution step it requires first.
 - Leave unrelated uncommitted changes in the working tree untouched (the owner has work in progress
   in `trader/policy/*`, `trader/features/*`, `trader/core/config.py`, `CLAUDE.md`, `scripts/extrema_lab.py`).
 

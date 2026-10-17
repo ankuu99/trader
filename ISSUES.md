@@ -13,7 +13,7 @@ One folder per reported problem under `ISSUES/ISS-NN-<slug>/` (SUMMARY · DETAIL
 | [ISS-07](ISSUES/ISS-07-addon-fills-outside-normal-path/DETAIL.md) | PENDING | live orders / persistence | Add-on fills outside the normal path (pending at restart, fill while down, unknown order id, partial-then-cancel, no qty reconcile) |
 | [ISS-08](ISSUES/ISS-08-manual-buy-recorded-as-addon/DETAIL.md) | PENDING | live orders | `_instrument_orders` fallback context: a manual BUY of a held symbol is recorded as an add-on lot |
 | [ISS-09](ISSUES/ISS-09-loss-block-keys-resurrect-on-readd/DETAIL.md) | PENDING | persistence | Loss-block state keys of removed stocks survive and resurrect if the stock is re-added |
-| [ISS-10](ISSUES/ISS-10-golden-parity-test-stale/DETAIL.md) | PENDING | tests | `test_parity_golden` / pipeline golden fails on clean HEAD |
+| [ISS-10](ISSUES/ISS-10-golden-parity-test-stale/DETAIL.md) | FIXED 2026-10-17 | tests | `test_parity_golden` / pipeline golden fails on clean HEAD |
 | [ISS-11](ISSUES/ISS-11-health-strip-test-weekday-blind/DETAIL.md) | PENDING | dashboard / tests | `test_render_page_health_strip` fails 09:15–15:30 on any day incl. weekends — dashboard 'market open' check ignores weekday |
 | [ISS-12](ISSUES/ISS-12-offgrid-15m-candles-on-ec2/DETAIL.md) | PENDING | data / historical fetch | Same-day re-warm-ups write off-grid '15minute' rows (15:16..15:25) into the EC2 candle cache |
 | [ISS-13](ISSUES/ISS-13-broker-reject-entry-refire-loop/DETAIL.md) | PENDING | live orders | Broker-rejected ENTRY (insufficient funds) re-fires every candle |

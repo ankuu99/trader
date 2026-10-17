@@ -29,6 +29,9 @@ commit (never silently) and note the version bump.
 
   Pinned at generation time: numpy 2.4.4, scikit-learn 1.8.0
 
+  Regenerated 2026-10-17 at d04273a (ISS-10) — drift attributed to: f9a7f9f (config.yaml
+  risk.trading_start 09:30 -> 09:15; this test reads the real config, so config edits move it).
+
 Regenerating the golden (only when behaviour is *intentionally* changed):
     REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/test_parity_golden.py -q
 

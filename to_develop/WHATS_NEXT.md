@@ -10,4 +10,5 @@
    add-on position. Explained to owner 2026-10-17; awaiting choice.
 5. **TD-013** — owner funds the pool (equity ≈ ₹5.79L after the ₹1L top-up; base ₹6L, full pool at ₹6.6L).
 6. **TD-009** dated re-checks: AJANTPHARM ~10-21, CEATLTD after 10-22, RBLBANK ~10-26.
-7. Noted for later: ISS-05…ISS-12, TD-005/006/007/010/011/012.
+7. TD-014 — golden harness reads the live config.yaml; isolate it (ISS-10 re-baselined 2026-10-17).
+8. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, TD-005/006/007/010/011/012.

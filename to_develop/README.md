@@ -16,7 +16,7 @@ Written: YYYY-MM-DD · Tag: <TAG> · Status: OPEN
 ## Intent        what changes, why, and what it must NOT change
 ## Implementation steps   numbered, file-by-file, exact APIs/signatures
 ## Tests required         new tests (name the suite) + suites that stay green
-## Acceptance checklist   - [ ] full pytest green (known pre-existing fails: ISS-10, ISS-11) · - [ ] new behaviour tested · - [ ] no trader.backtest import in live/UI · - [ ] backtest parity unchanged unless the guide says so · - [ ] <guide-specific>
+## Acceptance checklist   - [ ] full pytest green (known pre-existing fail: ISS-11 during 09:15–15:30) · - [ ] new behaviour tested · - [ ] no trader.backtest import in live/UI · - [ ] backtest parity unchanged unless the guide says so · - [ ] <guide-specific>
 ## Completion record      (appended at archive) Completed · Commit · Deviations · Notes
 ```
 
