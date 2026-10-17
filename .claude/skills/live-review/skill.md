@@ -1,6 +1,6 @@
 ---
 description: Live trade performance review — pulls the EC2 DB, compares real fills against backtest expectations per stock, and recommends removals or recalibrations based on actual live behaviour.
-argument-hint: [--skip-refresh] [--days N]
+argument-hint: "[--skip-refresh] [--days N]"
 ---
 
 Analyse live (EC2) trade performance against backtest expectations and recommend actions.

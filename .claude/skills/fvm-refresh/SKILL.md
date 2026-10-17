@@ -1,6 +1,6 @@
 ---
 description: Run the FVM daily data-refresh loop in sequence — fundamentals ingest (mid-cap-first), price cache, then re-run the Milestone-A validation gate. Use when the user asks to "refresh FVM", "run the FVM ingest", "do the daily FVM data run", or similar. The user updates TRENDLYNE_COOKIE manually; this skill assumes it's already current.
-argument-hint: [--no-gate] [--max N]
+argument-hint: "[--no-gate] [--max N]"
 ---
 
 Run the three FVM data-refresh steps **in order**, stopping early only on a hard failure.

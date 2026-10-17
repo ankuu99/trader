@@ -1,6 +1,6 @@
 ---
 description: Discover new watchlist candidates ranked by mean-reversion FIT, not backtest P&L. Two modes — a fresh scan of a liquid universe (Nifty 500) computed on today's daily candles, or gating the existing NSE-wide screen CSV. Both apply segment hygiene, dedup, liquidity, and the structural trend guard, then run the qualitative `qualify` gate on the survivors. Advisory only — never edits the watchlist automatically.
-argument-hint: [--mode universe|screen] [--max-fetch N]
+argument-hint: "[--mode universe|screen] [--max-fetch N]"
 ---
 
 Find new stocks worth paper-trading with the LRExtrema strategy.

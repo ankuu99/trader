@@ -1,5 +1,5 @@
 ---
-description: Completely purge every trace of a single stock from the live bot database on the remote EC2 server — orders, trades, open_positions, signals, and per-stock state keys — then reconcile cumulative_pnl. Use when a manual/external trade (a buy or sell done by hand in Kite, outside the bot) has polluted the bot's accounting and you need the trade history and P&L to read as if the bot never touched that symbol. Destructive and remote: always backup, validate exact rowcounts, and commit only on the expected count. Pass one NSE:SYMBOL.
+description: "Completely purge every trace of a single stock from the live bot database on the remote EC2 server — orders, trades, open_positions, signals, and per-stock state keys — then reconcile cumulative_pnl. Use when a manual/external trade (a buy or sell done by hand in Kite, outside the bot) has polluted the bot's accounting and you need the trade history and P&L to read as if the bot never touched that symbol. Destructive and remote: always backup, validate exact rowcounts, and commit only on the expected count. Pass one NSE:SYMBOL."
 argument-hint: NSE:SYMBOL [--dry-run]
 ---
 

@@ -1,6 +1,6 @@
 ---
 description: Missed-opportunity audit against the live EC2 bot — detects every confirmed swing dip and peak on each watchlist stock's own strategy timeframe from the remote candle history, cross-references actual live fills/signals/model scores to classify each as captured vs missed (and why), and renders a per-stock chart. Use when the user asks "what dips/peaks did we miss", "how much upside did the bot leave on the table", or wants the missed-opportunity graph refreshed. Advisory only, remote reads are read-only.
-argument-hint: [--days N] [--min-move PCT] [--cached] [--symbols NSE:X ...]
+argument-hint: "[--days N] [--min-move PCT] [--cached] [--symbols NSE:X ...]"
 ---
 
 Quantify how many real, tradeable swings the live bot missed, and why.

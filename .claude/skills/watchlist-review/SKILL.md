@@ -1,6 +1,6 @@
 ---
 description: Monthly/quarterly watchlist review — runs a fresh backtest, a deterministic falling-knife trend guard, and (where warranted) the qualitative `qualify` gate for each stock, then produces a Keep/Watch/Calibrate/Remove recommendation report saved to reviews/. Pass a single NSE:SYMBOL to instead run a deep-dive review of just that one stock.
-argument-hint: [NSE:SYMBOL] [--skip-refresh]
+argument-hint: "[NSE:SYMBOL] [--skip-refresh]"
 ---
 
 Perform a full quantitative + qualitative review of the trading watchlist — or, if
