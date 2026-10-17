@@ -9,6 +9,7 @@ SQLite is queried directly (read-only connection) so the Store write path is unt
 import html as _html
 import sqlite3
 import time as _time
+from urllib.parse import quote as _quote
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -310,6 +311,11 @@ def _pnl_class(val: float) -> str:
 
 def _badge(text: str, kind: str) -> str:
     return f'<span class="badge badge-{kind}">{text}</span>'
+
+
+def _stock_link(sym: str) -> str:
+    """Stock name → its /stock/<sym> drilldown (TD-016). URL-encodes the path (M&MFIN) and HTML-escapes the text."""
+    return f"<a href='/stock/{_quote(sym, safe='')}' class='chart-link'>{_html.escape(sym)}</a>"
 
 
 def _read_db(db_path, query: str, params: tuple = ()) -> list[dict]:
@@ -1276,7 +1282,7 @@ def render_chart_page(instrument: str, store, config) -> str:
             f"<a href='/' class='chart-link'>← Dashboard</a></body></html>"
         )
     meta_parts = ['<a href="/" class="chart-link">← Dashboard</a>',
-                  f'<a href="/stock/{sym}" class="chart-link">{sym} drilldown</a>'] + meta_parts
+                  f'<a href="/stock/{_quote(sym, safe="")}" class="chart-link">{sym} drilldown</a>'] + meta_parts
     meta_parts.append('<span style="color:#8b949e">auto-refresh 60s</span>')
 
     return f"""<!DOCTYPE html>
@@ -1636,7 +1642,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
     if _lb:
         scale_in_row += (
             '<tr><td class="dim">Loss block</td><td class="val orange">'
-            + ", ".join(f"{k.split(':')[-1]} ({v})" for k, v in sorted(_lb.items()))
+            + ", ".join(f"{_stock_link(k.split(':')[-1])} ({v})" for k, v in sorted(_lb.items()))
             + ' <span class="dim">sessions left</span></td></tr>'
         )
 
@@ -2208,7 +2214,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
 
             rows_html += (
                 f"<tr>"
-                f"<td><a href='/stock/{sym}' class='chart-link'>{sym}</a>{_tf_badge}"
+                f"<td>{_stock_link(sym)}{_tf_badge}"
                 f"<br><span class='dim' style='font-size:11px'>{entry_ist}</span>{legs_html}{ladder_html}</td>"
                 f"<td>{p['quantity']}{addon_badge}</td>"
                 f"<td>{deployed_cell}</td>"
@@ -2229,7 +2235,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             sym = inst.split(":")[-1]
             rows_html += (
                 f"<tr>"
-                f"<td>{sym}</td><td>—</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
+                f"<td>{_stock_link(sym)}</td><td>—</td><td>—</td><td>—</td><td>—</td><td class='dim'>—</td>"
                 f"<td>—</td><td>—</td><td>—</td><td>—</td>"
                 f"<td>{_badge('PENDING', 'orange')}</td><td></td><td></td>"
                 f"</tr>"
@@ -2280,7 +2286,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{placed}</td>"
-                f"<td>{sym}</td>"
+                f"<td>{_stock_link(sym)}</td>"
                 f"<td class='{dir_class}'>{o['direction']}</td>"
                 f"<td>{o['quantity']}</td>"
                 f"<td>{price_str}</td>"
@@ -2342,7 +2348,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{entry_fmt}</td>"
-                f"<td>{sym}</td>"
+                f"<td>{_stock_link(sym)}</td>"
                 f"<td>&#8377; {entry_p:.2f}</td>"
                 f"<td>&#8377; {exit_p:.2f}</td>"
                 f"<td class='dim'>{qty}</td>"
@@ -2441,7 +2447,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             else:
                 vs_nifty = "<span class='dim'>—</span>"
             _sc_body += (
-                f"<tr><td><a href='/stock/{sym}' class='chart-link'>{sym}</a>{open_badge}</td>"
+                f"<tr><td>{_stock_link(sym)}{open_badge}</td>"
                 f"<td class='dim'>{c['n_trades']}</td>"
                 f"<td class='{_pnl_class(c['gross_pnl'])}'>&#8377; {c['gross_pnl']:+,.0f}</td>"
                 f"<td class='{_pnl_class(net)}'>&#8377; {net:+,.0f}</td>"
@@ -2482,7 +2488,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{logged}</td>"
-                f"<td>{sym}</td>"
+                f"<td>{_stock_link(sym)}</td>"
                 f"<td class='{dir_class}'>{display_dir}</td>"
                 f"<td class='dim'>{s['signal_type']}</td>"
                 f"<td>&#8377; {s['price_hint']:.2f}</td>"
@@ -2516,7 +2522,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
             rows_html += (
                 f"<tr>"
                 f"<td class='dim'>{logged}</td>"
-                f"<td>{sym}</td>"
+                f"<td>{_stock_link(sym)}</td>"
                 f"<td>&#8377; {s['price_hint']:.2f}</td>"
                 f"<td class='dim'>{reason}</td>"
                 f"</tr>"
@@ -2710,7 +2716,7 @@ def render_page(bot_state, risk, store, config, range_params=None) -> str:
         _bars_label = f"{candles} {_ws_tf} bars" if _ws_aggregated else f"{candles} candles"
         ws_rows += (
             f"<tr>"
-            f"<td><a href='/stock/{ticker}' class='chart-link'>{ticker}</a>{_ws_tf_badge}</td>"
+            f"<td>{_stock_link(ticker)}{_ws_tf_badge}</td>"
             f"<td class='val'>{price_html}</td>"
             f"<td class='dim'>{tick_time}</td>"
             f"<td class='dim'>{vol_html}</td>"

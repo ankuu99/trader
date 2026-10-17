@@ -71,3 +71,9 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | ID | Status | Point |
 |---|---|---|
 | [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | DONE 2026-10-17 (release-20261017e) | Persist original parent notional (add-on sizing after scale-out + reboot) |
+
+## Dashboard
+
+| ID | Status | Point |
+|---|---|---|
+| [TD-016](TODO/TD-016-stock-names-link-to-drilldown/DETAIL.md) | DONE 2026-10-17 (release-20261017f) | Every stock name on the dashboard links to /stock/<sym> |
