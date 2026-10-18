@@ -8,11 +8,11 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
 3. **TD-009** dated re-checks: AJANTPHARM ~10-21, CEATLTD after 10-22, RBLBANK ~10-26.
 4. **TD-015** — released 2026-10-17 (release-20261017e). Positions bought before it (all 12 current) have parent_notional 0 → remainder-based sizing; only MAYURUNIQ is actually affected.
 5. **TD-014** — golden harness reads the live config.yaml.
-6. **Trough/peak model campaign (TD-018)** — round 1 DONE 2026-10-18: no detection arm beats production (0/12 on Stage A and on the full Stage-B
-   backtest; the edge is the entry signal, coin-flip control EXP-20/22); the only
-   robust signal is market timing (prior-day India VIX), which did not convert to P&L robustly. Read
-   `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`. Next options: TD-020 (news flag — find PIT event data),
-   TD-019 (size_weight order) before any sizing idea. **TD-021 Model Lab** (docs/03) — L0 + L1 DONE 2026-10-18 on `exp/model-lab`
-   (worktree `../trader-2-wt/model-lab`). Scoring is on the model's own terms (docs/03 §6). Next: finish the 15m PIT-universe fetch
-   (`python -m research.model_lab.fetch intraday`, after `daily`), then L2 — pre-register arms in `reviews/model_lab/LEDGER.md` and run them. ISS-14 fixed — new baseline FULL ₹439.2k / Calmar 6.18.
+6. **Model Lab (TD-021) + strategy sleeve (TD-023)** on `exp/model-lab` (worktree `../trader-2-wt/model-lab`), state 2026-10-19:
+   ledgers `reviews/model_lab/LEDGER.md` (models) and `STRATEGY_LEDGER.md` (₹ sims). A01 (day deep lows) is the one clean model
+   win; no lab strategy beats the full production system on 2025-01→2026-10 (SC6), and random picks on the watchlist make
+   ₹2.8–4.8L there (hindsight selection). **PB-LONG:** production setup 2015→2026 lost 2018/19/20 (−48 % peak-to-trough,
+   liquid names −₹2.05L 2015–20) — `reviews/model_lab/PB_LONG_prod_2015_20261019.md`. In progress: TD-022 L0c survivorship-free
+   `dayn` source (rework after a validation fail: NSE corporate-actions API factors); then ML-A01n/A11n + SN-1..3 (pre-registered).
+   Owner decisions pending: TD-023 exclusion-list rules (incl. a traded-value floor); walk-forward exit selection. ISS-16 fixed.
 7. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13, ISS-15 (one-class training crash, latent) (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
