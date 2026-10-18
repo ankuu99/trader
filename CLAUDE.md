@@ -257,7 +257,10 @@ Swappable components behind nested config blocks; production defaults unchanged 
 median AUC 0.511 and no label/feature/rule arm improves it (tradeable labels, lags, bar shape, ATR distance, S/R, OU,
 rules, market features — all fail Stage A AND the full Stage-B backtest at matched thresholds (0/12 on P&L/DD/Calmar/
 weighted win %); code on `exp/*` branches, not merged). Coin-flip controls (EXP-20/22): the model's ENTRY signal
-carries the whole edge over random entries; the pattern-top signal is no better than a coin at the same rate. The one robust signal is market
+carries the whole edge over random entries; the pattern-top signal is no better than a coin at the same rate.
+**Next: Model Lab (TD-021, scope approved 2026-10-18)** — standalone pooled, walk-forward turning-point models outside
+LR-Extrema (all stocks, all TFs, multi-horizon targets, dynamic splits); hand-off and owner decisions in
+`docs/03_Model_Lab_Proposal.md` § "Start here". torch is installed locally only (`requirements-lab.txt`). The one robust signal is market
 timing — prior-day India VIX vs its trailing year (AUC 0.638, 6/7 years) — but threshold/size modulation by VIX state
 did not survive the plateau check (`market_regime`, branch `exp/regime`). Do not re-run these arms; see
 `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`. Research tooling: `scripts/campaign/`.

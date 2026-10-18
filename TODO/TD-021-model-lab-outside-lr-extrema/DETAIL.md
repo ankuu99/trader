@@ -17,3 +17,15 @@ Source: owner, 2026-10-18, verbatim:
 > into a potential change in direction and by how much.
 
 Proposal: `docs/03_Model_Lab_Proposal.md`.
+
+## Addendum 2026-10-18 — owner answers (verbatim)
+
+> few poitners for the data, you are free to pull latest fresh data from kite using the standard authetnication
+> mechianm as and when required. predict forward need not be just oe candle at a time, after all that also woudl
+> determine the hold period, potential. coming to quesitons, all stocks are canddiates. all time frames. both for min.
+> date splits need to be dyanmic, dont just stick to one. also, a lot methodligcally would have changed year on year.
+> you are free t isntall torch locally. document all this. as i intend to start ina new session.
+
+Recorded as decisions D1–D9 in `docs/03_Model_Lab_Proposal.md` § "Owner decisions"; scope approved, build starts in a
+new session at § "Start here". torch 2.14.1 installed in `.venv` (MPS available), listed in `requirements-lab.txt`;
+full pytest green after install (582 passed).

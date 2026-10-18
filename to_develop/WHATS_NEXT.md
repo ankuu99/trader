@@ -12,6 +12,6 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
    backtest; the edge is the entry signal, coin-flip control EXP-20/22); the only
    robust signal is market timing (prior-day India VIX), which did not convert to P&L robustly. Read
    `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`. Next options: TD-020 (news flag — find PIT event data),
-   TD-019 (size_weight order) before any sizing idea. **TD-021 Model Lab** (docs/03) — owner-proposed standalone
-   turning-point framework (pooled, walk-forward, outside LR-Extrema); awaiting answers to its open questions. ISS-14 fixed — new baseline FULL ₹439.2k / Calmar 6.18.
+   TD-019 (size_weight order) before any sizing idea. **TD-021 Model Lab** (docs/03) — owner-approved standalone
+   turning-point framework (pooled, walk-forward, outside LR-Extrema); START HERE next session: docs/03 § "Start here". ISS-14 fixed — new baseline FULL ₹439.2k / Calmar 6.18.
 7. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13, ISS-15 (one-class training crash, latent) (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
