@@ -88,3 +88,30 @@ informational only.
 | SC5-a | A11 score, day, best 2/day, hold 20 | DONE — ₹6.36 L / Calmar 0.18 (2/11 coins ₹, 9/11 Calmar); capital use 59 % |
 | SC5-b | A11 score, day, best 2/day, hold 60 | DONE — ₹12.91 L / 0.32 (9/11, 9/11); production same ₹11.54 L / 0.39 |
 | SC5-c | A11 score, day, best 2/day, hold 60, target +20 % | DONE — ₹10.84 L / 0.28 (9/11, 6/11); production same ₹14.57 L / 0.50 |
+
+## SC6 — lab strategies vs the full production system on the same window (owner, 2026-10-19)
+
+Window = the campaign FULL window 2025-01-01 → 2026-10-16, ₹6L, 15 × ₹40k (production: ₹6L, ₹40k per stock).
+Reference: production backtest FULL (TD-018 post-ISS-14 baseline) ₹439.2k, max DD 5.8 %, Calmar 6.18, weighted
+win 63.9 % — the full LR-Extrema system (watchlist, per-stock params/TFs, 15m exits).
+Lab side on day bars, entries only from 2025-01-01, metrics on the window only; scores for the watchlist names come
+from a re-run of the A01 / A11 recipes on PIT top-200 ∪ the 21 watchlist names (only 5 of 21 are in the top-200),
+production P(min) refs replayed for the missing watchlist names. Each with 11 coin draws.
+
+| ID | Universe | Strategy | Status |
+|---|---|---|---|
+| SC6-L1-wl / -all | watchlist only / whole universe | A01 score, best 2/day, hold 20 | PLANNED |
+| SC6-L2-wl / -all | watchlist only / whole universe | production-score ranker, best 2/day, hold 60, target +20 % | PLANNED |
+| SC6-L3-wl / -all | watchlist only / whole universe | A11 score, best 2/day, hold 60 | PLANNED |
+
+## PB-LONG — the current production setup backtested from 2015 (owner, 2026-10-19)
+
+The full production system (`config/config.yaml` as on this branch: watchlist, per-stock params/TFs, all exits,
+scale-in, loss block) through the campaign backtest engine (cache-only), window 2015-07-01 → 2026-10-16 (Kite 15m
+history starts 2015-02; 2011 is impossible on 15m). **Runs on a scratch COPY of `data/market.db`** with pre-2017-12
+15m candles filled from the lab store; the real cache is read once to copy and never written. Caveat up front: the
+watchlist and per-stock settings were chosen in 2025–26, so earlier years are hindsight-selected names.
+
+| ID | Window | Status |
+|---|---|---|
+| PB-LONG | 2015-07-01 → 2026-10-16, per-year breakdown | PLANNED |
