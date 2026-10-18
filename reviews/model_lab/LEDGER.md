@@ -16,6 +16,8 @@ FAIL · NULL (no effect beyond noise) · PARTIAL (one regime/TF) · ABORTED (bug
 |---|---|---|---|---|
 | ML-L0a | L0 | Parquet bar store, staged Kite fetcher, PIT liquidity universe, data QA | DONE 2026-10-18 | `to_develop/completed/2026-10-18_TD-021_L0a-lab-data-store-fetcher.md` |
 | ML-L0b | L0 | Timeframe bars + `avail_ts`, causal factor library, targets T1–T5, leakage tests, build CLI | DONE 2026-10-18 | `to_develop/completed/2026-10-18_TD-021_L0b-bars-factors-targets.md` |
+| ML-L1a | L1 | PIT panel, split engine (expanding/rolling/anchor/LOYO/stock groups, purge + embargo), lab model wrapper, walk-forward runner | BUILDING | `to_develop/2026-10-18_TD-021_L1a-splits-runner.md` |
+| ML-L1b | L1 | References (coin, RSI, lowest-of-N, production P(min) replay), curve scorer on hindsight truth, run report | BUILDING | `to_develop/2026-10-18_TD-021_L1b-references-scoring.md` |
 
 ## Arms
 

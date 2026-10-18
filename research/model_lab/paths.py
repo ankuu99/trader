@@ -16,6 +16,8 @@ UNIVERSE_DIR = LAB_ROOT / "universe"    # instrument snapshots + liquidity panel
 FACTORS_DIR = LAB_ROOT / "factors"      # factors/<tf>/<SYMBOL>.parquet
 TARGETS_DIR = LAB_ROOT / "targets"      # targets/<tf>/<SYMBOL>.parquet
 LOGS_DIR = LAB_ROOT / "logs"
+RUNS_DIR = LAB_ROOT / "runs"            # runs/<run_id>/{meta.json, folds.parquet, scores/<SYMBOL>.parquet}
+REFS_DIR = LAB_ROOT / "refs"            # refs/<tf>/<ref_name>/<SYMBOL>.parquet (timestamp, score[, p_max])
 
 MIN_FREE_GB = 3.0                       # writers refuse to run below this much free disk
 
