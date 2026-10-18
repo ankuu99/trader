@@ -86,4 +86,5 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | [TD-018](TODO/TD-018-extrema-model-campaign/DETAIL.md) | PENDING — round 1 done 2026-10-18 (0/12 arms pass Stage A or Stage B; TD-020 open) | Trough/peak model evaluation campaign — docs/01, ledger, worktree arms |
 | [TD-019](TODO/TD-019-size-weight-before-capital-cap/DETAIL.md) | PENDING (discovered 2026-10-18) | `size_weight` applied before the per-stock capital cap — downsizing inert when the cap binds |
 | [TD-020](TODO/TD-020-news-no-news-decline-flag/DETAIL.md) | PENDING (blocked on PIT event data) | News/no-news decline flag (EXP-15, Chan 2003) — the one untested arm with new which-dip information |
-| [TD-021](TODO/TD-021-model-lab-outside-lr-extrema/DETAIL.md) | PENDING — L0 + L1 done on `exp/model-lab` 2026-10-18; L2 next | Model Lab: pooled, walk-forward turning-point models outside LR-Extrema (docs/03) |
+| [TD-021](TODO/TD-021-model-lab-outside-lr-extrema/DETAIL.md) | PENDING — L0–L2a done on `exp/model-lab` 2026-10-18; arms A01–A08 in ledger | Model Lab: pooled, walk-forward turning-point models outside LR-Extrema (docs/03) |
+| [TD-022](TODO/TD-022-survivorship-free-universe/DETAIL.md) | PENDING — discovered 2026-10-18 (blocks A07) | Survivorship-free (delisting-inclusive) daily universe for the Model Lab |
