@@ -124,3 +124,100 @@ RANBAXY, SATYAMCOMP, …). Formats:
 
 ## Completion record
 _(filled by the main session after validation)_
+
+## Addendum 2026-10-19 — validation FAIL; rework the adjustment source and the fetch calendar
+
+**What happened (main session, real run 2026-10-19).** Fetch/parse/build ran clean (4,635 files 2008-01-01 →
+2026-10-16, 0 unreadable, 4,045 securities, 1,070 delisted). Validation against Kite FAILED: 2,406 overlapping
+symbols, median of per-symbol median |adj close / Kite close − 1| = 3.1 %, mean share of days within 0.5 % = 0.40.
+Root causes, both verified on raw rows:
+1. **The guide's premise was wrong: bhavcopy PREVCLOSE is NOT adjusted on an ex-date.** RELIANCE 1:1 bonus
+   2017-09-07: PREVCLOSE 1645.40 = the raw previous close, CLOSE 818.10; same on 2024-10-28 (2655.70 → 1334.35). So
+   the PREVCLOSE rule detected almost no real splits/bonuses (RELIANCE had none of its two bonuses).
+2. **Weekend special sessions are not fetched** (Budget Saturdays 2015-02-28, 2020-02-01, 2025-02-01; Sunday
+   2026-02-01; other Saturday sessions). The next weekday's PREVCLOSE then refers to the missing session's close and
+   the PREVCLOSE rule turned ordinary moves into false "corporate actions" (RELIANCE 2020-02-03 f=0.980,
+   2026-02-02 f=0.965).
+
+**New adjustment source — NSE corporate-actions API (probed 2026-10-19).**
+`GET https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date=DD-MM-YYYY&to_date=DD-MM-YYYY`
+returns JSON (one call per calendar year works: 1,524–2,692 rows per year, 2008 → 2026) after a warm-up
+`GET https://www.nseindia.com/` on the same `requests.Session` with headers `User-Agent` (desktop Chrome),
+`Accept: application/json,text/plain,*/*`, `Accept-Language: en-US,en;q=0.9`,
+`Referer: https://www.nseindia.com/companies-listing/corporate-filings-actions`. Row keys include `symbol`, `isin`,
+`series`, `subject`, `exDate` (`'07-Sep-2017'`), `faceVal`. Later-delisted names are present (HDFC 2010 split,
+IVRCLINFRA 2010 bonus). 1,280 rows mention bonus/split.
+
+### Changes (supersede the PREVCLOSE parts of steps 1 "build — adjustment")
+
+A. **fetch calendar:** `fetch_range` iterates **every calendar day** (weekends included; a weekend 404 on both
+   formats is logged `holiday_or_missing` like any holiday). Resumable: skip a date whose zip exists OR whose latest
+   `fetch_log.csv` status is `holiday_or_missing` (no re-request), unless `--retry-missing` is passed. Rename
+   `weekdays()` → `calendar_days()`; update its test.
+
+B. **new stage `ca`:** `python -m research.model_lab.nse_bhav ca [--from 2008] [--to 2026]` — one request per
+   calendar year (session warm-up once, headers above, ≤ 1 request/second, 3 retries with backoff, re-warm the
+   session once on a 401/403), raw JSON saved to `NSE_BHAV_DIR/ca/{YYYY}.json` (skip a year whose file exists,
+   except the current year which is always refreshed). Then parse all years into `NSE_BHAV_DIR/ca_events.parquet`:
+   `symbol, isin, series, ex_date (datetime), subject, kind ("bonus"|"split"|"bonus+split"), factor (float)`.
+   Unmatched/unparseable bonus/split subjects go to `ca_unparsed.csv` (symbol, ex_date, subject).
+
+C. **subject parser `parse_ca_subject(subject) -> float | None`** (case-insensitive; returns the price factor
+   applied to prices BEFORE the ex-date; None = not a price-adjusting event):
+   - **Split:** regex on `(?:split|sub-?division)` followed by `from`/optional, then two face values written as
+     `Rs`/`Re` with optional `.`, spaces, `/-`, e.g. `r[se]\.?\s*(\d+(?:\.\d+)?)` twice → `factor *= to / from`.
+   - **Bonus:** `bonus` followed (optionally after `-`, `shares in the ratio of`) by `a\s*:\s*b` → `factor *= b / (a + b)`
+     (NSE writes "Bonus a:b" = a new shares for every b held). **Ignore** bonuses of debentures / NCRPS / preference /
+     DVR (the subject contains `deb`, `ncrps`, `preference` or `dvr` within the bonus clause) — they do not change
+     the equity share count.
+   - Both in one subject → multiply (kind `bonus+split`). Dividends, AGM, rights, demergers, schemes → None.
+   - Must parse every one of these real subjects (expected factor in brackets):
+     `' Bonus 1:1'` [0.5] · `'Bonus 1:10'` [10/11] · `'Bonus 1:2  '` [2/3] · `'Bonus 3 : 2'` [0.4] ·
+     `'Bonus - 1:1'` [0.5] · `'Bonus shares in the ratio of 1:1'` [0.5] ·
+     `' Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share'` [0.2] ·
+     `'Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share '` [0.1] ·
+     `'Fv Split Rs.10/- To Rs.2/'` [0.2] · `'Face Value Split From Rs.10/- To Rs.2/-'` [0.2] ·
+     `'FV Split-Rs10/- to Re.1/-'` [0.1] · `'Face Value  Split From Rs. 5 To Rs. 2/-'` [0.4] ·
+     `'Bonus 1:1 And Face Value Split From Rs.10/- To Re.1/-'` [0.05] ·
+     `'Annual General Meeting/Dividend Rs.2/- Per Share/Bonus 1:1'` [0.5] ·
+     `'Bonus 1:1 (Record Date Revised)'` [0.5];
+     and return None for: `'Scheme Of Arrangement - Bonus Debentures 1:1'`, `'Sch Of Agmt- Bonus Deb1:1'`,
+     `'Scheme of Arrangement - Bonus NCRPS 1:1'`, `'Bonus 1 DVR : 10 Eq Share'`,
+     `'Annual General Meeting/Dividend - Rs 5 Per Share'`, `'Rights 1:5 @ Premium Rs 100/-'`.
+
+D. **build — adjustment (replaces the PREVCLOSE rule; delete `ADJ_MIN_MOVE`/`ADJ_MIN_DIFF` use):** each
+   `ca_events` row is attached to ONE security row: the first panel row on/after `ex_date` (within 5 calendar days)
+   of the security whose rows on that date carry the event's ISIN; else of the security whose symbol equals the
+   event's symbol on that date; else the event goes to `ca_unmatched.csv`. Duplicate events (same security, same
+   attached date, same factor) count once; different events on the same date multiply. `f_t` = the attached
+   factor (1 elsewhere); the backward cumulative product, OHLC × A_t and volume ÷ A_t are as before.
+   `corporate_actions.parquet` gains columns `kind, subject, gap_ratio` where `gap_ratio = (open_t / close_{t−1}) / f_t`
+   (raw prices of that security; NaN on its first row) — a QA number (≈ 1 when the price really jumped by the
+   factor). The build summary adds `n_ca_matched, n_ca_unmatched, n_gap_suspect` (|gap_ratio − 1| > 0.25).
+   Also write `prevclose_gaps.csv` (QA only, never used for adjustment): rows where
+   |prevclose_t / close_{t−1} − 1| > 0.02 within a security that are not an attached ex-date
+   (sec_id, date, prevclose, prev_close, ratio).
+
+E. **validate:** unchanged, plus print the 20 worst symbols (by share within 0.5 %) with their sec_id.
+
+### Tests (replace/extend `tests/test_model_lab_nse_bhav.py`)
+- `test_parse_ca_subject_real_variants` — every subject listed in C with its factor (abs tol 1e-9) and the Nones.
+- `test_ca_stage_saves_and_parses` — mocked session: warm-up GET then one GET per year returning a small JSON list;
+  files written under `ca/`, existing past year skipped, `ca_events.parquet` built with the right factors, an
+  unparseable bonus/split subject lands in `ca_unparsed.csv`.
+- `test_adjustment_from_ca_events` (replaces `test_adjustment_split_and_bonus`): a synthetic security with a 1:1
+  bonus and a later 10→2 split given as `ca_events` (raw prices halve / fifth on the ex-dates, PREVCLOSE raw as NSE
+  writes it) → adjusted closes continuous, volume scaled inversely, last row unadjusted, `gap_ratio` ≈ 1,
+  `corporate_actions.parquet` exactly the two events; an event whose ISIN matches nothing but whose symbol does is
+  attached by symbol; an event matching nothing lands in `ca_unmatched.csv`.
+- `test_prevclose_never_adjusts` — a row with prevclose ≠ previous close and no CA event → no adjustment, row listed
+  in `prevclose_gaps.csv`.
+- `test_calendar_days_and_missing_skip` — weekends included; a date logged `holiday_or_missing` is not requested
+  again; `--retry-missing` requests it.
+- Existing tests keep passing (update the ones that encoded weekday-only or PREVCLOSE adjustment).
+
+### Acceptance (main session will run fetch → ca → parse → build → validate on real data)
+- full pytest green; all items above; still no imports from `trader.*`; do NOT run real fetches or touch `lab_data/`.
+- Real-data gate (main session): validation median-of-median |diff| ≤ 0.1 % and ≥ 85 % of overlapping symbols with
+  ≥ 90 % of days within 0.5 %; residual worst symbols explained (demergers/rights that Kite treats differently) in
+  the completion record.
