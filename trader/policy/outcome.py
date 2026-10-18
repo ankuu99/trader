@@ -9,11 +9,13 @@ from __future__ import annotations
 import numpy as np
 
 
-def simulate_exit_outcomes(closes, params: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def simulate_exit_outcomes(closes, params: dict, indices=None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """For every bar t: (good, outcome_ret_pct, exit_index) of a long entered at closes[t]
     under the stock's NON-MODEL exits on the close path. good = reached +profit_pct (trail arming) first.
     outcome_ret_pct = profit_pct on success, else the return at the exit bar; NaN when the outcome is
-    unresolved because the data ends first (truncation guard — never guess)."""
+    unresolved because the data ends first (truncation guard — never guess).
+    indices: simulate only these bars (the training hot path); every other bar keeps
+    good=False, ret=NaN, exit=n-1. None = all bars."""
     closes = np.asarray(closes, dtype=float)
     p = params
     up = float(p.get("profit_pct", 7.0))
@@ -32,7 +34,10 @@ def simulate_exit_outcomes(closes, params: dict) -> tuple[np.ndarray, np.ndarray
     good = np.zeros(n, dtype=bool)
     ret = np.full(n, np.nan)
     exit_idx = np.full(n, n - 1, dtype=int)
-    for t in range(n):
+    for t in (range(n) if indices is None else indices):
+        t = int(t)
+        if t < 0 or t >= n:
+            continue
         e = closes[t]
         best = -1e9
         end = min(n - 1, t + hold)

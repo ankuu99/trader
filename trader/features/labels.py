@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 
 from trader.core.logger import get_logger
 from trader.features.indicators import find_local_extrema, linreg_tstat
+from trader.policy.outcome import simulate_exit_outcomes
 
 logger = get_logger(__name__)
 
@@ -399,6 +400,89 @@ class AvgTrendLabeler(Labeler):
         return indices, classes
 
 
+class TradeableLabeler(Labeler):
+    """Tradeable-trough labels (`labels.type: tradeable`) — guide
+    to_develop/2026-10-18_TD-018_W1-tradeable-labels.md (arms EXP-01/EXP-02).
+
+    Class 0 = a candidate bar whose simulated long (the stock's NON-MODEL exits,
+    `trader.policy.outcome.simulate_exit_outcomes`) reaches +profit_pct before a
+    stale/stop/timeout exit fires. Candidates that FAIL are class 2 (neutral) or
+    dropped. Class 1 = geometric maxima, unchanged, so P(max) and the pattern-top
+    exit keep their meaning. The model therefore learns paying dip vs non-paying
+    dip rather than "the bar fell".
+
+    Config (labels.tradeable):
+        candidates         extrema (geometric minima) | all (every `stride`-th bar from 20)
+        stride             step for `all` (default 5; dense when candidates=all)
+        failed_class       neutral (class 2) | drop (default neutral)
+        fallback_geometric if fewer than MIN class-0 samples, use the geometric minima
+                           as class 0 (no class 2) for that round (default true)
+
+    Candidates whose outcome is unresolved inside the training window (ret NaN) are
+    dropped — the truncation guard that keeps the label leak-free. Output order:
+    class 0, class 1, class 2."""
+
+    def __init__(self, instrument: str, params: dict):
+        self._instrument = instrument
+        self._params = params
+        self._extrema_order: int = int(params.get("extrema_order", 5))
+        _labels = params.get("labels") or {}
+        self._collapse_ties: bool = bool(_labels.get("collapse_ties", False))
+        _tr = _labels.get("tradeable") or {}
+        self._candidates: str = str(_tr.get("candidates", "extrema"))
+        if self._candidates not in ("extrema", "all"):
+            raise ValueError(f"labels.tradeable.candidates must be extrema|all, got {self._candidates!r}")
+        self._stride: int = max(1, int(_tr.get("stride", 5)))
+        self._failed_class: str = str(_tr.get("failed_class", "neutral"))
+        if self._failed_class not in ("neutral", "drop"):
+            raise ValueError(f"labels.tradeable.failed_class must be neutral|drop, got {self._failed_class!r}")
+        self._fallback: bool = bool(_tr.get("fallback_geometric", True))
+        self.dense = self._candidates == "all"
+
+    def label(self, candles: list[dict]) -> tuple[list[int], list[int]]:
+        closes = [c["close"] for c in candles]
+        n = len(closes)
+        minima, maxima = find_local_extrema(closes, self._extrema_order)
+        if self._collapse_ties:
+            minima = collapse_clusters(minima, self._extrema_order)
+            maxima = collapse_clusters(maxima, self._extrema_order)
+
+        if self._candidates == "all":
+            cands = list(range(20, n, self._stride))
+        else:
+            cands = list(minima)
+
+        good, ret, _ = simulate_exit_outcomes(closes, self._params, indices=cands)
+        resolved = [i for i in cands if not (ret[i] != ret[i])]  # drop NaN (unresolved)
+        pos = [i for i in resolved if good[i]]
+        neg = [i for i in resolved if not good[i]]
+        if self._failed_class == "drop":
+            neg = []
+
+        cand_set = set(cands)
+        class1 = [i for i in maxima if i not in cand_set] if self._candidates == "all" else list(maxima)
+
+        if len(pos) < MIN_SAMPLES_PER_CLASS and self._fallback:
+            logger.warning(
+                "Tradeable | %s | only %d paying minima (of %d candidates) — "
+                "falling back to geometric minima for this training round",
+                self._instrument, len(pos), len(cands),
+            )
+            pos = list(minima)
+            neg = []
+            class1 = list(maxima)
+        if len(pos) < MIN_SAMPLES_PER_CLASS or len(class1) < MIN_SAMPLES_PER_CLASS:
+            logger.warning(
+                "Tradeable | %s | not enough labels to train (class0=%d class1=%d)",
+                self._instrument, len(pos), len(class1),
+            )
+            return [], []
+
+        indices = pos + class1 + neg
+        classes = [0] * len(pos) + [1] * len(class1) + [2] * len(neg)
+        return indices, classes
+
+
 def triple_barrier_label(
     candles: list[dict], entry_idx: int, profit_pct: float, stop_pct: float, max_bars: int,
     atr: float | None = None, atr_mult_pt: float | None = None, atr_mult_sl: float | None = None,
@@ -458,6 +542,8 @@ def build_labeler(instrument: str, params: dict) -> Labeler:
         return ZigZagLabeler(instrument, params)
     if ltype == "avg_trend":
         return AvgTrendLabeler(instrument, params)
+    if ltype == "tradeable":
+        return TradeableLabeler(instrument, params)
     raise ValueError(
         f"Unknown labeler type {ltype!r}. Available: "
-        f"['extrema', 'trend_scan', 'zigzag', 'avg_trend']")
+        f"['extrema', 'trend_scan', 'zigzag', 'avg_trend', 'tradeable']")
