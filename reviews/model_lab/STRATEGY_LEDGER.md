@@ -127,7 +127,7 @@ survivors) = the survivorship inflation of SC1–SC5, and whether the model stil
 |---|---|---|---|
 | SN-1 | A01n score, hold 20 | SC1 best 2/day: ₹10.4 L | DONE — ₹3.10 L / DD 55 % / Calmar 0.06; coins ₹4.25 L median, beats 4/11 ₹, 5/11 Calmar → no edge once crashed names are in |
 | SN-2 | production-score ranker (prod_pmin replay on dayn), hold 60, target +20 % | SC3-x5: ₹14.57 L / Calmar 0.50 | DONE — ₹7.07 L / 42 % / 0.18; coins ₹7.74 L, beats 3/11 ₹, 7/11 Calmar → no edge |
-| SN-4 | A07n score (potential: max rise in 20 days), hold 20 — added 2026-10-19 after ML-A07n, before running | SC-none (A07 never simulated on day) | PLANNED |
+| SN-4 | A07n score (potential: max rise in 20 days), hold 20 — added 2026-10-19 after ML-A07n, before running | SC-none (A07 never simulated on day) | DONE — ₹1.61 L, **worst drop 89 %**, Calmar 0.02; ex-2020 −₹1.33 L; beats 0/11 coins → high per-pick mean is skew from a few crashed-name rebounds, untradeable as a 2/day ranker |
 | SN-3 | A11n score, hold 60 | SC5-b: ₹12.91 L / 0.32 | DONE — **₹15.96 L / 42 % / 0.40; coins ₹8.36 L, beats 11/11 ₹ and Calmar**; ex-2020 ₹11.07 L; ≥ ₹20 entries alone ₹13.76 L > every coin. `SN_survivorship_free_20261019.md` |
 
 ## WF-1 — walk-forward choice of hold/exit settings (main session 2026-10-19; informational, post-hoc on SC2/SC3 sims)

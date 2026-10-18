@@ -80,6 +80,19 @@ draw.
    - production's +20 % target exit (which survived WF-1 on survivors) does not rescue the production ranker here;
    - any ₹ claim must come from `dayn`.
 
+## Addendum — A07 (potential) re-check (TD-022 SUSPECT), same day
+
+- **ML-A07n FAIL** on its pre-registered test: plain volatility predicts the realised 20-day rise better (pooled
+  Spearman 0.202 vs the model's 0.158; the model wins vs vol in only 62 % of years).
+- **Its per-pick edge does survive delistings:** +6.48 % net after 20 days vs production +2.17 % and coin +0.52 %, at
+  the 1 % rate.
+- **As a best-2-a-day ranker (SN-4, pre-registered before running) it is a disaster:** ₹1.61 L, worst drop 89 %, beats
+  0/11 coins.
+- **Why:** the mean comes from a few huge rebounds in crashed, volatile names. A portfolio that always buys the top 2
+  rides the crashes in between.
+- **Verdict:** A07's magnitude signal is a volatility bet. Not a sleeve candidate on its own; at most a sizing input
+  next to a survival filter.
+
 ## Caveats
 - **Exits are fixed choices** made on survivor data (SC2/SC5), not re-tuned.
 - **No re-run on 15m:** 15m stays survivor-only (Kite).

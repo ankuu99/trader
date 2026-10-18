@@ -36,3 +36,10 @@ Rework validated (completion record in `to_develop/completed/2026-10-18_TD-022_L
 delisted, split/bonus adjusted from NSE corporate actions; daily returns agree with Kite on 99.3 % of days (level
 offsets = Kite's recent dividend adjustments; the worst mismatches are Kite's own broken history). Next: ML-A01n /
 ML-A11n and SN-1..3 (pre-registered) — then A07 un-SUSPECT or confirm.
+
+## Addendum 2026-10-19 (end of day) — re-runs done
+
+ML-A01n PASS (detection unchanged), ML-A11n FAIL (vs vol, as on day), ML-A07n FAIL (vs vol; SUSPECT resolved: per-pick
+edge survives but it is a volatility bet, SN-4 ranker DD 89 %). ₹ frameworks on dayn: A01 and the production ranker
+lose their edge vs coins; A11 ranker beats 11/11 (SN-3). Survivor-only ₹ results (SC1–SC5) are superseded for any
+claim. `reviews/model_lab/SN_survivorship_free_20261019.md`. Remaining: 15m has no survivorship-free source (Kite only).
