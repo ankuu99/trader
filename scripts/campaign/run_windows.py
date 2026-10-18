@@ -71,7 +71,7 @@ def _run_window(name: str, overlay_path: str | None, symbols: list[str] | None) 
                   for s in watchlist if overrides.get(s, {}).get("lr_extrema")} or None
 
     t0 = time.perf_counter()
-    trades = run_backtest(None, Store(config.db_path), watchlist, {s: 0 for s in watchlist},
+    trades = run_backtest(None, Store(config.db_path), watchlist, {**{s: 0 for s in watchlist}, "NSE:NIFTY 50": 256265, "NSE:INDIA VIX": 264969},
                           params, from_dt, to_dt, per_symbol_params=per_symbol)
     elapsed = time.perf_counter() - t0
     m = compute_metrics(trades, config.total_capital)
