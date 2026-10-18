@@ -1,0 +1,2 @@
+# EXP-09a — no-ML rule: RSI14<35 + up-close + above EMA50 (W5, exp/rules)
+strategies: {lr_extrema: {features: {type: rules, rules: {kind: rsi_bounce_ema}}, model: {type: passthrough}}}

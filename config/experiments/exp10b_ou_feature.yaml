@@ -1,0 +1,2 @@
+# EXP-10b — OU s-score + half-life as model features (W5, exp/rules)
+strategies: {lr_extrema: {features: {ou: {enabled: true}}}}

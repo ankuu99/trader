@@ -111,4 +111,23 @@ Evidence column: memory-file slug (`~/.claude/projects/.../memory/<slug>.md`), r
 
 | EXP-03 | cfg @ 1409e9b | `forward_label` re-test on the fixed engine (150 bars, +1.5 %) — supersedes R-02 | median ΔAUC −0.000, worse on 62 %; median ΔEV@matched 0.00 (15m names −0.12…−0.31, CUPID +1.03); day/4h names unchanged (almost every minimum bounces 1.5 % within 150 bars) | not run (gate) | FAILED Stage A | `runs/stage_a_exp03.json` |
 
+| EXP-12 | — | Market-state stratification of the Stage-A truth (prior-day India VIX tercile; Nifty drawdown from 50-day high) — literature arm (Nagel 2012) | dip bars P(good) 0.26/0.32/0.37 by VIX low/mid/high, EV 0.70/0.81/1.45 %; Nifty dd >8 % → P 0.49 / EV 2.67 % vs <3 % 0.30 / 0.97 %; stress bucket wins in 71–90 % of stocks | — (probe) | PASSED its pre-registered rule (≥20 % rel. base-rate gap, ≥⅔ sign consistency) — deviation: run on 2023–26, not calibration-only; stress episodes cluster in time (few independent episodes) | `scripts/campaign/exp12_context_split.py`; `docs/02_Extrema_Literature_Review.md` §7 |
+| EXP-01 | labels @ b99bfce | Tradeable-trough labels, candidates = geometric minima, failed → neutral | running | — | QUEUED | `config/experiments/exp01_tradeable.yaml` |
+| EXP-02 | labels @ b99bfce | Tradeable-trough labels, candidates = every 5th bar | running | — | QUEUED | `exp02_tradeable_all.yaml` |
+| EXP-04 | main @ c3fb3a3 | Lag stacking t-1, t-2 (scaffold) | running | — | QUEUED | `exp04_lags.yaml` |
+| EXP-05 | features @ d54a0c0 | Reversal bar-shape add-on | running | — | QUEUED | `exp05_bar_shape.yaml` |
+| EXP-06 | features @ d54a0c0 | ATR-scaled EMA distance add-on | running | — | QUEUED | `exp06_atr_dist.yaml` |
+| EXP-07 | features @ d54a0c0 | Market add-on (15m Nifty/VIX: rel. strength, Nifty dd, VIX level/chg); Nifty/VIX 15m backfilled 2019-06→2026-10-16 | running | — | QUEUED | `exp07_market.yaml` |
+| EXP-08 | features @ d54a0c0 | Touch-counted S/R add-on | running | — | QUEUED | `exp08_sr.yaml` |
+| EXP-09a | rules @ abd3233 | No-ML rule RSI14<35 + up-close + >EMA50 | running | — | QUEUED | `exp09a_rules_rsi.yaml` |
+| EXP-09b | rules @ abd3233 | No-ML rule lowest-of-20 + up-close | running | — | QUEUED | `exp09b_rules_lowest.yaml` |
+| EXP-10a | rules @ abd3233 | No-ML rule: raw-price OU s-score (graded) | running | — | QUEUED | `exp10a_rules_ou.yaml` |
+| EXP-10b | rules @ abd3233 | OU s-score + half-life as model features | running | — | QUEUED | `exp10b_ou_feature.yaml` |
+| EXP-11 | — | EXP-02 + average-uniqueness sample weights (AFML ch 4) | — | — | PROPOSED (literature) | docs/02 arm 4 |
+| EXP-13 | — | Residual-vs-Nifty OU s-score (A&L 2010) vs raw-price control (EXP-10a) | — | — | PROPOSED (literature) | docs/02 arm 5 |
+| EXP-14 | — | Volume-conditioned decline (stratify first; Medhat & Schmeling 2022 vs capitulation prior) | — | — | PROPOSED (literature) | docs/02 arm 6 |
+| EXP-15 | — | News/no-news decline flag (Chan 2003) — blocked on point-in-time event data | — | — | PROPOSED · BLOCKED | docs/02 arm 3 |
+| EXP-16 | — | EXP-08 + double-bottom retest feature (Lo–Mamaysky–Wang 2000) | — | — | PROPOSED (literature) | docs/02 arm 7 |
+| EXP-17 | — | Directional-change overshoot features (Glattfelder 2011) — skip if own-path W2 arms all fail | — | — | PROPOSED (literature) | docs/02 arm 8 |
+
 (rows appended as arms are defined and run)
