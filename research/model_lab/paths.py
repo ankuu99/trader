@@ -17,6 +17,7 @@ FACTORS_DIR = LAB_ROOT / "factors"      # factors/<tf>/<SYMBOL>.parquet
 TARGETS_DIR = LAB_ROOT / "targets"      # targets/<tf>/<SYMBOL>.parquet
 LOGS_DIR = LAB_ROOT / "logs"
 RUNS_DIR = LAB_ROOT / "runs"            # runs/<run_id>/{meta.json, folds.parquet, scores/<SYMBOL>.parquet}
+PORTFOLIOS_DIR = LAB_ROOT / "portfolios"  # portfolios/<sim_id>/{trades,equity}.parquet, summary.json (portfolio.py)
 REFS_DIR = LAB_ROOT / "refs"            # refs/<tf>/<ref_name>/<SYMBOL>.parquet (timestamp, score[, p_max])
 
 MIN_FREE_GB = 3.0                       # writers refuse to run below this much free disk
