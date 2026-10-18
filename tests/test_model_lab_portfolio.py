@@ -440,3 +440,44 @@ def test_source_missing_ref_is_nan_for_that_source_only(lab):
     assert np.isfinite(portfolio._load_symbol(spec, "day", "A")["src_scores"][0]).all()
     tr, _, _ = _sim(lab, sources=(("ref:coin", 2), ("run", 2)), window_sessions=1)
     assert (tr["symbol"] == "B").any() and (tr[tr["symbol"] == "B"]["source"] == "run").all()
+
+
+# ------------------------------------------------------------------ ISS-18 DELIST
+
+D20 = pd.bdate_range("2021-03-01", periods=20).values.astype("datetime64[ns]")
+
+
+def _delist_world(lab, a_scores):
+    A = _bars([(100, 101, 99, 100 + i) for i in range(4)], ts=D20)             # A's data ends at day 3 (Mar 4)
+    B = _bars([(50, 51, 49, 50)] * 20, ts=D20)
+    sb = [NAN] * 20
+    sb[9] = 0.8                                                                  # B only scores after A is gone
+    lab.make("r", "day", {"A": A, "B": B}, {"A": a_scores, "B": sb})
+
+
+def test_delist_exit_frees_slot(lab):
+    _delist_world(lab, [0.9] + [NAN] * 3)
+    tr, eq, info = _sim(lab)
+    assert list(tr["symbol"]) == ["A", "B"] and list(tr["reason"]) == ["DELIST", "END"]
+    a = tr.iloc[0]
+    assert a["exit_px"] == 103 and pd.Timestamp(a["exit_ts"]) == pd.Timestamp(D20[3])
+    assert a["held_bars"] == 3
+    assert a["cost"] == pytest.approx(_cnc(100, 100, 103))
+    # B signal day 9, entry day 10 open: needs the slot A held until day 8 (> Mar 4 + 7d)
+    assert pd.Timestamp(tr.iloc[1]["entry_ts"]) == pd.Timestamp(D20[10])
+    # slot visibly free in equity after the delist date
+    assert eq.loc[eq["date"] == pd.Timestamp(D20[9]), "open_positions"].iloc[0] == 0
+
+
+def test_delist_pending_entry_dropped(lab):
+    _delist_world(lab, [NAN, NAN, NAN, 0.9])                                    # signal on A's last bar
+    tr, eq, info = _sim(lab)
+    assert list(tr["symbol"]) == ["B"]
+    assert pd.Timestamp(tr.iloc[0]["entry_ts"]) == pd.Timestamp(D20[10])
+
+
+def test_delist_none_keeps_old_behaviour(lab):
+    _delist_world(lab, [0.9] + [NAN] * 3)
+    tr, eq, info = _sim(lab, delist_grace_days=None)
+    assert list(tr["symbol"]) == ["A"] and list(tr["reason"]) == ["END"]
+    assert pd.Timestamp(tr.iloc[0]["exit_ts"]) == pd.Timestamp(D20[3])

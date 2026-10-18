@@ -44,6 +44,9 @@ class SimSpec:
     # S0c: ((score_source, hold_bars), ...). Non-empty -> replaces score_source and the time stop (hold_bars is
     # then ignored for positions; kept for the report). Scores are pooled as causal percentiles.
     sources: tuple = ()
+    # ISS-18: a position whose symbol has had no bar for more than this many calendar days after its LAST bar
+    # (delisting/merger/suspension) closes at that last close, reason "DELIST", freeing the slot. None = off.
+    delist_grace_days: int | None = 7
 
     @property
     def n_slots(self) -> int:
@@ -264,11 +267,26 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                        "ret_pct": net / (p["qty"] * p["entry_px"]), "fold_id": p["fold"], "score": p["score"],
                        "queued_from": p["queued_from"], "source": p["source"]})
 
+    grace = np.timedelta64(spec.delist_grace_days, "D") if spec.delist_grace_days is not None else None
+    sym_last_ts = [data[s]["ts"][-1] if len(data[s]["ts"]) else None for s in syms]
+
     for gi in range(len(starts)):
         a, b = int(starts[gi]), int(ends[gi])
         t = g_ts[a]
         bar = dict(zip(g_sym[a:b].tolist(), g_idx[a:b].tolist()))
         last_close[g_sym[a:b]] = g_close[a:b]
+
+        # 0. ISS-18 DELIST: symbol's data ended > grace days ago -> close at its last close, drop pending/queued
+        if grace is not None:
+            gone = {k for k in range(len(syms)) if sym_last_ts[k] is not None and t > sym_last_ts[k] + grace}
+            for si in gone:
+                pend_in.pop(si, None)
+                pend_out.pop(si, None)
+                queue.pop(si, None)
+                if si in open_pos:
+                    d = data[syms[si]]
+                    j = len(d["c"]) - 1
+                    close(si, d["c"][j], d["ts"][j], j, "DELIST")
 
         # a. pending exits (marked TRAIL) fill at this bar's open
         for si in [k for k in pend_out if k in bar]:
