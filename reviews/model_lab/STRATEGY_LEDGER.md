@@ -128,3 +128,9 @@ survivors) = the survivorship inflation of SC1–SC5, and whether the model stil
 | SN-1 | A01n score, hold 20 | SC1 best 2/day: ₹10.4 L | PLANNED |
 | SN-2 | production-score ranker (prod_pmin replay on dayn), hold 60, target +20 % | SC3-x5: ₹14.57 L / Calmar 0.50 | PLANNED |
 | SN-3 | A11n score, hold 60 | SC5-b: ₹12.91 L / 0.32 | PLANNED |
+
+## WF-1 — walk-forward choice of hold/exit settings (main session 2026-10-19; informational, post-hoc on SC2/SC3 sims)
+
+| ID | Score | Result |
+|---|---|---|
+| WF-1 | production ranker / A01, 11 settings each, yearly pick from prior years (by ₹ and by Calmar) | DONE — prod ranker: by Calmar ₹13.34 L vs hindsight-best ₹14.54 L (picks target +20 % every year from 2014) → robust; by ₹ ₹9.90 L. A01: ₹7.06 / ₹5.89 L < median setting ₹8.52 L → exit choice is noise, use a fixed hold 20. `WF1_exit_selection_20261019.md` |
