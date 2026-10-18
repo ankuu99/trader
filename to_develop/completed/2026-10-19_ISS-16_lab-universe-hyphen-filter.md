@@ -1,5 +1,5 @@
 # ISS-16 — keep real hyphenated equity symbols in the Model Lab universe
-Written: 2026-10-19 · Tag: ISS-16 · Status: TO DO
+Written: 2026-10-19 · Tag: ISS-16 · Status: DONE 2026-10-19
 
 ## Source
 
@@ -52,4 +52,9 @@ test file, see below). Do not run any fetch, do not touch `lab_data/`.
 - [ ] no fetch run; `lab_data/` untouched
 
 ## Completion record
-_(filled by the main session after validation)_
+Validated 2026-10-19 (main session). Implementer (trader-implementer) built exactly the guide, no deviations (the
+named `test_model_lab_fetch.py` does not exist, so the tests went to the new `tests/test_model_lab_universe.py` as
+the guide allowed). Main-session checks: diff matches the spec (rule + filter swap only); full pytest **695 passed**;
+real data: a fresh Kite snapshot keeps BAJAJ-AUTO, NAM-INDIA, HCL-INSYS, BOSCH-HCIL, UMIYA-MRO, KLBRENG-B, MCCHRLS-B
+and no series variants; their bars fetched; day liquidity panel rebuilt; BAJAJ-AUTO in the PIT top-200 2010–2026.
+Commit 37029f5.
