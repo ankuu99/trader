@@ -20,3 +20,7 @@ derived from the peak *before* this candle, fill at the floor (gap-adjusted to t
 Open questions for the fix guide: order within the candle (low before high is unknowable — use the pre-candle
 peak only, as the branch did); gap fills (`min(floor, open)`); whether the same applies to the trailing floor and
 breakeven; size of the effect on the baseline (re-run 2025-01 → today before/after).
+
+## Addendum 2026-10-18
+
+Owner approved the fix. Implemented in 5970eb5 (guide `to_develop/completed/2026-10-18_ISS-14_backtest-trailing-candle-low.md`). Baseline impact: FULL 2025-01→2026-10-16 ₹465.4k → ₹439.2k, Calmar 6.60 → 6.18; HORIZON 2020→2026 ₹1,918k → ₹2,019k. Every exit A/B before 5970eb5 carries this optimism (ledger R-46).

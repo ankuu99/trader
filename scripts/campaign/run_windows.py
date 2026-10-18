@@ -124,17 +124,23 @@ def main() -> None:
     ap.add_argument("--compare", default=None, help="baseline JSON to diff against")
     args = ap.parse_args()
 
-    base = None
-    if args.compare:
-        base = json.loads(Path(args.compare).read_text())["results"]
-
     results: dict[str, dict] = {}
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         futs = {ex.submit(_run_window, w, args.overlay, args.symbols): w for w in args.windows}
         for fut in as_completed(futs):
             r = fut.result()
             results[r["window"]] = r
-            print(_fmt(r, base.get(r["window"]) if base else None), flush=True)
+            print(_fmt(r, None), flush=True)
+
+    # Baseline is read only after the runs, so a comparison can be queued while the
+    # baseline is still running.
+    base = None
+    if args.compare:
+        base = json.loads(Path(args.compare).read_text())["results"]
+        print(f"--- vs {args.compare}")
+        for w in args.windows:
+            if w in results:
+                print(_fmt(results[w], base.get(w)), flush=True)
 
     import subprocess
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],

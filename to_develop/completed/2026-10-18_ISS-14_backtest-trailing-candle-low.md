@@ -125,3 +125,13 @@ expected values or goldens. (`test_parity_golden` replays Strategy→Risk→Orde
 - [ ] backtest output changes only via the new low check (main session re-runs the baseline before/after)
 
 ## Completion record
+
+- **Completed:** 2026-10-18 · **Commit:** 5970eb5
+- **Validation:** full suite 572 passed (7 new in `tests/test_backtest_trailing_low.py`); diff matches the guide;
+  `tick_exit` unchanged; live paths untouched.
+- **Deviations:** `test_level_armed_by_same_candle_does_not_fire` asserts the trade ends `OPEN@END` (cannot
+  distinguish "low check didn't fire" from "nothing exited" otherwise). The low-tick reason is always the level's
+  reason, even if `on_tick` would have returned TRAILING_EOD_CLOSE (as specified).
+- **Impact (baseline config, `scripts/campaign/run_windows.py`):** FULL 2025-01→2026-10-16 ₹465.4k → ₹439.2k
+  (−₹26.2k), Calmar 6.60 → 6.18, DD 5.7 → 5.8 %; H1-25 −₹1.4k, H2-25 +₹1.6k, H1-26 −₹23.9k, H2-26 −₹1.5k;
+  HORIZON 2020→2026 ₹1,918k → ₹2,019k (DD 36.8 → 36.5 %). Runs: `reviews/extrema_campaign/runs/baseline_{prefix,postfix}_iss14.json`.

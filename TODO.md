@@ -78,3 +78,9 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 |---|---|---|
 | [TD-016](TODO/TD-016-stock-names-link-to-drilldown/DETAIL.md) | DONE 2026-10-17 (release-20261017f) | Every stock name on the dashboard links to /stock/<sym> |
 | [TD-017](TODO/TD-017-stock-page-date-range/DETAIL.md) | DONE 2026-10-18 (release-20261018a) | Date-range filter on the /stock and /chart pages |
+
+## Detection research
+
+| ID | Status | Point |
+|---|---|---|
+| [TD-018](TODO/TD-018-extrema-model-campaign/DETAIL.md) | PENDING (in progress 2026-10-18) | Trough/peak model evaluation campaign — docs/01, ledger, worktree arms |
