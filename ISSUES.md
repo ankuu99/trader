@@ -19,4 +19,6 @@ One folder per reported problem under `ISSUES/ISS-NN-<slug>/` (SUMMARY · DETAIL
 | [ISS-13](ISSUES/ISS-13-broker-reject-entry-refire-loop/DETAIL.md) | PENDING | live orders | Broker-rejected ENTRY (insufficient funds) re-fires every candle |
 | [ISS-14](ISSUES/ISS-14-backtest-trailing-ignores-candle-low/DETAIL.md) | FIXED 2026-10-18 (5970eb5) | backtest engine | Backtest trailing/breakeven exits ignore the candle low — live exits on intrabar pierces the backtest never sees |
 | [ISS-15](ISSUES/ISS-15-train-one-class-crash/DETAIL.md) | PENDING (latent on HEAD; fixed on exp/features) | strategy training | `_train` guards total sample count only — a long-history feature pipeline can leave one class and crash the solver |
-| [ISS-16](ISSUES/ISS-16-lab-universe-drops-hyphenated-symbols/DETAIL.md) | FIXED 2026-10-19 (37029f5) | Model Lab universe drops every hyphenated symbol (BAJAJ-AUTO …) |
+| [ISS-16](ISSUES/ISS-16-lab-universe-drops-hyphenated-symbols/DETAIL.md) | FIXED 2026-10-19 (37029f5) | Model Lab data | Model Lab universe drops every hyphenated symbol (BAJAJ-AUTO …) |
+| [ISS-17](ISSUES/ISS-17-dayn-universe-includes-etfs/DETAIL.md) | PENDING — found 2026-10-19 | Model Lab data | `dayn` liquidity universe includes ETFs / fund units |
+| [ISS-18](ISSUES/ISS-18-sim-slot-locked-after-delisting/DETAIL.md) | PENDING — found 2026-10-19 | Model Lab sims | Portfolio simulator keeps a slot locked after a held stock stops trading |
