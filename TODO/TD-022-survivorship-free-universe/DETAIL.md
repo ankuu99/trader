@@ -20,3 +20,12 @@ Owner go-ahead ("Do all three"). Probe: NSE bhavcopy archives download with brow
 EDUCOMP, JETAIRWAYS, SINTEX, PUNJLLOYD, VIDEOIND, BHUSANSTL, HDFC, RANBAXY, SATYAMCOMP, … Split/bonus adjustment
 from NSE's own adjusted PREVCLOSE on ex-dates. Build spec: `to_develop/2026-10-18_TD-022_L0c-nse-bhavcopy-day-source.md`
 (new lab timeframe `dayn`). Found on the way: ISS-16 (lab universe drops hyphenated symbols such as BAJAJ-AUTO).
+
+## Addendum 2026-10-19 — L0c first real run: validation FAIL, rework spec'd
+
+Fetch/parse/build ran clean (4,635 daily files 2008→2026-10-16; 4,045 securities, 1,070 of them delisted), but the
+adjusted series disagreed with Kite (median 3.1 % off; 40 % of days within 0.5 %). Cause: NSE bhavcopy's PREVCLOSE
+is NOT adjusted on bonus/split ex-dates (RELIANCE 2017-09-07 and 2024-10-28 bonuses), and weekend special sessions
+were not fetched. Rework (addendum in the L0c guide): adjustment factors from NSE's corporate-actions API (2008→,
+includes delisted names; 1,280 bonus/split events), every calendar day fetched. `dayn` must not be used until the
+re-validation passes.
