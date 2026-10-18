@@ -104,7 +104,8 @@ def test_url_for_date_and_fallback(monkeypatch):
 
     monkeypatch.setattr(nb, "_http_get", lambda url: (_ for _ in ()).throw(RuntimeError("boom")))
     assert nb.fetch_date(date(2012, 1, 27)) == "error"      # never raises
-    assert nb.weekdays(date(2024, 7, 5), date(2024, 7, 9)) == [date(2024, 7, 5), date(2024, 7, 8), date(2024, 7, 9)]
+    assert nb.calendar_days(date(2024, 7, 5), date(2024, 7, 8)) == [
+        date(2024, 7, 5), date(2024, 7, 6), date(2024, 7, 7), date(2024, 7, 8)]       # weekends included
 
 
 def _row(d, sym, isin, close, prevclose=None, series="EQ", volume=100):
@@ -148,28 +149,147 @@ def _series(sec_rows):
 def _adj_input():
     days = pd.bdate_range("2022-01-03", periods=8)
     closes = [100, 101, 102, 20.4, 20.5, 10.25, 10.3, 10.2]          # 1:5 split at idx3, 1:1 bonus at idx5
-    prevs = [100, 100, 101, 102 / 5, 20.4, 20.5 / 2, 10.25, 10.3]    # idx1 prev=100 -> tiny ignored move
-    prevs[1] = 100.0
     rows = []
-    for i, (d, c, pc) in enumerate(zip(days, closes, prevs)):
-        r = _row(d, "AAA", "INE9", c, pc, volume=1000)
+    for i, (d, c) in enumerate(zip(days, closes)):
+        r = _row(d, "AAA", "INE9", c, None if i == 0 else closes[i - 1], volume=1000)   # PREVCLOSE raw, as NSE writes
         r["sec"] = 0
         rows.append(r)
-    # small moves: idx 6 prevclose 10.25 vs close 10.25 same; add 1.5% mismatch
-    rows[7]["prevclose"] = 10.3 * 1.015
     return pd.DataFrame(rows)
 
 
-def test_adjustment_split_and_bonus():
-    adj, ca = nb.adjust(_adj_input())
-    assert len(ca) == 2 and ca["f"].round(6).tolist() == [0.2, 0.5]
+def _events(*rows):
+    return pd.DataFrame([{"symbol": s, "isin": i, "series": "EQ", "ex_date": pd.Timestamp(d), "subject": sub,
+                          "kind": k, "factor": f} for s, i, d, sub, k, f in rows], columns=nb.EVENT_COLS)
+
+
+def test_adjustment_from_ca_events():
+    p = _adj_input()
+    days = p["date"].tolist()
+    ev = _events(("AAA", "INE9", days[3], "Split 10->2", "split", 0.2),
+                 ("AAA", "INE9", days[3], "Split 10->2", "split", 0.2),                 # duplicate counts once
+                 ("AAA", "INE9", days[5] - pd.Timedelta(days=1), "Bonus 1:1", "bonus", 0.5))   # ex on a non-session
+    adj, ca, um, gaps = nb.adjust(p, ev)
+    assert len(ca) == 2 and ca["f"].round(6).tolist() == [0.2, 0.5] and um.empty
     c = adj["close"].to_numpy()
     assert c[-1] == pytest.approx(10.2)                              # last row unadjusted
     assert c[2] == pytest.approx(102 / 10) and c[3] == pytest.approx(20.4 / 2)   # continuous across ex-dates
     assert c[4] == pytest.approx(20.5 / 2) and c[5] == pytest.approx(10.25)
     assert adj["volume"].tolist()[:3] == [10000] * 3 and adj["volume"].tolist()[3:5] == [2000] * 2
     assert adj["volume"].tolist()[5:] == [1000] * 3
-    assert adj["adj"].iloc[-1] == 1.0                                # 1.5% prevclose gap ignored
+    assert ca["gap_ratio"].between(0.97, 1.03).all()
+    assert ca["kind"].tolist() == ["split", "bonus"]
+
+    # ISIN mismatch but symbol equal -> attached by symbol; nothing matching -> unmatched
+    ev2 = _events(("AAA", "INEWRONG", days[3], "Split", "split", 0.2),
+                  ("NOPE", "INENOPE", days[3], "Bonus 1:1", "bonus", 0.5))
+    adj2, ca2, um2, _ = nb.adjust(p, ev2)
+    assert len(ca2) == 1 and ca2["f"].iloc[0] == pytest.approx(0.2)
+    assert um2["symbol"].tolist() == ["NOPE"]
+    assert adj2["close"].iloc[2] == pytest.approx(102 / 5)
+
+
+def test_prevclose_never_adjusts():
+    p = _adj_input()
+    p.loc[5, "prevclose"] = p.loc[4, "close"] / 2                    # NSE-style "adjusted" PREVCLOSE, no CA event
+    adj, ca, um, gaps = nb.adjust(p, None)
+    assert ca.empty and (adj["adj"] == 1.0).all() and (adj["close"].to_numpy() == p["close"].to_numpy()).all()
+    assert 5 in gaps.index or len(gaps) >= 1
+    assert (gaps["ratio"] - 1).abs().gt(0.02).all()
+
+
+def test_build_prevclose_gaps_csv_and_summary():
+    p = _adj_input()
+    p.loc[5, "prevclose"] = p.loc[4, "close"] / 2
+    (paths.NSE_BHAV_DIR / "panel").mkdir(parents=True)
+    p.drop(columns="sec").to_parquet(paths.NSE_BHAV_DIR / "panel" / "all.parquet")
+    res = nb.build(liquidity=False)
+    assert res["n_ca_matched"] == 0 and res["n_ca_unmatched"] == 0 and res["n_gap_suspect"] == 0
+    g = pd.read_csv(paths.NSE_BHAV_DIR / "prevclose_gaps.csv")
+    assert list(g.columns) == ["sec_id", "date", "prevclose", "prev_close", "ratio"] and len(g) == 1
+
+
+_PARSE_OK = [
+    (" Bonus 1:1", 0.5), ("Bonus 1:10", 10 / 11), ("Bonus 1:2  ", 2 / 3), ("Bonus 3 : 2", 0.4),
+    ("Bonus - 1:1", 0.5), ("Bonus shares in the ratio of 1:1", 0.5),
+    (" Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share", 0.2),
+    ("Face Value Split (Sub-Division) - From Rs 10/- Per Share To Re 1/- Per Share ", 0.1),
+    ("Fv Split Rs.10/- To Rs.2/", 0.2), ("Face Value Split From Rs.10/- To Rs.2/-", 0.2),
+    ("FV Split-Rs10/- to Re.1/-", 0.1), ("Face Value  Split From Rs. 5 To Rs. 2/-", 0.4),
+    ("Bonus 1:1 And Face Value Split From Rs.10/- To Re.1/-", 0.05),
+    ("Annual General Meeting/Dividend Rs.2/- Per Share/Bonus 1:1", 0.5),
+    ("Bonus 1:1 (Record Date Revised)", 0.5)]
+_PARSE_NONE = ["Scheme Of Arrangement - Bonus Debentures 1:1", "Sch Of Agmt- Bonus Deb1:1",
+               "Scheme of Arrangement - Bonus NCRPS 1:1", "Bonus 1 DVR : 10 Eq Share",
+               "Annual General Meeting/Dividend - Rs 5 Per Share", "Rights 1:5 @ Premium Rs 100/-"]
+
+
+def test_parse_ca_subject_real_variants():
+    for subj, f in _PARSE_OK:
+        got = nb.parse_ca_subject(subj)
+        assert got is not None and abs(got - f) < 1e-9, subj
+    for subj in _PARSE_NONE:
+        assert nb.parse_ca_subject(subj) is None, subj
+    assert nb.parse_ca_subject(None) is None
+
+
+class _Resp:
+    def __init__(self, status, payload):
+        self.status_code, self._p = status, payload
+
+    def json(self):
+        return self._p
+
+
+class _Sess:
+    def __init__(self, by_year, fail_first_403=False):
+        self.calls, self.by_year, self.fail = [], by_year, fail_first_403
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.calls.append((url, params))
+        if params is None:
+            return _Resp(200, None)                                      # warm-up
+        if self.fail:
+            self.fail = False
+            return _Resp(403, None)
+        return _Resp(200, self.by_year[int(params["from_date"][-4:])])
+
+
+def test_ca_stage_saves_and_parses(monkeypatch):
+    monkeypatch.setattr(nb, "CA_INTERVAL", 0.0)
+    row = lambda sym, isin, ex, subj: {"symbol": sym, "isin": isin, "series": "EQ", "subject": subj,   # noqa: E731
+                                       "exDate": ex, "faceVal": "10"}
+    by_year = {
+        2017: [row("RELIANCE", "INE002A01018", "07-Sep-2017", "Bonus 1:1"),
+               row("RELIANCE", "INE002A01018", "08-Sep-2017", "Dividend Rs 5")],
+        2018: [row("XYZ", "INE111A01011", "05-Mar-2018", "Face Value Split From Rs.10/- To Rs.2/-"),
+               row("BAD", "INE222A01011", "05-Mar-2018", "Bonus issue (weird)"),
+               row("DEB", "INE333A01011", "05-Mar-2018", "Bonus Debentures 1:1")]}
+    (paths.NSE_BHAV_DIR / "ca").mkdir(parents=True)
+    (paths.NSE_BHAV_DIR / "ca" / "2017.json").write_text("[]")           # past year already saved -> skipped
+    s = _Sess(by_year, fail_first_403=True)
+    res = nb.fetch_ca(2017, 2018, session=s)
+    assert res == {"fetched": 1, "skipped": 1}
+    assert s.calls[0][1] is None                                          # warm-up first
+    assert sum(1 for _, pr in s.calls if pr is not None) == 2             # one 403 then the retry; 2017 not requested
+    assert (paths.NSE_BHAV_DIR / "ca" / "2018.json").exists()
+    (paths.NSE_BHAV_DIR / "ca" / "2017.json").write_text(__import__("json").dumps(by_year[2017]))
+    ev = nb.parse_ca()
+    assert sorted(zip(ev["symbol"], ev["factor"].round(6))) == [("RELIANCE", 0.5), ("XYZ", 0.2)]
+    assert ev["kind"].tolist() == ["bonus", "split"] and ev["ex_date"].iloc[0] == pd.Timestamp("2017-09-07")
+    assert (paths.NSE_BHAV_DIR / "ca_events.parquet").exists()
+    un = pd.read_csv(paths.NSE_BHAV_DIR / "ca_unparsed.csv")
+    assert un["symbol"].tolist() == ["BAD"]                               # debenture bonus is not "unparsed"
+
+
+def test_calendar_days_and_missing_skip(monkeypatch):
+    calls = []
+    monkeypatch.setattr(nb, "_http_get", lambda url: (calls.append(url) or (404, b"")))
+    sat, sun = date(2024, 7, 6), date(2024, 7, 7)
+    r = nb.fetch_range(sat, sun)
+    assert r == {"holiday_or_missing": 2} and len(calls) == 4             # both formats, both weekend days
+    calls.clear()
+    assert nb.fetch_range(sat, sun) == {"skipped_missing": 2} and calls == []
+    assert nb.fetch_range(sat, sun, retry_missing=True) == {"holiday_or_missing": 2} and len(calls) == 4
 
 
 def test_build_writes_bars_and_indices(monkeypatch):

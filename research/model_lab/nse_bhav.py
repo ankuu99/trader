@@ -1,19 +1,22 @@
 """Survivorship-free daily bars from NSE bhavcopy archives (TD-022, lab interval `day_nse`, timeframes dayn/weekn).
 
-  .venv/bin/python -m research.model_lab.nse_bhav <fetch|parse|build|validate> [--from 2008-01-01] [--to YYYY-MM-DD]
+  .venv/bin/python -m research.model_lab.nse_bhav <fetch|ca|parse|build|validate> [--from 2008-01-01] [--to YYYY-MM-DD]
 
-fetch    every weekday's cm bhavcopy zip -> nse_bhav/raw/<YYYY>/<YYYYMMDD>.zip (resumable, <= 2 req/s)
+fetch    every calendar day's cm bhavcopy zip -> nse_bhav/raw/<YYYY>/<YYYYMMDD>.zip (resumable, <= 2 req/s;
+         dates logged holiday_or_missing are not re-requested unless --retry-missing)
+ca       NSE corporate-actions API, one request per year -> nse_bhav/ca/<YYYY>.json -> ca_events.parquet
 parse    zips -> nse_bhav/panel/<YYYY>.parquet (EQ/BE/BZ rows, normalised columns)
-build    panel -> securities (chained across renames / ISIN changes), split/bonus adjustment from NSE's own
-         PREVCLOSE, per-security bars in bars/day_nse/, Kite index copies, PIT liquidity panel
+build    panel -> securities (chained across renames / ISIN changes), split/bonus adjustment from the
+         corporate-actions events, per-security bars in bars/day_nse/, Kite index copies, PIT liquidity panel
 validate adjusted closes vs Kite's adjusted daily bars for overlapping names -> nse_bhav/validation.csv
 
-On an ex-date NSE sets PREVCLOSE to the adjusted previous close, so prevclose_t / close_{t-1} is that day's
-adjustment factor. No imports from trader.* (lab rule).
+Bhavcopy PREVCLOSE is NOT adjusted on an ex-date (verified on RELIANCE bonuses), so it is QA-only
+(prevclose_gaps.csv). No imports from trader.* (lab rule).
 """
 import argparse
 import csv
 import io
+import re
 import sys
 import time
 import zipfile
@@ -30,8 +33,18 @@ OLD_LAST = date(2024, 7, 5)                 # last file in the legacy format
 SERIES = ("EQ", "BE", "BZ")
 _PRI = {"EQ": 0, "BE": 1, "BZ": 2}
 LINK_DAYS = 30                              # symbol continuity gap that still joins a security
-ADJ_MIN_MOVE = 0.02                         # |f - 1| must exceed this ...
-ADJ_MIN_DIFF = 0.05                         # ... and |prevclose - prev close| must exceed this (rupees)
+PREVCLOSE_QA = 0.02                         # |prevclose / prev close - 1| above this is listed in prevclose_gaps.csv
+GAP_SUSPECT = 0.25                          # |gap_ratio - 1| above this counts as a suspect corporate action
+CA_WINDOW_DAYS = 5                          # attach an event to the first row within this many days of ex_date
+CA_INTERVAL = 1.0                           # seconds between corporate-actions requests (<= 1 req/s)
+CA_URL = "https://www.nseindia.com/api/corporates-corporateActions"
+CA_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0 Safari/537.36"),
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-actions",
+}
 REQ_INTERVAL = 0.5                          # seconds between requests (<= 2 req/s)
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -92,13 +105,25 @@ def _log_fetch(rows: list[tuple]) -> None:
         w.writerows(rows)
 
 
-def weekdays(start: date, end: date) -> list[date]:
+def calendar_days(start: date, end: date) -> list[date]:
+    """Every calendar day (weekend special sessions exist)."""
     out, d = [], start
     while d <= end:
-        if d.weekday() < 5:
-            out.append(d)
+        out.append(d)
         d += timedelta(days=1)
     return out
+
+
+def _logged_missing() -> set[str]:
+    """ISO dates whose latest fetch_log row is holiday_or_missing."""
+    p = paths.NSE_BHAV_DIR / "fetch_log.csv"
+    if not p.exists():
+        return set()
+    log = pd.read_csv(p, dtype=str)
+    if log.empty:
+        return set()
+    last = log.groupby("date", sort=False)["status"].last()
+    return set(last.index[last == "holiday_or_missing"])
 
 
 def fetch_date(d: date) -> str:
@@ -135,10 +160,14 @@ def fetch_date(d: date) -> str:
     return result
 
 
-def fetch_range(start: date, end: date) -> dict[str, int]:
+def fetch_range(start: date, end: date, retry_missing: bool = False) -> dict[str, int]:
     paths.check_disk()
     counts: dict[str, int] = {}
-    for d in weekdays(start, end):
+    missing = set() if retry_missing else _logged_missing()
+    for d in calendar_days(start, end):
+        if d.isoformat() in missing and not raw_path(d).exists():
+            counts["skipped_missing"] = counts.get("skipped_missing", 0) + 1
+            continue
         r = fetch_date(d)
         counts[r] = counts.get(r, 0) + 1
     return counts
@@ -292,31 +321,220 @@ def security_table(p: pd.DataFrame, last_panel_date: pd.Timestamp) -> pd.DataFra
     return t
 
 
+# ---------------------------------------------------------------- corporate actions
+
+_RS = r"\br[se]\.?\s*(\d+(?:\.\d+)?)"
+_SPLIT_KW = re.compile(r"split|sub-?\s*division", re.I)
+_BONUS_RE = re.compile(r"\bbonus\W*(?:shares\s+in\s+the\s+ratio\s+of\W*)?(\d+)\s*:\s*(\d+)", re.I)
+_NON_EQUITY = re.compile(r"deb|ncrps|preference|dvr", re.I)
+EVENT_COLS = ["symbol", "isin", "series", "ex_date", "subject", "kind", "factor"]
+
+
+def _parse_ca(subject: str) -> tuple[float, str] | None:
+    """(price factor applied BEFORE the ex-date, kind) or None when not a price-adjusting event."""
+    f, kinds = 1.0, []
+    m = _BONUS_RE.search(subject)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if a + b > 0:
+            f *= b / (a + b)
+            kinds.append("bonus")
+    k = _SPLIT_KW.search(subject)
+    if k:
+        rs = re.findall(_RS, subject[k.end():], re.I)
+        if len(rs) >= 2 and float(rs[1]) > 0 and float(rs[0]) > 0:
+            f *= float(rs[1]) / float(rs[0])
+            kinds.append("split")
+    if not kinds:
+        return None
+    return f, "+".join(kinds)
+
+
+def parse_ca_subject(subject) -> float | None:
+    """Price factor for a corporate-action subject (None = not a price-adjusting event)."""
+    if not isinstance(subject, str):
+        return None
+    r = _parse_ca(subject)
+    return None if r is None else r[0]
+
+
+def _ca_json_path(year: int) -> Path:
+    return paths.NSE_BHAV_DIR / "ca" / f"{year}.json"
+
+
+def _new_session():
+    import requests
+    return requests.Session()
+
+
+def _warm(session) -> None:
+    session.get("https://www.nseindia.com/", headers=CA_HEADERS, timeout=30)
+
+
+def _ca_get(session, year: int) -> list:
+    """One year's rows. 3 attempts with backoff; re-warms the session once on 401/403."""
+    params = {"index": "equities", "from_date": f"01-01-{year}", "to_date": f"31-12-{year}"}
+    rewarmed, last = False, "no response"
+    for attempt in range(3):
+        try:
+            r = session.get(CA_URL, params=params, headers=CA_HEADERS, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                return data["data"] if isinstance(data, dict) and "data" in data else data
+            last = f"status {r.status_code}"
+            if r.status_code in (401, 403) and not rewarmed:
+                rewarmed = True
+                _warm(session)
+        except Exception as e:
+            last = type(e).__name__
+        time.sleep(CA_INTERVAL * (2 ** attempt))
+    raise RuntimeError(f"corporate actions {year}: {last}")
+
+
+def fetch_ca(start_year: int, end_year: int, session=None) -> dict[str, int]:
+    import json
+    paths.check_disk()
+    counts = {"fetched": 0, "skipped": 0}
+    this_year = date.today().year
+    session = session or _new_session()
+    warmed = False
+    for y in range(start_year, end_year + 1):
+        p = _ca_json_path(y)
+        if p.exists() and y != this_year:
+            counts["skipped"] += 1
+            continue
+        if not warmed:
+            _warm(session)
+            warmed = True
+        rows = _ca_get(session, y)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(rows))
+        tmp.replace(p)
+        counts["fetched"] += 1
+        time.sleep(CA_INTERVAL)
+    return counts
+
+
+def parse_ca(start_year: int | None = None, end_year: int | None = None) -> pd.DataFrame:
+    """All saved ca/*.json -> ca_events.parquet (+ ca_unparsed.csv)."""
+    import json
+    events, unparsed = [], []
+    for f in sorted((paths.NSE_BHAV_DIR / "ca").glob("*.json")):
+        rows = json.loads(f.read_text())
+        for r in rows:
+            subj = r.get("subject") or ""
+            if not re.search(r"bonus|split|sub-?\s*division", subj, re.I):
+                continue
+            ex = pd.to_datetime(r.get("exDate"), format="%d-%b-%Y", errors="coerce")
+            if pd.isna(ex):
+                continue
+            res = _parse_ca(subj)
+            if res is None:
+                if not _NON_EQUITY.search(subj):
+                    unparsed.append({"symbol": r.get("symbol"), "ex_date": ex.date().isoformat(), "subject": subj})
+                continue
+            events.append({"symbol": (r.get("symbol") or "").strip(), "isin": (r.get("isin") or "").strip() or None,
+                           "series": r.get("series"), "ex_date": ex, "subject": subj,
+                           "kind": res[1], "factor": res[0]})
+    ev = pd.DataFrame(events, columns=EVENT_COLS)
+    ev["ex_date"] = pd.to_datetime(ev["ex_date"]).astype("datetime64[ns]")
+    ev["factor"] = ev["factor"].astype("float64")
+    paths.NSE_BHAV_DIR.mkdir(parents=True, exist_ok=True)
+    store._atomic_write(paths.NSE_BHAV_DIR / "ca_events.parquet", lambda t: ev.to_parquet(
+        t, engine="pyarrow", compression="zstd", index=False))
+    pd.DataFrame(unparsed, columns=["symbol", "ex_date", "subject"]).to_csv(
+        paths.NSE_BHAV_DIR / "ca_unparsed.csv", index=False)
+    return ev
+
+
 # ---------------------------------------------------------------- adjustment
 
-def adjust(p: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Backward-adjust per security from NSE's PREVCLOSE. Returns (adjusted rows, corporate actions)."""
+def adjust(p: pd.DataFrame, events: pd.DataFrame | None = None):
+    """Backward-adjust per security from corporate-action events.
+    Returns (adjusted rows, corporate actions, unmatched events, prevclose QA gaps)."""
     p = p.sort_values(["sec", "date"], kind="stable").reset_index(drop=True)
-    prev_close = p.groupby("sec")["close"].shift(1)
-    f = p["prevclose"] / prev_close
-    is_ca = ((f - 1).abs() > ADJ_MIN_MOVE) & ((p["prevclose"] - prev_close).abs() > ADJ_MIN_DIFF)
-    f = f.where(is_ca, 1.0).fillna(1.0).to_numpy(float)
-    p["f"] = f
+    n = len(p)
     sec = p["sec"].to_numpy()
-    A = np.ones(len(p))
-    # A_t = prod_{s>t} f_s within the security; rows are contiguous per security
-    bounds = np.flatnonzero(np.r_[True, sec[1:] != sec[:-1], True])
+    dates = p["date"].to_numpy()
+    pos_by_sec: dict[int, np.ndarray] = {}
+    bounds = np.flatnonzero(np.r_[True, sec[1:] != sec[:-1], True]) if n else np.array([0])
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        pos_by_sec[int(sec[a])] = np.arange(a, b)
+    isn_col, sym_col = p["isin"].tolist(), p["symbol"].tolist()
+    ev = events if events is not None else pd.DataFrame(columns=EVENT_COLS)
+    win = np.timedelta64(CA_WINDOW_DAYS, "D")
+
+    def _attach(cands, ex):
+        best = None
+        for k in cands:
+            idx = pos_by_sec[k]
+            dd = dates[idx]
+            j = int(np.searchsorted(dd, ex))
+            if j < len(idx) and dd[j] - ex <= win and (best is None or dd[j] < dates[best]):
+                best = int(idx[j])
+        return best
+
+    # per-row (isin/symbol) -> security candidates, restricted to the event window
+    isin_rows: dict[str, list] = {}
+    sym_rows: dict[str, list] = {}
+    for i in range(n):
+        if isinstance(isn_col[i], str):
+            isin_rows.setdefault(isn_col[i], []).append(i)
+        sym_rows.setdefault(sym_col[i], []).append(i)
+
+    def _near(rows, ex):
+        return {int(sec[i]) for i in rows if 0 <= (dates[i] - ex) / np.timedelta64(1, "D") <= CA_WINDOW_DAYS}
+
+    f = np.ones(n)
+    seen, kept, unmatched = set(), [], []
+    for e in ev.itertuples(index=False):
+        ex = np.datetime64(e.ex_date, "ns")
+        row = None
+        if isinstance(e.isin, str) and e.isin in isin_rows:
+            row = _attach(_near(isin_rows[e.isin], ex), ex)
+        if row is None and e.symbol in sym_rows:
+            row = _attach(_near(sym_rows[e.symbol], ex), ex)
+        if row is None:
+            unmatched.append({"symbol": e.symbol, "isin": e.isin, "ex_date": e.ex_date, "subject": e.subject,
+                              "factor": e.factor})
+            continue
+        key = (int(sec[row]), row, round(float(e.factor), 9))
+        if key in seen:
+            continue
+        seen.add(key)
+        f[row] *= float(e.factor)
+        kept.append({"row": row, "kind": e.kind, "subject": e.subject})
+    p["f"] = f
+
+    prev_close = p.groupby("sec")["close"].shift(1)
+    # QA only: NSE's PREVCLOSE is not adjusted on ex-dates; never used for adjustment
+    ratio = p["prevclose"] / prev_close
+    qa = ((ratio - 1).abs() > PREVCLOSE_QA) & (p["f"] == 1.0)
+    gaps = pd.DataFrame({"sec": p.loc[qa, "sec"], "date": p.loc[qa, "date"], "prevclose": p.loc[qa, "prevclose"],
+                         "prev_close": prev_close[qa], "ratio": ratio[qa]}).reset_index(drop=True)
+
+    gap_ratio = (p["open"] / prev_close) / p["f"]
+    A = np.ones(n)
     for a, b in zip(bounds[:-1], bounds[1:]):
         seg = f[a:b]
         if (seg != 1.0).any():
             rev = np.cumprod(seg[::-1])[::-1]               # prod_{s>=t}
             A[a:b - 1] = rev[1:]
     p["adj"] = A
+    ca_rows = []
+    for k in kept:
+        i = k["row"]
+        ca_rows.append({"sec": int(sec[i]), "date": p["date"].iloc[i], "f": float(p["f"].iloc[i]), "kind": k["kind"],
+                        "subject": k["subject"], "gap_ratio": float(gap_ratio.iloc[i])})
+    ca = pd.DataFrame(ca_rows, columns=["sec", "date", "f", "kind", "subject", "gap_ratio"])
+    ca["gap_ratio"] = ca["gap_ratio"].astype("float64")
+    ca = ca.sort_values(["sec", "date"], kind="stable").reset_index(drop=True)
     for c in ("open", "high", "low", "close"):
         p[c] = p[c] * A
     p["volume"] = np.rint(p["volume"].to_numpy(float) / A).astype("int64")
-    ca = p.loc[p["f"] != 1.0, ["sec", "date", "f"]].reset_index(drop=True)
-    return p, ca
+    um = pd.DataFrame(unmatched, columns=["symbol", "isin", "ex_date", "subject", "factor"])
+    return p, ca, um, gaps
 
 
 # ---------------------------------------------------------------- build
@@ -340,10 +558,18 @@ def build(liquidity: bool = True) -> dict:
     p = assign_securities(panel)
     table = security_table(p, last_panel_date)
     table["file_name"] = _bar_name(table)
-    adj, ca = adjust(p)
+    ev_path = paths.NSE_BHAV_DIR / "ca_events.parquet"
+    events = pd.read_parquet(ev_path) if ev_path.exists() else pd.DataFrame(columns=EVENT_COLS)
+    if not ev_path.exists():
+        print("build: WARNING no ca_events.parquet — run the ca stage; no adjustment applied")
+    adj, ca, unmatched, gaps = adjust(p, events)
     sec_to_id = dict(zip(table["sec"], table["sec_id"]))
     ca.insert(0, "sec_id", ca["sec"].map(sec_to_id))
     ca = ca.drop(columns="sec")
+    paths.NSE_BHAV_DIR.mkdir(parents=True, exist_ok=True)
+    gaps.insert(0, "sec_id", gaps["sec"].map(sec_to_id))
+    gaps.drop(columns="sec").to_csv(paths.NSE_BHAV_DIR / "prevclose_gaps.csv", index=False)
+    unmatched.to_csv(paths.NSE_BHAV_DIR / "ca_unmatched.csv", index=False)
 
     paths.NSE_BHAV_DIR.mkdir(parents=True, exist_ok=True)
     for name, df in (("securities.parquet", table.drop(columns="sec")), ("corporate_actions.parquet", ca)):
@@ -370,7 +596,9 @@ def build(liquidity: bool = True) -> dict:
     if liquidity:
         universe.build_liquidity_panel(interval="day_nse")
     return {"securities": len(table), "delisted": int(table["delisted"].sum()),
-            "corporate_actions": len(ca), "indices": n_idx}
+            "corporate_actions": len(ca), "indices": n_idx, "n_ca_matched": len(ca),
+            "n_ca_unmatched": len(unmatched),
+            "n_gap_suspect": int(((ca["gap_ratio"] - 1).abs() > GAP_SUSPECT).sum())}
 
 
 # ---------------------------------------------------------------- validate
@@ -398,6 +626,9 @@ def validate() -> pd.DataFrame:
         print(f"validate: {len(out)} symbols; median of median |diff| {out['median_abs_diff'].median():.5f}; "
               f"mean share within 0.5%: {out['share_within_0p5pct'].mean():.4f}; "
               f"{int((out['share_within_0p5pct'] < 0.9).sum())} symbols < 90% within 0.5%")
+        print("validate: 20 worst by share within 0.5%:")
+        print(out.nsmallest(20, "share_within_0p5pct")[["symbol", "sec_id", "n_days", "median_abs_diff",
+                                                         "share_within_0p5pct"]].to_string(index=False))
     else:
         print("validate: no overlapping symbols")
     return out
@@ -405,15 +636,22 @@ def validate() -> pd.DataFrame:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="research.model_lab.nse_bhav")
-    ap.add_argument("stage", choices=["fetch", "parse", "build", "validate"])
+    ap.add_argument("stage", choices=["fetch", "ca", "parse", "build", "validate"])
     ap.add_argument("--from", dest="from_", default="2008-01-01")
     ap.add_argument("--to", default=None)
     ap.add_argument("--no-liquidity", action="store_true", help="build: skip the day_nse liquidity panel")
+    ap.add_argument("--retry-missing", action="store_true", help="fetch: re-request dates logged holiday_or_missing")
     args = ap.parse_args(argv)
+    if args.stage == "ca":
+        y0 = int(args.from_[:4])
+        y1 = int(args.to[:4]) if args.to else date.today().year
+        print(fetch_ca(y0, y1))
+        print(f"ca_events: {len(parse_ca())} rows")
+        return 0
     start = date.fromisoformat(args.from_)
     end = date.fromisoformat(args.to) if args.to else date.today()
     if args.stage == "fetch":
-        print(fetch_range(start, end))
+        print(fetch_range(start, end, retry_missing=args.retry_missing))
     elif args.stage == "parse":
         print(parse_range(start, end).to_string(index=False))
     elif args.stage == "build":
