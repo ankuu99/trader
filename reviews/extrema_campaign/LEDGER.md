@@ -164,4 +164,11 @@ plateau check. See `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`.
 | EXP-20 | — | Coin-flip control (owner question 2026-10-18): model replaced by random entry/top draws at each stock's own baseline firing rates; same names, exits, risk, scale-in | FULL: ₹158–389k (mean ₹286k), DD 8.4–13.2 %, Calmar 1.2–3.9, wWin 54.8–60.6 %, util ~76 % vs bot ₹439k / 5.8 % / 6.18 / 63.9 % / 61 %. HORIZON: ₹1.43–2.05M, DD 44–74 %, wWin 56–58 % vs bot ₹2.02M / 36.5 % / 61.5 % | — | MEASURED — the model beats every seed on every metric in FULL with less capital in use; its value is NOT all-bar dip ranking (AUC 0.51) | `scripts/campaign/random_control.py`, `runs/random_control.json` |
 | EXP-21 | — | Buy-and-hold reference: equal-weight the same watchlist names (₹6L), and Nifty 50 | FULL: watchlist B&H ₹953k DD 18.0 %, Nifty −₹15.5k; HORIZON: watchlist B&H ₹14.45M DD 40.2 %, Nifty ₹539k — the names were picked with hindsight (2023+/2025+ data), so every strategy on them is flattered | — | MEASURED | `scripts/campaign/buy_hold_benchmark.py` |
 
+| EXP-22 | — | Edge attribution (hybrids, 3 seeds): model entries + coin tops vs coin entries + model tops | FULL: model entry + coin top ₹408–439k, DD 5.8–7.2 %, wWin 63.2–64.0 % (≈ bot); coin entry + model top ₹181–347k, DD 10.7–13.7 %, wWin 55–60 % (≈ coin). HORIZON same split (₹1.85–2.02M / DD 37–40 % vs DD 47–79 %) | — | MEASURED — the edge is the ENTRY signal; the pattern-top signal ≈ a coin at the same rate (scale-out mechanics, not top detection, earn — cf. R-32) | `runs/random_control_hybrid.json` |
+
+**Protocol finding 2026-10-18 (EXP-20/22):** the Stage-A truth ("reaches +profit_pct before stale/stop") does not
+capture what makes the model's entries valuable — the model scores ≈ chance on it yet its entries carry the whole
+edge over a coin. Stage A is therefore NOT a valid filter; all Stage-A-failed arms are re-run through Stage B
+(DECISIONS 2026-10-18).
+
 (rows appended as arms are defined and run)
