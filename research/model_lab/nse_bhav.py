@@ -1,6 +1,6 @@
 """Survivorship-free daily bars from NSE bhavcopy archives (TD-022, lab interval `day_nse`, timeframes dayn/weekn).
 
-  .venv/bin/python -m research.model_lab.nse_bhav <fetch|ca|parse|build|validate> [--from 2008-01-01] [--to YYYY-MM-DD]
+  .venv/bin/python -m research.model_lab.nse_bhav <fetch|ca|parse|build|panel|validate> [--from 2008-01-01] [--to YYYY-MM-DD]
 
 fetch    every calendar day's cm bhavcopy zip -> nse_bhav/raw/<YYYY>/<YYYYMMDD>.zip (resumable, <= 2 req/s;
          dates logged holiday_or_missing are not re-requested unless --retry-missing)
@@ -8,6 +8,7 @@ ca       NSE corporate-actions API, one request per year -> nse_bhav/ca/<YYYY>.j
 parse    zips -> nse_bhav/panel/<YYYY>.parquet (EQ/BE/BZ rows, normalised columns)
 build    panel -> securities (chained across renames / ISIN changes), split/bonus adjustment from the
          corporate-actions events, per-security bars in bars/day_nse/, Kite index copies, PIT liquidity panel
+panel    rebuild only the day_nse liquidity panel from securities.parquet, excluding ETFs / fund units (ISS-17)
 validate adjusted closes vs Kite's adjusted daily bars for overlapping names -> nse_bhav/validation.csv
 
 Bhavcopy PREVCLOSE is NOT adjusted on an ex-date (verified on RELIANCE bonuses), so it is QA-only
@@ -551,6 +552,31 @@ def _bar_name(table: pd.DataFrame) -> pd.Series:
     return out
 
 
+def is_fund(isins, last_symbol) -> bool:
+    """ETF / fund unit (ISS-17): any ISIN starting INF, or an ETF-looking symbol. `isins` is the list/array stored in
+    securities.isins (a ';'-joined string is also accepted); None/NaN entries are ignored."""
+    if isinstance(isins, str):
+        isins = isins.split(";")
+    elif isins is None:
+        isins = []
+    for i in isins:
+        if isinstance(i, str) and i.strip().startswith("INF"):
+            return True
+    return universe._is_etf("", last_symbol if isinstance(last_symbol, str) else "")
+
+
+def _nonfund_symbols(table: pd.DataFrame) -> list[str]:
+    flags = (table["is_fund"].astype(bool) if "is_fund" in table.columns
+             else pd.Series([is_fund(a, b) for a, b in zip(table["isins"], table["last_symbol"])], index=table.index))
+    return ["NSE:" + n for n in table.loc[~flags, "file_name"]]
+
+
+def panel_only() -> pd.DataFrame:
+    """Rebuild only the day_nse liquidity panel from the existing securities.parquet (non-funds only)."""
+    table = pd.read_parquet(paths.NSE_BHAV_DIR / "securities.parquet")
+    return universe.build_liquidity_panel(symbols=_nonfund_symbols(table), interval="day_nse")
+
+
 def build(liquidity: bool = True) -> dict:
     paths.check_disk()
     panel = load_panel()
@@ -558,6 +584,7 @@ def build(liquidity: bool = True) -> dict:
     p = assign_securities(panel)
     table = security_table(p, last_panel_date)
     table["file_name"] = _bar_name(table)
+    table["is_fund"] = [is_fund(a, b) for a, b in zip(table["isins"], table["last_symbol"])]
     ev_path = paths.NSE_BHAV_DIR / "ca_events.parquet"
     events = pd.read_parquet(ev_path) if ev_path.exists() else pd.DataFrame(columns=EVENT_COLS)
     if not ev_path.exists():
@@ -594,8 +621,9 @@ def build(liquidity: bool = True) -> dict:
                 t, engine="pyarrow", compression="zstd", index=False))
             n_idx += 1
     if liquidity:
-        universe.build_liquidity_panel(interval="day_nse")
+        universe.build_liquidity_panel(symbols=_nonfund_symbols(table), interval="day_nse")
     return {"securities": len(table), "delisted": int(table["delisted"].sum()),
+            "n_funds": int(table["is_fund"].sum()),
             "corporate_actions": len(ca), "indices": n_idx, "n_ca_matched": len(ca),
             "n_ca_unmatched": len(unmatched),
             "n_gap_suspect": int(((ca["gap_ratio"] - 1).abs() > GAP_SUSPECT).sum())}
@@ -636,7 +664,7 @@ def validate() -> pd.DataFrame:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="research.model_lab.nse_bhav")
-    ap.add_argument("stage", choices=["fetch", "ca", "parse", "build", "validate"])
+    ap.add_argument("stage", choices=["fetch", "ca", "parse", "build", "validate", "panel"])
     ap.add_argument("--from", dest="from_", default="2008-01-01")
     ap.add_argument("--to", default=None)
     ap.add_argument("--no-liquidity", action="store_true", help="build: skip the day_nse liquidity panel")
@@ -656,6 +684,8 @@ def main(argv=None) -> int:
         print(parse_range(start, end).to_string(index=False))
     elif args.stage == "build":
         print(build(liquidity=not args.no_liquidity))
+    elif args.stage == "panel":
+        print(f"panel: {len(panel_only())} rows")
     else:
         validate()
     return 0

@@ -361,3 +361,42 @@ def test_dayn_wiring(monkeypatch):
     assert src.membership([2020], 2, tf="weekn")[2020] == {"NSE:NSEONLY", "NSE:BIG"}
     assert src.membership([2020], 2, tf="day")[2020] == {"NSE:DAYONLY", "NSE:BIG"}
     assert universe._load_panel("day_nse")["symbol"].tolist() == ["NSE:NSEONLY", "NSE:BIG"]
+
+
+def test_is_fund():
+    assert nb.is_fund(["INF204KB14I2"], "KOTAKBKETF") is True
+    assert nb.is_fund(["INE002A01018"], "RELIANCE") is False
+    assert nb.is_fund([None], "NIFTYBEES") is True
+    assert nb.is_fund(["INE002A01018", "INF000000000"], "XYZ") is True
+    assert nb.is_fund(np.array([np.nan, "INE002A01018"], dtype=object), "RELIANCE") is False
+
+
+def _stock_and_fund_panel():
+    days = pd.bdate_range("2021-01-01", periods=260)
+    rows = [_row(d, "STOCK", "INE002A01018", 50, volume=1000) for d in days]
+    rows += [_row(d, "FUNDX", "INF204KB14I2", 50, volume=1000) for d in days]
+    (paths.NSE_BHAV_DIR / "panel").mkdir(parents=True)
+    pd.DataFrame(rows).to_parquet(paths.NSE_BHAV_DIR / "panel" / "all.parquet")
+
+
+def test_build_excludes_funds_from_panel():
+    _stock_and_fund_panel()
+    res = nb.build()
+    assert res["n_funds"] == 1
+    syms = store.list_symbols("day_nse")
+    assert "NSE:STOCK" in syms and "NSE:FUNDX" in syms                      # bars written for both
+    t = pd.read_parquet(paths.NSE_BHAV_DIR / "securities.parquet").sort_values("last_symbol")
+    assert t.set_index("last_symbol")["is_fund"].to_dict() == {"FUNDX": True, "STOCK": False}
+    panel = pd.read_parquet(paths.UNIVERSE_DIR / "liquidity_day_nse.parquet")
+    assert set(panel["symbol"]) == {"NSE:STOCK"}
+
+
+def test_panel_stage_rebuilds_without_funds():
+    _stock_and_fund_panel()
+    nb.build(liquidity=False)
+    sp = paths.NSE_BHAV_DIR / "securities.parquet"
+    pd.read_parquet(sp).drop(columns="is_fund").to_parquet(sp)              # legacy file, no is_fund column
+    assert not (paths.UNIVERSE_DIR / "liquidity_day_nse.parquet").exists()
+    assert nb.main(["panel"]) == 0
+    panel = pd.read_parquet(paths.UNIVERSE_DIR / "liquidity_day_nse.parquet")
+    assert set(panel["symbol"]) == {"NSE:STOCK"}
