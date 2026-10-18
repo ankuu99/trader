@@ -158,6 +158,7 @@ def build_targets(bars: pd.DataFrame, tf: str, **overrides) -> pd.DataFrame:
 
     # T5
     _t5(o, h, l, c, hold_h, bx, by, out)
+    _t5_volscaled(c, hold_h, out)
 
     df = pd.DataFrame(out)
     df.insert(0, "timestamp", bars["timestamp"].values)
@@ -207,6 +208,23 @@ def _t5(o, h, l, c, hold_h, bx, by, out: dict) -> None:
                     hit = ((fx[X] < H) & (fx[X] < fy[Y])).astype(float)
                     res[f"t5_hit_x{X}_y{Y}_H{H}"][sel] = hit[ok]
     out.update(res)
+
+
+def _t5_volscaled(c, hold_h, out: dict) -> None:
+    """Vol-scaled T5: raw column / (s_t * sqrt(H)), s_t = 16-bar std of 1-bar log returns ending at t (== factors rv_16)."""
+    c = np.asarray(c, float)
+    r1 = np.full(len(c), np.nan)
+    r1[1:] = np.log(c[1:] / c[:-1])
+    s = pd.Series(r1).rolling(16).std().to_numpy()
+    for H in hold_h:
+        SH = s * np.sqrt(H)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            SH = np.where(SH > 0, SH, np.nan)
+            mfe = out[f"t5_mfe_H{H}"]; mp = out[f"t5_maepre_H{H}"]; rt = out[f"t5_ret_H{H}"]
+            out[f"t5_mfez_H{H}"] = mfe / SH
+            out[f"t5_maepz_H{H}"] = mp / SH
+            out[f"t5_retz_H{H}"] = rt / SH
+            out[f"t5_edgez_H{H}"] = (mfe + mp) / SH
 
 
 _LA = [(re.compile(r"^t1w_(min|max)_w(\d+)$"), 2), (re.compile(r"^t2_\w+_h(\d+)$"), 1),

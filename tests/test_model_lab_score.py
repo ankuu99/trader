@@ -118,6 +118,15 @@ def test_perfect_and_random_scores():
 
 # ---------------------------------------------------------------- references
 
+def test_vol_ref_equals_rv16():
+    from research.model_lab import factors
+    bb = synth.synthetic_15m(10, seed=1)
+    v = references.ref_scores(bb, "vol", "NSE:X")
+    exp = factors.own_factors(bb)["rv_16"].to_numpy(float)
+    assert np.allclose(v, exp, equal_nan=True) and np.isnan(v).any()
+    assert "vol" in references.REFS_MIN and "vol" in references.REFS_MAX
+
+
 def test_refs_rules():
     c = np.array([5, 4, 3, 4, 5, 4, 3, 2, 3], float)
     b = pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=len(c), freq="15min"),
@@ -152,7 +161,7 @@ def _fake_run(tmp_path, monkeypatch, with_vix=False):
         store.write_bars(s, "15minute", synth.synthetic_15m(120, seed=10 + i))
     if with_vix:
         store.write_bars("NSE:INDIA VIX", "day", synth.synthetic_day(600, seed=1, start="2018-01-01"))
-    references.write_refs("15m", syms, ["coin", "rsi", "low10"])
+    references.write_refs("15m", syms, ["coin", "rsi", "low10", "vol"])
     for s in syms:
         b = bars_mod.load(s, "15m")
         n = len(b)
@@ -257,21 +266,38 @@ def _mag_inputs(n=6000, seed=0):
 def test_magnitude_verdict_hand_case():
     rng, y, fold, year = _mag_inputs()
     model = y + rng.normal(0, 0.1, len(y))
-    mat = np.column_stack([model, rng.random(len(y)), rng.random(len(y))])
-    v = score.magnitude_verdict(mat, ["m", "prod_pmin", "rsi"], y, fold, year, "min", [0, 1, 2])
+    mat = np.column_stack([model, rng.random(len(y)), rng.random(len(y)), rng.random(len(y))])
+    names = ["m", "prod_pmin", "rsi", "vol"]
+    v = score.magnitude_verdict(mat, names, y, fold, year, "min", [0, 1, 2])
     assert v["verdicts"]["prod_pmin"]["win"] and v["verdicts"]["rsi"]["win"]
     assert v["overall"] == "PASS" and v["n_folds"] == 3 and v["n_years"] == 3
     # perfect inverse reference: |rho| = 1 > model's rho -> not beaten
-    mat2 = np.column_stack([model, -y, rng.random(len(y))])
-    v2 = score.magnitude_verdict(mat2, ["m", "prod_pmin", "rsi"], y, fold, year, "min", [0, 1, 2])
+    mat2 = np.column_stack([model, -y, mat[:, 2], mat[:, 3]])
+    v2 = score.magnitude_verdict(mat2, names, y, fold, year, "min", [0, 1, 2])
     assert not v2["verdicts"]["prod_pmin"]["win"] and v2["overall"] == "FAIL"
     assert v2["pooled_rho"]["prod_pmin"] == pytest.approx(-1.0)
     # PASS needs both prod and rsi
-    v3 = score.magnitude_verdict(mat[:, :2], ["m", "prod_pmin"], y, fold, year, "min", [0, 1, 2])
+    v3 = score.magnitude_verdict(mat[:, :3], ["m", "prod_pmin", "rsi"], y, fold, year, "min", [0, 1, 2])
     assert v3["overall"] == "NO_REF"
     # groups under 200 rows are ignored
-    v4 = score.magnitude_verdict(mat[:150], ["m", "prod_pmin", "rsi"], y[:150], fold[:150], year[:150], "min", [0])
+    v4 = score.magnitude_verdict(mat[:150], names, y[:150], fold[:150], year[:150], "min", [0])
     assert v4["n_folds"] == 0 and not v4["verdicts"]["rsi"]["win"]
+
+
+def test_magnitude_verdict_requires_vol():
+    rng, y, fold, year = _mag_inputs()
+    model = y + rng.normal(0, 0.1, len(y))
+    names = ["m", "prod_pmin", "rsi", "vol"]
+    bad = np.column_stack([model, rng.random(len(y)), rng.random(len(y)), y])   # vol ref equals the target
+    v = score.magnitude_verdict(bad, names, y, fold, year, "min", [0, 1, 2])
+    assert v["verdicts"]["prod_pmin"]["win"] and v["verdicts"]["rsi"]["win"]
+    assert not v["verdicts"]["vol"]["win"] and v["overall"] == "FAIL"
+    v2 = score.magnitude_verdict(bad[:, :3], names[:3], y, fold, year, "min", [0, 1, 2])
+    assert v2["overall"] == "NO_REF"
+    good = np.column_stack([model, rng.random(len(y)), rng.random(len(y)), rng.random(len(y))])
+    assert score.magnitude_verdict(good, names, y, fold, year, "min", [0, 1, 2])["overall"] == "PASS"
+    vmax = score.magnitude_verdict(good, ["m", "prod_pmax", "rsi_hi", "vol"], y, fold, year, "max", [0, 1, 2])
+    assert vmax["overall"] == "PASS"
 
 
 def test_is_continuous():
@@ -312,16 +338,16 @@ def test_continuous_run_end_to_end_and_report(tmp_path, monkeypatch):
     _fake_run(tmp_path, monkeypatch, with_vix=True)
     mp = paths.RUNS_DIR / "r1" / "meta.json"
     m = json.loads(mp.read_text()); m["target"] = "t4_ret_h16"; mp.write_text(json.dumps(m))
-    refs = ["prod_pmin", "coin", "rsi", "low10"]
+    refs = ["prod_pmin", "coin", "rsi", "low10", "vol"]
     s = score.score_run("r1", refs)
     assert s["continuous"] is True and s["magnitude"]["overall"] == s["overall"]
-    assert "overall_detection" in s and s["deciles"]["model"]["rows"] and "prod_pmin" in s["deciles"]
+    assert "overall_detection" in s and s["deciles"]["model"]["rows"] and "prod_pmin" in s["deciles"] and "vol" in s["deciles"]
     ay = s["afterpick_by_year"]
     assert ay["by_year"] and "ex_2020" in ay["pooled"] and "ex_qa" not in ay["pooled"]
     js = json.loads((paths.RUNS_DIR / "r1" / "score_summary.json").read_text())
     assert {"magnitude", "deciles", "afterpick_by_year"} <= set(js)
     text = report.write_report("r1", s).read_text()
-    assert "Magnitude verdict" in text and "Deciles" in text
+    assert "Magnitude verdict" in text and "Deciles" in text and "trailing volatility" in text
     assert "After-pick by year (informational" in text
     # a classification run carries the by-year table too, but no magnitude block
     m["target"] = "t1w_min_w4"; mp.write_text(json.dumps(m))

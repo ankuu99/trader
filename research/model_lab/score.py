@@ -268,7 +268,7 @@ def magnitude_verdict(score_mat: np.ndarray, models: list[str], y: np.ndarray, f
     allsel = ~np.isnan(y)
     pooled = {models[j]: spearman(score_mat[allsel, j], y[allsel]) for j in range(M)}
     pooled_abs = {k: (abs(v) if not np.isnan(v) else float("nan")) for k, v in pooled.items()}
-    need = ["prod_pmax", "rsi_hi"] if side == "max" else ["prod_pmin", "rsi"]
+    need = ["prod_pmax", "rsi_hi", "vol"] if side == "max" else ["prod_pmin", "rsi", "vol"]
     overall = "NO_REF" if any(r not in vs for r in need) else ("PASS" if all(vs[r]["win"] for r in need) else "FAIL")
     return {"verdicts": vs, "pooled_rho": pooled, "pooled_abs_rho": pooled_abs, "overall": overall,
             "required_refs": need, "n_folds": len(fg), "n_years": len(yg)}
@@ -680,6 +680,8 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
         if prod_name:
             j = models.index(prod_name)
             deciles[prod_name] = decile_table(score_all[:, j], y_all)
+        if "vol" in models[1:]:
+            deciles["vol"] = decile_table(score_all[:, models.index("vol")], y_all)
         deciles["target"] = run_target
         overall_detection = overall
         overall = magnitude["overall"]
@@ -710,7 +712,7 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
 def main() -> None:
     ap_ = argparse.ArgumentParser()
     ap_.add_argument("--run", required=True)
-    ap_.add_argument("--refs", nargs="*", default=["prod_pmin", "coin", "rsi", "low10", "low20", "low50"])
+    ap_.add_argument("--refs", nargs="*", default=["prod_pmin", "coin", "rsi", "low10", "low20", "low50", "vol"])
     ap_.add_argument("--tf", default=None)
     a = ap_.parse_args()
     s = score_run(a.run, a.refs, tf=a.tf)

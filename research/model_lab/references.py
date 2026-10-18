@@ -12,8 +12,8 @@ import pandas as pd
 from research.model_lab import bars as bars_mod
 from research.model_lab import factors, paths, store
 
-REFS_MIN = ("coin", "rsi", "low10", "low20", "low50")
-REFS_MAX = ("coin", "rsi_hi", "high10", "high20", "high50")
+REFS_MIN = ("coin", "rsi", "low10", "low20", "low50", "vol")
+REFS_MAX = ("coin", "rsi_hi", "high10", "high20", "high50", "vol")
 INDEX_SYMBOLS = ("NSE:NIFTY 50", "NSE:INDIA VIX")
 
 
@@ -35,6 +35,8 @@ def ref_scores(bars: pd.DataFrame, name: str, symbol: str, seed: int = 11) -> np
     if name in ("rsi", "rsi_hi"):
         rsi = factors.own_factors(bars)["rsi_14"].to_numpy(float)
         return 100.0 - rsi if name == "rsi" else rsi
+    if name == "vol":
+        return factors.own_factors(bars)["rv_16"].to_numpy(float)
     for kind in ("low", "high"):
         if name.startswith(kind) and name[len(kind):].isdigit():
             return _rule(bars["close"].to_numpy(float), int(name[len(kind):]), kind)

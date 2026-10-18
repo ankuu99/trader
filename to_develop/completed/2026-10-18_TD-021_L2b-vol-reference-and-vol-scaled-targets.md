@@ -1,5 +1,5 @@
 # Model Lab L2b — volatility reference in the magnitude verdict + volatility-scaled T5 targets
-Written: 2026-10-18 · Tag: TD-021 · Status: TO DO
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -89,4 +89,10 @@ Suites that stay green: the full suite.
 - [ ] Do NOT run on real data; do not touch `lab_data/`
 
 ## Completion record
-_(filled by the main session after validation)_
+- **Completed:** 2026-10-18 · trader-implementer (sonnet) in a separate worktree (a live A05 run imported the main
+  worktree's modules); validated by the main session — full suite 662 passed; diff matches every step; real-data
+  check on RELIANCE day bars: all pre-existing target columns `equals()` the old build, 12 new columns
+  (`t5_{mfez,maepz,retz,edgez}_H{5,20,60}`), `t5_mfez_H20` == mfe / (rv16·√20) independently recomputed.
+  Sanity: median `t5_mfez_H20` 0.69, `t5_maepz_H20` −0.25, `t5_edgez_H20` 0.40 (units of the usual 20-day move).
+- **Deviations (accepted):** old-column parity is asserted by column set in the unit test (value parity covered by the
+  real-data check above).

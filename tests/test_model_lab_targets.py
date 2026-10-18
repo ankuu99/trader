@@ -176,3 +176,52 @@ def test_t3_sig_zero_sigma_is_nan():
     flat = np.flatnonzero(~np.isnan(t["t3_ret_k2"].to_numpy()) & (np.arange(n) < 150) & (np.arange(n) >= 21))
     # sigma is 0 on the flat opening stretch: wherever t3_ret is defined there, t3_sig must be NaN
     assert np.isnan(s3[flat]).all()
+
+
+def test_vol_scaled_t5_columns():
+    import warnings
+    from research.model_lab import factors
+    b = _bars60()
+    hold = [5, 20]
+    kw = dict(scales=[3], hold_h=hold, zz_k=[2], fwd_h=[1], barrier_x=[5], barrier_y=[3])
+    t = build_targets(b, "15m", **kw)
+    rv = factors.own_factors(b)["rv_16"].to_numpy(float)
+    for H in hold:
+        S = rv * np.sqrt(H)
+        mfe, mp, rt = (t[f"t5_{k}_H{H}"].to_numpy() for k in ("mfe", "maepre", "ret"))
+        assert_allclose(t[f"t5_mfez_H{H}"].to_numpy(), mfe / S, rtol=1e-9, equal_nan=True)
+        assert_allclose(t[f"t5_maepz_H{H}"].to_numpy(), mp / S, rtol=1e-9, equal_nan=True)
+        assert_allclose(t[f"t5_retz_H{H}"].to_numpy(), rt / S, rtol=1e-9, equal_nan=True)
+        assert_allclose(t[f"t5_edgez_H{H}"].to_numpy(), (mfe + mp) / S, rtol=1e-9, equal_nan=True)
+        assert np.isfinite(t[f"t5_edgez_H{H}"].to_numpy()).sum() > 100
+    # old columns unchanged: raw T5 spot check still the documented formula
+    assert {"t5_mfe_H5", "t5_ttm_H5", "t5_maepre_H5", "t5_mae_H5", "t5_ret_H5", "t5_hit_x5_y3_H5"} <= set(t.columns)
+    # flat stretch -> sigma 0 -> NaN, no warnings
+    n = 60
+    rows = np.array([(100 + (i % 2) * 0.0,) * 4 for i in range(n)], float)
+    rows[40:, :] = 100 + np.arange(n - 40)[:, None]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        f = _mk(rows, **kw)
+    assert np.isnan(f["t5_mfez_H5"].iloc[16:30]).all()
+
+
+def test_vol_scale_is_causal():
+    b = _bars60()
+    kw = dict(scales=[3], hold_h=[5], zz_k=[2], fwd_h=[1], barrier_x=[5], barrier_y=[3])
+    cols = ["t5_mfez_H5", "t5_maepz_H5", "t5_retz_H5", "t5_edgez_H5"]
+    base = build_targets(b, "15m", **kw)[cols]
+    t0 = 400
+    after = build_targets(_garbage_after(b, t0 + 5), "15m", **kw)[cols]
+    assert_allclose(base.iloc[:t0 + 1].to_numpy(), after.iloc[:t0 + 1].to_numpy(), equal_nan=True)
+    # bar t-20 lies outside the 16-bar sigma window (and the forward window): no effect at t
+    b2 = b.copy()
+    b2.loc[t0 - 20, ["open", "high", "low", "close"]] *= 1.5
+    ch = build_targets(b2, "15m", **kw)[cols]
+    assert_allclose(base.iloc[t0].to_numpy(), ch.iloc[t0].to_numpy(), equal_nan=True)
+
+
+def test_vol_scaled_lookahead_and_continuous():
+    from research.model_lab import score
+    assert lookahead("t5_mfez_H20") == 20
+    assert score._is_continuous("t5_edgez_H20")

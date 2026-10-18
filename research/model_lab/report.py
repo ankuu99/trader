@@ -66,7 +66,7 @@ def write_report(run_id: str, summary: dict, curves: pd.DataFrame | None = None)
     mag = s.get("magnitude")
     if mag:
         L.append(f"## Magnitude verdict: **{mag['overall']}** (headline; run target `{meta.get('target')}`)\n")
-        L.append("PASS = WIN vs production P(min)/P(max) AND WIN vs RSI; WIN = signed Spearman of the model score with "
+        L.append("PASS = WIN vs production P(min)/P(max) AND WIN vs RSI AND WIN vs trailing volatility (vol = rv_16); WIN = signed Spearman of the model score with "
                  "the realised target beats the reference's |Spearman| in >= 2/3 of folds AND >= 2/3 of calendar years "
                  f"(groups with >= 200 evaluated rows; {mag['n_folds']} folds, {mag['n_years']} years).\n")
         L.append(_table(["ref", "fold win share", "folds", "year win share", "years", "verdict"],
