@@ -16,15 +16,18 @@ then `features.lags: [1, 2, ...]` (the whole inner vector again at t-1, t-2, ...
 """
 
 from trader.features.addons import ADDONS, AddonPipeline, LagPipeline
+from trader.features import addon_ou  # noqa: F401
 from trader.features.base import FeaturePipeline
 from trader.features.extrema_features import ExtremaFeaturePipeline
 from trader.features.regime_features import ExtremaRegimeFeaturePipeline
+from trader.features.rules_features import RulesFeaturePipeline
 from trader.features.swing_features import SwingFeaturePipeline
 from trader.features.window_features import WindowFeaturePipeline
 
 _REGISTRY = {
     "extrema": ExtremaFeaturePipeline,
     "extrema_regime": ExtremaRegimeFeaturePipeline,
+    "rules": RulesFeaturePipeline,
     "swing": SwingFeaturePipeline,
     "window": WindowFeaturePipeline,
 }

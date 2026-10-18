@@ -15,11 +15,13 @@ from trader.models.base import ExtremaModel
 from trader.models.gbdt import GBDTModel
 from trader.models.logistic import LogisticModel
 from trader.models.mlp import MLPModel
+from trader.models.passthrough import PassthroughModel
 
 _REGISTRY = {
     "gbdt": GBDTModel,
     "logistic": LogisticModel,
     "mlp": MLPModel,
+    "passthrough": PassthroughModel,
 }
 
 
