@@ -1,0 +1,502 @@
+{
+ "label": "exp01",
+ "overlay": "/Users/abhisheksingh/Projects/trader-2/config/experiments/exp01_tradeable.yaml",
+ "baseline": "baseline",
+ "run_at": "2026-10-18T09:38:09",
+ "per_stock": {
+  "NSE:THANGAMAYL": {
+   "tf": "15minute",
+   "bars_test": 10994,
+   "base_rate": 0.33845734036747316,
+   "auc": 0.5140976556297709,
+   "auc_pmax_bad": 0.5054482285723745,
+   "raw": {
+    "thr": 0.9,
+    "n": 4,
+    "precision": 0.25,
+    "ev_pct": 1.182639598698831,
+    "recall": 0.005376344086021506
+   },
+   "matched": {
+    "thr": 0.37,
+    "n": 88,
+    "precision": 0.4090909090909091,
+    "ev_pct": 0.6223175667911477,
+    "recall": 0.16129032258064516
+   },
+   "lift_matched": 1.20869267792138,
+   "calib_target_firings": 69
+  },
+  "NSE:CHENNPETRO": {
+   "tf": "4hour",
+   "bars_test": 873,
+   "base_rate": 0.49713631156930127,
+   "auc": 0.5044298415964226,
+   "auc_pmax_bad": 0.5077574714212234,
+   "raw": {
+    "thr": 0.8,
+    "n": 2,
+    "precision": 0.5,
+    "ev_pct": 1.627891339429803,
+    "recall": 0.02040816326530612
+   },
+   "matched": {
+    "thr": 0.565,
+    "n": 18,
+    "precision": 0.5,
+    "ev_pct": 2.575141010186557,
+    "recall": 0.1836734693877551
+   },
+   "lift_matched": 1.0057603686635945,
+   "calib_target_firings": 20
+  },
+  "NSE:CUMMINSIND": {
+   "tf": "day",
+   "bars_test": 429,
+   "base_rate": 0.4382284382284382,
+   "auc": 0.43480180100644483,
+   "auc_pmax_bad": 0.4406948000353138,
+   "raw": {
+    "thr": 0.8,
+    "n": 1,
+    "precision": 0.0,
+    "ev_pct": -3.2411484939228465,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.595,
+    "n": 8,
+    "precision": 0.375,
+    "ev_pct": 1.0689748590688317,
+    "recall": 0.15
+   },
+   "lift_matched": 0.855718085106383,
+   "calib_target_firings": 10
+  },
+  "NSE:KPL": {
+   "tf": "15minute",
+   "bars_test": 2762,
+   "base_rate": 0.5061549601737871,
+   "auc": 0.4687142083999345,
+   "auc_pmax_bad": 0.4928741939679223,
+   "raw": {
+    "thr": 0.9,
+    "n": 2,
+    "precision": 1.0,
+    "ev_pct": 7.0,
+    "recall": 0.029411764705882353
+   },
+   "matched": {
+    "thr": 0.9,
+    "n": 2,
+    "precision": 1.0,
+    "ev_pct": 7.0,
+    "recall": 0.029411764705882353
+   },
+   "lift_matched": 1.9756795422031472,
+   "calib_target_firings": 0
+  },
+  "NSE:ADFFOODS": {
+   "tf": "4hour",
+   "bars_test": 866,
+   "base_rate": 0.2528868360277136,
+   "auc": 0.4542143930892846,
+   "auc_pmax_bad": 0.48782226362629055,
+   "raw": {
+    "thr": 0.82,
+    "n": 1,
+    "precision": 0.0,
+    "ev_pct": -3.3811294034342403,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.53,
+    "n": 10,
+    "precision": 0.1,
+    "ev_pct": -1.7374179981010598,
+    "recall": 0.03125
+   },
+   "lift_matched": 0.3954337899543379,
+   "calib_target_firings": 14
+  },
+  "NSE:STYLAMIND": {
+   "tf": "day",
+   "bars_test": 426,
+   "base_rate": 0.36384976525821594,
+   "auc": 0.5378645399357219,
+   "auc_pmax_bad": 0.5900964170932032,
+   "raw": {
+    "thr": 0.85,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.495,
+    "n": 20,
+    "precision": 0.45,
+    "ev_pct": 2.8349555481747015,
+    "recall": 0.28125
+   },
+   "lift_matched": 1.2367741935483871,
+   "calib_target_firings": 9
+  },
+  "NSE:TIPSMUSIC": {
+   "tf": "15minute",
+   "bars_test": 11022,
+   "base_rate": 0.20050807475957177,
+   "auc": 0.6127527148294284,
+   "auc_pmax_bad": 0.5320538837414222,
+   "raw": {
+    "thr": 0.9,
+    "n": 5,
+    "precision": 0.4,
+    "ev_pct": 2.2122261506682164,
+    "recall": 0.014814814814814815
+   },
+   "matched": {
+    "thr": 0.32,
+    "n": 54,
+    "precision": 0.3333333333333333,
+    "ev_pct": 1.0572768836018125,
+    "recall": 0.13333333333333333
+   },
+   "lift_matched": 1.662443438914027,
+   "calib_target_firings": 71
+  },
+  "NSE:MAYURUNIQ": {
+   "tf": "day",
+   "bars_test": 421,
+   "base_rate": 0.4156769596199525,
+   "auc": 0.45507549361207894,
+   "auc_pmax_bad": 0.48425087108013926,
+   "raw": {
+    "thr": 0.82,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.625,
+    "n": 6,
+    "precision": 0.0,
+    "ev_pct": -5.258098822224986,
+    "recall": 0.0
+   },
+   "lift_matched": 0.0,
+   "calib_target_firings": 14
+  },
+  "NSE:GESHIP": {
+   "tf": "day",
+   "bars_test": 425,
+   "base_rate": 0.508235294117647,
+   "auc": 0.5386983873825979,
+   "auc_pmax_bad": 0.541157185894028,
+   "raw": {
+    "thr": 0.82,
+    "n": 1,
+    "precision": 0.0,
+    "ev_pct": -5.6461232604373786,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.695,
+    "n": 5,
+    "precision": 0.6,
+    "ev_pct": 1.2009608759053325,
+    "recall": 0.10714285714285714
+   },
+   "lift_matched": 1.1805555555555556,
+   "calib_target_firings": 10
+  },
+  "NSE:ENGINERSIN": {
+   "tf": "4hour",
+   "bars_test": 869,
+   "base_rate": 0.3095512082853855,
+   "auc": 0.5355638166047088,
+   "auc_pmax_bad": 0.514541511771995,
+   "raw": {
+    "thr": 0.88,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.725,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "lift_matched": NaN,
+   "calib_target_firings": 16
+  },
+  "NSE:SCHAEFFLER": {
+   "tf": "day",
+   "bars_test": 425,
+   "base_rate": 0.27294117647058824,
+   "auc": 0.5157627496931146,
+   "auc_pmax_bad": 0.552310010043522,
+   "raw": {
+    "thr": 0.85,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.72,
+    "n": 1,
+    "precision": 1.0,
+    "ev_pct": 10.0,
+    "recall": 0.045454545454545456
+   },
+   "lift_matched": 3.663793103448276,
+   "calib_target_firings": 7
+  },
+  "NSE:ATHERENERG": {
+   "tf": "15minute",
+   "bars_test": 8533,
+   "base_rate": 0.431266846361186,
+   "auc": 0.46382117963787534,
+   "auc_pmax_bad": 0.5041031320832474,
+   "raw": {
+    "thr": 0.9,
+    "n": 5,
+    "precision": 0.6,
+    "ev_pct": 2.6542090991006306,
+    "recall": 0.010471204188481676
+   },
+   "matched": {
+    "thr": 0.9,
+    "n": 5,
+    "precision": 0.6,
+    "ev_pct": 2.6542090991006306,
+    "recall": 0.010471204188481676
+   },
+   "lift_matched": 1.3912499999999999,
+   "calib_target_firings": 0,
+   "human_auc": 0.5620068480259444
+  },
+  "NSE:CUPID": {
+   "tf": "4hour",
+   "bars_test": 873,
+   "base_rate": 0.6494845360824743,
+   "auc": 0.5324088483129877,
+   "auc_pmax_bad": 0.49509515740452564,
+   "raw": {
+    "thr": 0.82,
+    "n": 7,
+    "precision": 0.5714285714285714,
+    "ev_pct": 2.5542897907886433,
+    "recall": 0.0851063829787234
+   },
+   "matched": {
+    "thr": 0.445,
+    "n": 33,
+    "precision": 0.7272727272727273,
+    "ev_pct": 5.172281149897766,
+    "recall": 0.2765957446808511
+   },
+   "lift_matched": 1.1197691197691197,
+   "calib_target_firings": 24
+  },
+  "NSE:INDHOTEL": {
+   "tf": "day",
+   "bars_test": 409,
+   "base_rate": 0.16625916870415647,
+   "auc": 0.5528290495083665,
+   "auc_pmax_bad": 0.6254096946696568,
+   "raw": {
+    "thr": 0.88,
+    "n": 1,
+    "precision": 0.0,
+    "ev_pct": -2.042030134813646,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.67,
+    "n": 5,
+    "precision": 0.0,
+    "ev_pct": -3.204373232935301,
+    "recall": 0.0
+   },
+   "lift_matched": 0.0,
+   "calib_target_firings": 6
+  },
+  "NSE:ACMESOLAR": {
+   "tf": "4hour",
+   "bars_test": 836,
+   "base_rate": 0.44019138755980863,
+   "auc": 0.4388819212188777,
+   "auc_pmax_bad": 0.4948845689334819,
+   "raw": {
+    "thr": 0.8,
+    "n": 2,
+    "precision": 0.5,
+    "ev_pct": 3.955847255369928,
+    "recall": 0.022727272727272728
+   },
+   "matched": {
+    "thr": 0.8,
+    "n": 2,
+    "precision": 0.5,
+    "ev_pct": 3.955847255369928,
+    "recall": 0.022727272727272728
+   },
+   "lift_matched": 1.1358695652173914,
+   "calib_target_firings": 0
+  },
+  "NSE:TVSMOTOR": {
+   "tf": "15minute",
+   "bars_test": 10871,
+   "base_rate": 0.139177628553031,
+   "auc": 0.4858456178108456,
+   "auc_pmax_bad": 0.48783457806088065,
+   "raw": {
+    "thr": 0.88,
+    "n": 13,
+    "precision": 0.07692307692307693,
+    "ev_pct": 0.4242700213471765,
+    "recall": 0.010752688172043012
+   },
+   "matched": {
+    "thr": 0.34,
+    "n": 40,
+    "precision": 0.15,
+    "ev_pct": 1.3350891253278847,
+    "recall": 0.06451612903225806
+   },
+   "lift_matched": 1.077759418374091,
+   "calib_target_firings": 51
+  },
+  "NSE:RADICO": {
+   "tf": "4hour",
+   "bars_test": 854,
+   "base_rate": 0.2540983606557377,
+   "auc": 0.4916262144701908,
+   "auc_pmax_bad": 0.5352133054568868,
+   "raw": {
+    "thr": 0.8,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.375,
+    "n": 15,
+    "precision": 0.2,
+    "ev_pct": 1.2689558246649069,
+    "recall": 0.10344827586206896
+   },
+   "lift_matched": 0.7870967741935484,
+   "calib_target_firings": 21
+  },
+  "NSE:M&MFIN": {
+   "tf": "day",
+   "bars_test": 432,
+   "base_rate": 0.4513888888888889,
+   "auc": 0.5242020988856431,
+   "auc_pmax_bad": 0.5355836849507736,
+   "raw": {
+    "thr": 0.9,
+    "n": 0,
+    "precision": NaN,
+    "ev_pct": NaN,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.825,
+    "n": 3,
+    "precision": 0.3333333333333333,
+    "ev_pct": -5.889724203432227,
+    "recall": 0.038461538461538464
+   },
+   "lift_matched": 0.7384615384615384,
+   "calib_target_firings": 3
+  },
+  "NSE:CGPOWER": {
+   "tf": "15minute",
+   "bars_test": 10933,
+   "base_rate": 0.16692582090917407,
+   "auc": 0.5471671449455845,
+   "auc_pmax_bad": 0.5009737036836501,
+   "raw": {
+    "thr": 0.9,
+    "n": 13,
+    "precision": 0.23076923076923078,
+    "ev_pct": -0.5512354965363128,
+    "recall": 0.03
+   },
+   "matched": {
+    "thr": 0.395,
+    "n": 47,
+    "precision": 0.19148936170212766,
+    "ev_pct": 0.19641997763388774,
+    "recall": 0.07
+   },
+   "lift_matched": 1.147152433692801,
+   "calib_target_firings": 54
+  },
+  "NSE:QUESS": {
+   "tf": "15minute",
+   "bars_test": 10961,
+   "base_rate": 0.2268953562631147,
+   "auc": 0.5159158518798579,
+   "auc_pmax_bad": 0.5188530037573718,
+   "raw": {
+    "thr": 0.9,
+    "n": 9,
+    "precision": 0.0,
+    "ev_pct": -3.0382813762120966,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.35,
+    "n": 84,
+    "precision": 0.25,
+    "ev_pct": 0.08440968366368165,
+    "recall": 0.1111111111111111
+   },
+   "lift_matched": 1.1018295134700442,
+   "calib_target_firings": 73
+  },
+  "NSE:IPCALAB": {
+   "tf": "day",
+   "bars_test": 404,
+   "base_rate": 0.43316831683168316,
+   "auc": 0.5231940112289458,
+   "auc_pmax_bad": 0.5848533998752339,
+   "raw": {
+    "thr": 0.88,
+    "n": 2,
+    "precision": 0.0,
+    "ev_pct": 1.3279025332967016,
+    "recall": 0.0
+   },
+   "matched": {
+    "thr": 0.545,
+    "n": 9,
+    "precision": 0.3333333333333333,
+    "ev_pct": 1.3500478904392423,
+    "recall": 0.15
+   },
+   "lift_matched": 0.7695238095238095,
+   "calib_target_firings": 7
+  }
+ },
+ "gate": {
+  "n_stocks": 21,
+  "median_d_auc": -0.012917883803959862,
+  "frac_auc_worse": 0.7619047619047619,
+  "median_d_ev_matched": -0.6264306188947529,
+  "frac_ev_worse": 0.7,
+  "auc_rule": false,
+  "ev_rule": false,
+  "pass": false
+ }
+}

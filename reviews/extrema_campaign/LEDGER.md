@@ -112,22 +112,34 @@ Evidence column: memory-file slug (`~/.claude/projects/.../memory/<slug>.md`), r
 | EXP-03 | cfg @ 1409e9b | `forward_label` re-test on the fixed engine (150 bars, +1.5 %) — supersedes R-02 | median ΔAUC −0.000, worse on 62 %; median ΔEV@matched 0.00 (15m names −0.12…−0.31, CUPID +1.03); day/4h names unchanged (almost every minimum bounces 1.5 % within 150 bars) | not run (gate) | FAILED Stage A | `runs/stage_a_exp03.json` |
 
 | EXP-12 | — | Market-state stratification of the Stage-A truth (prior-day India VIX tercile; Nifty drawdown from 50-day high) — literature arm (Nagel 2012) | dip bars P(good) 0.26/0.32/0.37 by VIX low/mid/high, EV 0.70/0.81/1.45 %; Nifty dd >8 % → P 0.49 / EV 2.67 % vs <3 % 0.30 / 0.97 %; stress bucket wins in 71–90 % of stocks | — (probe) | PASSED its pre-registered rule (≥20 % rel. base-rate gap, ≥⅔ sign consistency) — deviation: run on 2023–26, not calibration-only; stress episodes cluster in time (few independent episodes) | `scripts/campaign/exp12_context_split.py`; `docs/02_Extrema_Literature_Review.md` §7 |
-| EXP-01 | labels @ b99bfce | Tradeable-trough labels, candidates = geometric minima, failed → neutral | running | — | QUEUED | `config/experiments/exp01_tradeable.yaml` |
-| EXP-02 | labels @ b99bfce | Tradeable-trough labels, candidates = every 5th bar | running | — | QUEUED | `exp02_tradeable_all.yaml` |
-| EXP-04 | main @ c3fb3a3 | Lag stacking t-1, t-2 (scaffold) | running | — | QUEUED | `exp04_lags.yaml` |
-| EXP-05 | features @ d54a0c0 | Reversal bar-shape add-on | running | — | QUEUED | `exp05_bar_shape.yaml` |
-| EXP-06 | features @ d54a0c0 | ATR-scaled EMA distance add-on | running | — | QUEUED | `exp06_atr_dist.yaml` |
-| EXP-07 | features @ d54a0c0 | Market add-on (15m Nifty/VIX: rel. strength, Nifty dd, VIX level/chg); Nifty/VIX 15m backfilled 2019-06→2026-10-16 | running | — | QUEUED | `exp07_market.yaml` |
-| EXP-08 | features @ d54a0c0 | Touch-counted S/R add-on | running | — | QUEUED | `exp08_sr.yaml` |
-| EXP-09a | rules @ abd3233 | No-ML rule RSI14<35 + up-close + >EMA50 | running | — | QUEUED | `exp09a_rules_rsi.yaml` |
-| EXP-09b | rules @ abd3233 | No-ML rule lowest-of-20 + up-close | running | — | QUEUED | `exp09b_rules_lowest.yaml` |
-| EXP-10a | rules @ abd3233 | No-ML rule: raw-price OU s-score (graded) | running | — | QUEUED | `exp10a_rules_ou.yaml` |
-| EXP-10b | rules @ abd3233 | OU s-score + half-life as model features | running | — | QUEUED | `exp10b_ou_feature.yaml` |
+| EXP-01 | labels @ b99bfce | Tradeable-trough labels, candidates = geometric minima, failed → neutral | median ΔAUC -0.013 (worse 76 %); median ΔEV@matched -0.63 pp (worse 70 %); tuning-free: ΔAP −0.020 (w 67 %), ΔEV@top3 % −0.57 | not run (gate) | FAILED Stage A | `runs/stage_a_exp01.json` |
+| EXP-02 | labels @ b99bfce | Tradeable-trough labels, candidates = every 5th bar | median ΔAUC -0.072 (worse 67 %); median ΔEV@matched -1.10 pp (worse 76 %); tuning-free: ΔAP −0.021 (w 76 %), ΔEV@top3 % −0.47 | not run (gate) | FAILED Stage A | `runs/stage_a_exp02.json` |
+| EXP-04 | main @ c3fb3a3 | Lag stacking t-1, t-2 (scaffold) — supersedes B-02 | median ΔAUC −0.000 (worse 52 %); median ΔEV@matched −0.62 pp (worse 76 %) | not run (gate) | FAILED Stage A | `runs/stage_a_exp04.json` |
+| EXP-05 | features @ d54a0c0 | Reversal bar-shape add-on | median ΔAUC -0.002 (worse 67 %); median ΔEV@matched -0.62 pp (worse 71 %); tuning-free: ΔAP −0.007 (w 67 %), ΔEV@top3 % −0.36 | not run (gate) | FAILED Stage A | `runs/stage_a_exp05.json` |
+| EXP-06 | features @ d54a0c0 | ATR-scaled EMA distance add-on | median ΔAUC -0.003 (worse 67 %); median ΔEV@matched -0.28 pp (worse 71 %); tuning-free: ΔAP −0.002 (w 67 %), ΔEV@top3 % +0.11 | not run (gate) | FAILED Stage A | `runs/stage_a_exp06.json` |
+| EXP-07 | features @ d54a0c0 | Market add-on (15m Nifty/VIX: rel. strength, Nifty dd, VIX level/chg); Nifty/VIX 15m backfilled 2019-06→2026-10-16 | median ΔAUC +0.010 (worse 29 %); median ΔEV@matched -0.18 pp (worse 62 %); tuning-free: ΔAP +0.006 (w 29 %), ΔEV@top3 % +0.00 — only arm with consistent positive ranking change; gain larger on 4h/day (+0.012–0.014) than 15m (+0.006) | not run (gate) | FAILED Stage A | `runs/stage_a_exp07.json` |
+| EXP-08 | features @ d54a0c0 | Touch-counted S/R add-on | median ΔAUC -0.002 (worse 67 %); median ΔEV@matched -0.57 pp (worse 67 %); tuning-free: ΔAP −0.006 (w 67 %), ΔEV@top3 % −0.27 | not run (gate) | FAILED Stage A | `runs/stage_a_exp08.json` |
+| EXP-09a | rules @ abd3233 | No-ML rule RSI14<35 + up-close + >EMA50 | median ΔAUC -0.007 (worse 67 %); median ΔEV@matched -1.80 pp (worse 85 %); tuning-free: ΔAP −0.022 (w 81 %), ΔEV@top3 % −0.48 | not run (gate) | FAILED Stage A | `runs/stage_a_exp09a.json` |
+| EXP-09b | rules @ abd3233 | No-ML rule lowest-of-20 + up-close | median ΔAUC -0.006 (worse 62 %); median ΔEV@matched -0.68 pp (worse 81 %); tuning-free: ΔAP −0.017 (w 81 %), ΔEV@top3 % −0.86 | not run (gate) | FAILED Stage A | `runs/stage_a_exp09b.json` |
+| EXP-10a | rules @ abd3233 | No-ML rule: raw-price OU s-score (graded) | median ΔAUC -0.006 (worse 52 %); median ΔEV@matched -0.73 pp (worse 71 %); tuning-free: ΔAP −0.009 (w 57 %), ΔEV@top3 % −0.15 | not run (gate) | FAILED Stage A | `runs/stage_a_exp10a.json` |
+| EXP-10b | rules @ abd3233 | OU s-score + half-life as model features | median ΔAUC +0.000 (worse 48 %); median ΔEV@matched -0.16 pp (worse 67 %); tuning-free: ΔAP −0.001 (w 52 %), ΔEV@top3 % −0.03 | not run (gate) | FAILED Stage A | `runs/stage_a_exp10b.json` |
 | EXP-11 | — | EXP-02 + average-uniqueness sample weights (AFML ch 4) | — | — | PROPOSED (literature) | docs/02 arm 4 |
-| EXP-13 | — | Residual-vs-Nifty OU s-score (A&L 2010) vs raw-price control (EXP-10a) | — | — | PROPOSED (literature) | docs/02 arm 5 |
-| EXP-14 | — | Volume-conditioned decline (stratify first; Medhat & Schmeling 2022 vs capitulation prior) | — | — | PROPOSED (literature) | docs/02 arm 6 |
+| EXP-13 | — | Residual-vs-Nifty OU s-score (A&L 2010) vs raw-price control (EXP-10a) | — | — | superseded by the pre-check row below | docs/02 arm 5 |
+| EXP-14 | — | Volume-conditioned decline probe (15m names; 5-bar/50-bar volume ratio tercile on dip bars) | P(good) low/mid/high 0.303/0.328/0.327, EV 0.72/1.10/1.12 %; high > low in 5/7 stocks | — (probe) | FAILED its pre-registered rule (8 % relative < 20 %) — mild capitulation lean, not built | `scripts/campaign/exp14_volume_split.py` |
 | EXP-15 | — | News/no-news decline flag (Chan 2003) — blocked on point-in-time event data | — | — | PROPOSED · BLOCKED | docs/02 arm 3 |
 | EXP-16 | — | EXP-08 + double-bottom retest feature (Lo–Mamaysky–Wang 2000) | — | — | PROPOSED (literature) | docs/02 arm 7 |
 | EXP-17 | — | Directional-change overshoot features (Glattfelder 2011) — skip if own-path W2 arms all fail | — | — | PROPOSED (literature) | docs/02 arm 8 |
+
+**Protocol note 2026-10-18 (after the first Stage-A batch):** EV@matched is biased toward the baseline — its
+per-stock thresholds were calibrated on backtests overlapping the 2025+ test window, every arm is out-of-sample. The
+tuning-free cross-check (`scripts/campaign/tail_compare.py`: same top-q tail of each arm's own test-window scores,
+plus average precision) removes most of the negative-EV pattern, but **no arm passes under either metric**, so no
+verdict changes. AUC (threshold-free) is unaffected. DECISIONS row 2026-10-18.
+
+| EXP-13 | — | Residual-vs-Nifty OU s-score — pre-check (`market_headroom_probe.py`) | −resid_ou_s median AUC 0.511 (57 % > 0.5); −resid_ret20 0.506 | — | FAILED pre-check — not built (supersedes the PROPOSED row) | `scripts/campaign/market_headroom_probe.py` |
+| EXP-12b | — | Market-information headroom: prior-day VIX level / z250, Nifty dd20/dd60/ret5 vs truth (test window) | VIX level median AUC **0.638** (86 % of stocks > 0.5); VIX z250 0.611; Nifty dd60 0.582 (81 %); dd20 0.578; ret5 0.535 | — | MEASURED — strongest signal in the campaign; a market-TIMING signal, not which-dip | same |
+| EXP-12c | — | Stability by calendar year 2020–26 (truth rebuilt from prices, `vix_by_year.py`) | within-year VIX AUC 0.571/0.557/0.657/0.476/0.549/0.550/0.622 (2020→2026); hi-VIX P(good) > lo in 6/7 years (2020 = tercile artefact) | — | ROBUST 6/7 years | `scripts/campaign/vix_by_year.py` |
+| EXP-12d | — | Baseline trades stratified by entry-time VIX percentile tercile (`trades_by_market.py`) | FULL: stress ₹332.7k of ₹419k (avg +2.78 %/pos, win 68 %), calm ₹26.8k (avg +0.17 %); HORIZON: stress avg +1.34 % vs calm +0.66 % (calm still ₹415k); stress ≥ calm avg in 7/7 years; Nifty-dd split NOT consistent (dd>8 % worst over HORIZON) | — | MEASURED — motivates EXP-18 (lean into stress, don't block calm) | `scripts/campaign/trades_by_market.py` |
+| EXP-18 | regime (to build) | Market-regime entry modulation (VIX trailing-250 percentile; variants 18a–18f per DECISIONS 2026-10-18) | n/a (decision layer) | pending | QUEUED | `to_develop/2026-10-18_TD-018_W6-market-regime-entry.md` |
 
 (rows appended as arms are defined and run)
