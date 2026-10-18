@@ -67,7 +67,7 @@ def score_run(label: str, overlay: str | None) -> dict:
     per_symbol = {s: config.get_strategy_params(s, "lr_extrema")
                   for s in watchlist if overrides.get(s, {}).get("lr_extrema")} or None
     sink: dict[str, list[dict]] = {}
-    run_backtest(None, Store(config.db_path), watchlist, {s: 0 for s in watchlist}, params,
+    run_backtest(None, Store(config.db_path), watchlist, {**{s: 0 for s in watchlist}, "NSE:NIFTY 50": 256265, "NSE:INDIA VIX": 264969}, params,
                  datetime.strptime(SCORE_FROM, "%Y-%m-%d"),
                  datetime.strptime(SCORE_TO, "%Y-%m-%d").replace(hour=23, minute=59),
                  per_symbol_params=per_symbol, model_scores=sink)

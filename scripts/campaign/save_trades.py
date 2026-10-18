@@ -32,7 +32,7 @@ def main():
     wl = list(config.watchlist)
     ov = config._data.get("per_stock_params") or {}
     per = {s: config.get_strategy_params(s, "lr_extrema") for s in wl if ov.get(s, {}).get("lr_extrema")} or None
-    trades = run_backtest(None, Store(config.db_path), wl, {s: 0 for s in wl}, config.strategy_config("lr_extrema"),
+    trades = run_backtest(None, Store(config.db_path), wl, {**{s: 0 for s in wl}, "NSE:NIFTY 50": 256265, "NSE:INDIA VIX": 264969}, config.strategy_config("lr_extrema"),
                           datetime.strptime(f, "%Y-%m-%d"), datetime.strptime(t, "%Y-%m-%d").replace(hour=23, minute=59),
                           per_symbol_params=per)
     OUT.mkdir(parents=True, exist_ok=True)

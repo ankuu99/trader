@@ -95,6 +95,20 @@ class LRExtremaStrategy(Strategy):
             "max_bars": params.get("hold_bars", 150),
         }
 
+        # --- Market-regime entry modulation (W6, default off; backtest-only until live
+        # wiring — live candles carry no _mkt_* keys → state "unknown" → no modulation) ---
+        _mr = params.get("market_regime") or {}
+        self._mr_enabled: bool = bool(_mr.get("enabled", False))
+        self._mr_calm_below: float = float(_mr.get("calm_below", 0.333))
+        self._mr_stress_above: float = float(_mr.get("stress_above", 0.667))
+        self._mr_states: dict[str, dict] = {
+            s: {"threshold_delta": float((_mr.get(s) or {}).get("threshold_delta", 0.0)),
+                "size_mult": float((_mr.get(s) or {}).get("size_mult", 1.0)),
+                "block": bool((_mr.get(s) or {}).get("block", False))}
+            for s in ("calm", "mid", "stress")
+        }
+        self.last_market_state: str | None = None
+
         self._candles: deque = deque(maxlen=self._lookback_bars)
         self._candles_since_train: int = 0
 
@@ -154,6 +168,17 @@ class LRExtremaStrategy(Strategy):
     def _pattern_top_trailing(self): return self._pos.pattern_top_trailing
     @_pattern_top_trailing.setter
     def _pattern_top_trailing(self, v): self._pos.pattern_top_trailing = v
+
+    def _market_state(self, candle: dict) -> str:
+        """calm | mid | stress from the prior-session VIX percentile; unknown when absent."""
+        v = candle.get("_mkt_vix_pct")
+        if v is None:
+            return "unknown"
+        if v < self._mr_calm_below:
+            return "calm"
+        if v > self._mr_stress_above:
+            return "stress"
+        return "mid"
 
     @property
     def name(self) -> str:
@@ -219,7 +244,15 @@ class LRExtremaStrategy(Strategy):
                 p_min, p_max = self._predict_proba(x)
                 self._last_p_min = p_min
                 self._last_p_max = p_max
-                if p_min >= self._threshold:
+                thr_eff = self._threshold
+                _mr_cfg = None
+                if self._mr_enabled:
+                    _st = self._market_state(candle)
+                    self.last_market_state = _st if _st != "unknown" else None
+                    if _st != "unknown":
+                        _mr_cfg = self._mr_states[_st]
+                        thr_eff = min(1.0, max(0.0, self._threshold + _mr_cfg["threshold_delta"]))
+                if p_min >= thr_eff:
                     _log_entry: dict = {
                         "timestamp": candle.get("timestamp"),
                         "close": close,
@@ -228,7 +261,12 @@ class LRExtremaStrategy(Strategy):
                         "type": "VETOED" if p_max >= self._veto_threshold else "ENTRY",
                     }
                     self.signal_log.append(_log_entry)
-                if p_min >= self._threshold and p_max < self._veto_threshold:
+                if p_min >= thr_eff and p_max < self._veto_threshold:
+                    if _mr_cfg is not None and _mr_cfg["block"]:
+                        _log_entry["type"] = "BLOCKED"
+                        self.last_filter_block = f"market_regime={self.last_market_state}"
+                        self._candles_since_train += 1
+                        return None
                     blocks = self._entry_policy.gate_blocks(x, list(self._candles), close)
                     if blocks:
                         _log_entry["type"] = "BLOCKED"
@@ -261,6 +299,9 @@ class LRExtremaStrategy(Strategy):
                             return None
                         # Phase 2: confidence sizing — scale qty by P(win). None = full size.
                         size_weight = self._meta.size_weight(p_win)
+
+                    if _mr_cfg is not None and _mr_cfg["size_mult"] != 1.0:
+                        size_weight = _mr_cfg["size_mult"] * (size_weight if size_weight is not None else 1.0)
 
                     logger.info(
                         "LR-Extrema ENTRY | %s | P(min)=%.3f >= %.3f | P(max)=%.3f < %.3f | price=%.2f | candle=%s",

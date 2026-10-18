@@ -306,6 +306,52 @@ def run_backtest(
         idx = bisect.bisect_right(ts_list, ts) - 1
         return close_list[idx] if idx >= 0 else None
 
+    # --- Prior-session market context for the market_regime entry modulation (W6) ---
+    # Date-keyed, PRIOR session only (no lookahead): vix_pct = share of the preceding
+    # `vix_lookback_days` daily VIX closes below the prior session's close; nifty_dd60 =
+    # prior NIFTY close vs its 60-session high. Computed only when some symbol enables
+    # market_regime — otherwise the keys are None and trades are byte-identical.
+    def _mr_enabled(p: dict) -> bool:
+        mr = (p or {}).get("market_regime")
+        return isinstance(mr, dict) and bool(mr.get("enabled"))
+
+    _mkt_enabled = _mr_enabled(params) or any(_mr_enabled(_params_for(s)) for s in symbols)
+    _mkt_by_date: dict = {}
+    if _mkt_enabled:
+        _mkt_lookback = int(((params or {}).get("market_regime") or {}).get("vix_lookback_days", 250))
+
+        def _daily_closes(ts_list: list, cl_list: list[float]) -> tuple[list, list[float]]:
+            days: list = []
+            closes: list[float] = []
+            for _t, _c in zip(ts_list, cl_list):
+                _d = _t.date()
+                if days and days[-1] == _d:
+                    closes[-1] = _c
+                else:
+                    days.append(_d)
+                    closes.append(_c)
+            return days, closes
+
+        _vix_days, _vix_dc = _daily_closes(_vix_ts, _vix_cl)
+        _nifty_days, _nifty_dc = _daily_closes(_nifty_ts, _nifty_cl)
+
+        def _mkt_context(d) -> tuple[float | None, float | None]:
+            if d in _mkt_by_date:
+                return _mkt_by_date[d]
+            vix_pct = None
+            p = bisect.bisect_left(_vix_days, d) - 1  # prior session index
+            if p >= 0:
+                ref = _vix_dc[max(0, p - _mkt_lookback):p]
+                if len(ref) >= 60:
+                    vix_pct = sum(1 for v in ref if v < _vix_dc[p]) / len(ref)
+            dd60 = None
+            q = bisect.bisect_left(_nifty_days, d) - 1
+            if q >= 0:
+                hi = max(_nifty_dc[max(0, q - 59):q + 1])
+                dd60 = _nifty_dc[q] / hi - 1.0 if hi else None
+            _mkt_by_date[d] = (vix_pct, dd60)
+            return _mkt_by_date[d]
+
     # --- Fetch 4h candles for the ht_trend gate (one series per symbol that has
     # the gate enabled — params and 4h closes are per-instrument, unlike NIFTY/VIX) ---
     _htf_regime_series: dict[str, tuple[list, list[dict]]] = {}
@@ -373,6 +419,7 @@ def run_backtest(
     def _build_candle(row, token: int, symbol: str) -> dict:
         ts = row["timestamp"]
         _htf = _htf_regime_at(symbol, ts)
+        _mkt = _mkt_context(ts.date()) if _mkt_enabled else (None, None)
         return {
             "instrument_token": token,
             "timestamp": ts,
@@ -389,6 +436,8 @@ def run_backtest(
             "_htf_macd_slope": _htf["macd_slope"] if _htf else None,
             "_htf_downtrend":  _htf["downtrend"]  if _htf else None,
             "_htf_inversion":  _htf["inversion"]  if _htf else None,
+            "_mkt_vix_pct":    _mkt[0],
+            "_mkt_nifty_dd60": _mkt[1],
         }
 
     # Progress phases: 0-20% pre-warmup fetch, 20-35% main fetch,

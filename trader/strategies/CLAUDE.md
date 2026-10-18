@@ -47,6 +47,8 @@ Loaded when working under `trader/strategies/`. Moved from the root CLAUDE.md 20
 
    **`target_price=None`** means the backtest engine's fixed intrabar target check is disabled (`target=0`) when `trail_pct` is configured — trailing and pattern-top are the sole upside exits.
 
+   **Market-regime entry modulation (`market_regime`, W6/EXP-18, default OFF, backtest-only until live wiring):** in the flat-entry branch, the prior-session India VIX percentile (`_mkt_vix_pct`, injected by the backtest engine) maps to calm/mid/stress/unknown; per state `threshold_delta` shifts the entry threshold (clamped 0..1), `block` refuses the entry (`last_filter_block = "market_regime=<state>"`, entry guard not armed) and `size_mult` sets `Signal.size_weight` (multiplied with any meta weight). Unknown state (live candles carry no `_mkt_*` keys) or disabled = unchanged path; add-on branch and exits untouched.
+
 7. **Retraining**: every `retrain_every` new candles, the model is retrained on the updated buffer. This lets it adapt to regime changes (trending vs ranging periods).
 
 ## Config params

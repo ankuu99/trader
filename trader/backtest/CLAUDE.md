@@ -26,6 +26,7 @@ metrics = compute_metrics(trades, capital)
 - `max_drawdown_pct` — max_drawdown as % of capital
 - `kite=None` is supported — workers pass `kite=None` after candles are pre-fetched; engine operates in cache-only mode
 - `model_scores` (optional sink dict) — when passed, the engine appends `{timestamp, close, p_min, p_max}` per strategy-TF decision bar per symbol via `strategy.score_current()` (pure, position-independent — the exact model the run traded with, same retrain cadence). In-memory only: the SQLite `model_scores` table stays live-only; zero cost when omitted (backtest.py/calibrate.py don't pass it; scripts/ui.py does)
+- **Market context injection (W6, default off)** — when any symbol's params have `market_regime.enabled`, the engine adds `_mkt_vix_pct` (share of the previous `vix_lookback_days` daily VIX closes below the PRIOR session's close; needs ≥60 reference sessions) and `_mkt_nifty_dd60` (prior NIFTY close vs its 60-session high − 1) to every candle, from the cached NIFTY/VIX series (runners must pass their tokens in `symbol_to_token`). Otherwise both are None and trades are byte-identical. Backtest-only until a live-wiring TD
 
 **Trade record notes:**
 - `held_candles` — number of candles the position was open (entry candle = 1); incremented per candle after order fill, before intrabar check; consistent across all exit paths (SL/TARGET intrabar, STRATEGY, OPEN@END); per-lot when scale-in add-ons exist
