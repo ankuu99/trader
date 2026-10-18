@@ -54,13 +54,13 @@ Fractions: stop/target vs entry price; trail = drop from the highest close since
 
 | ID | Exit set | Status |
 |---|---|---|
-| SC3-x0 | none (time only) = SC2 baseline | PLANNED (re-run) |
-| SC3-x1 | stop −20 % (production's black-swan stop) | PLANNED |
-| SC3-x2 | stop −10 % | PLANNED |
-| SC3-x3 | trail 10 % after +10 % | PLANNED |
-| SC3-x4 | trail 15 % after +10 % | PLANNED |
-| SC3-x5 | target +20 % | PLANNED |
-| SC3-x6 | stop −20 % + trail 10 % after +10 % | PLANNED |
+| SC3-x0 | none (time only) = SC2 baseline | DONE — P60 ₹11.54 L / Calmar 0.39; M500 ₹6.27 L / 0.36 |
+| SC3-x1 | stop −20 % (production's black-swan stop) | DONE — P60 ₹12.05 L / 0.35; M500 ₹5.15 L / 0.17 |
+| SC3-x2 | stop −10 % | DONE — kills both: P60 ₹4.14 L / 0.08; M500 ₹4.05 L / 0.13 |
+| SC3-x3 | trail 10 % after +10 % | DONE — P60 ₹12.13 L / 0.42; **M500 ₹7.56 L / 0.37 (best 15m)** |
+| SC3-x4 | trail 15 % after +10 % | DONE — P60 ₹12.94 L / 0.44; M500 ₹3.58 L / 0.13 |
+| SC3-x5 | target +20 % | DONE — **P60 ₹14.57 L / Calmar 0.50, DD 31 %, 11/11 coins (best overall)**; M500 ₹3.94 L / 0.16 |
+| SC3-x6 | stop −20 % + trail 10 % after +10 % | DONE — P60 ₹13.90 L / 0.36; M500 ₹5.60 L / 0.26 |
 
 ## SC4 — combined ranking, per-pick hold (owner, 2026-10-18; needs simulator S0c)
 
@@ -70,5 +70,7 @@ Controls: same with coin percentiles; and the two sleeves split (7 slots A01/20d
 
 | ID | Config | Status |
 |---|---|---|
-| SC4-a | pooled A01 (hold 20) + production (hold 60), best 2/day | PLANNED (needs S0c) |
-| SC4-b | split sleeves: 7 × ₹40k A01 best-1/day hold 20 + 8 × ₹40k production best-1/day hold 60 | PLANNED |
+| SC4-a | pooled A01 (hold 20) + production (hold 60), best 2/day | DONE — ₹11.26 L / Calmar 0.34 (9/10 coins); production picks ₹8.70 L, A01 picks ₹2.56 L — no better than production alone (₹11.54 L / 0.39) |
+| SC4-b | split sleeves: 7 × ₹40k A01 best-1/day hold 20 + 8 × ₹40k production best-1/day hold 60 | DONE — worse: ₹7.31 L / 0.18 (2/10 coins) |
+
+SC3/SC4 results and reading: `reviews/model_lab/SC3_SC4_exits_combined_20261018.md`.
