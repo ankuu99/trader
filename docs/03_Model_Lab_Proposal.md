@@ -85,6 +85,11 @@ moves into the strategy only after it wins in the lab.
 - **Hindsight:** the 21 watchlist names were picked knowing 2023–26 outcomes. Never select the training or test
   universe with them; score them as a subset only.
 
+**Addendum 2026-10-18 (L0 build):** the lab store is zstd **parquet** per (interval, symbol) under
+`lab_data/model_lab/bars/`, not a second SQLite `Store` — the laptop had 7.8 GB free (DECISIONS 2026-10-18). Kite 15m
+history starts in early 2015; day goes back past 2008. 3,050 plain NSE EQ symbols (no `-` suffix), ~369 of them
+ETF-like. Specs: `to_develop/2026-10-18_TD-021_L0a-*.md`, `…_L0b-*.md` on branch `exp/model-lab`.
+
 ### 2. Factor library: every candle property is its own time series
 
 All factors are strictly causal (from bars ≤ *t*), computed per timeframe, and stored as
