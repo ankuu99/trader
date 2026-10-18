@@ -115,3 +115,16 @@ watchlist and per-stock settings were chosen in 2025–26, so earlier years are 
 | ID | Window | Status |
 |---|---|---|
 | PB-LONG | 2015-07-01 → 2026-10-16, per-year breakdown | DONE — ₹27.9 L total (P&L reinvested); worst drop −48 % of peak equity (Jan 2018 → Mar 2020, recovered Jun 2021); 2018/19/20 −9.3/−6.7/−1.6 %, 2021–26 every year +12…+38 %; liquid names lost ₹2.05 L over 2015–20, early profit came from untradeable thin names (TIPSMUSIC/THANGAMAYL); real cache md5 unchanged. `PB_LONG_prod_2015_20261019.md` |
+
+## SN — the strategy frameworks on the survivorship-free universe (TD-022, main session 2026-10-19)
+
+Same simulator, capital and slots as SC1–SC5 (₹6L, 15 × ₹40k, best 2/day, next-open fills, `trader.costs`), but on
+`dayn` (NSE bhavcopy, delisted names included) with the ML-A01n / ML-A11n runs. Whole test span (2011→2026-10-16),
+per calendar year, ex-2020; 11 coin draws each. Read-out: the ₹ / Calmar drop vs the same config on `day` (today's
+survivors) = the survivorship inflation of SC1–SC5, and whether the model still beats coins once crashed names are in.
+
+| ID | Config | Same config on `day` (survivors) | Status |
+|---|---|---|---|
+| SN-1 | A01n score, hold 20 | SC1 best 2/day: ₹10.4 L | PLANNED |
+| SN-2 | production-score ranker (prod_pmin replay on dayn), hold 60, target +20 % | SC3-x5: ₹14.57 L / Calmar 0.50 | PLANNED |
+| SN-3 | A11n score, hold 60 | SC5-b: ₹12.91 L / 0.32 | PLANNED |
