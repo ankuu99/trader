@@ -11,3 +11,12 @@ Needed: a delisting-inclusive daily OHLCV source for NSE equities — candidates
 files, include later-delisted names), or a vendor history. Then re-run the day-TF arms on that universe; A07 stays
 SUSPECT until then. A01's edge was checked to be robust to the obvious slices (≥ ₹50 only, ex its top-20 stocks) but is
 also formally survivor-biased.
+
+## Addendum 2026-10-18 (late) — probe and build started
+
+Owner go-ahead ("Do all three"). Probe: NSE bhavcopy archives download with browser headers (old format to
+2024-07-05, UDiFF after; 2008 files lack ISIN). Of the top-500 EQ names by traded value on 2012-01-02, **131 (26 %,
+~10 % of traded value) no longer exist** (ISIN-issuer match vs 2026-10-16): JPASSOCIAT, RELCAPITAL, GITANJALI,
+EDUCOMP, JETAIRWAYS, SINTEX, PUNJLLOYD, VIDEOIND, BHUSANSTL, HDFC, RANBAXY, SATYAMCOMP, … Split/bonus adjustment
+from NSE's own adjusted PREVCLOSE on ex-dates. Build spec: `to_develop/2026-10-18_TD-022_L0c-nse-bhavcopy-day-source.md`
+(new lab timeframe `dayn`). Found on the way: ISS-16 (lab universe drops hyphenated symbols such as BAJAJ-AUTO).
