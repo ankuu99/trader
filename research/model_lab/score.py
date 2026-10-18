@@ -24,7 +24,8 @@ def truth_tol(truth: str, tf: str) -> int:
     Main session 2026-10-18: with tol == w (day t1w_w3, tol 3) a coin reached AP 0.41 — the truth saturated."""
     m = re.match(r"^t1w_(?:min|max)_w(\d+)$", truth)
     return min(TOL[tf], max(1, int(m.group(1)) // 2)) if m else TOL[tf]
-BARS_PER_YEAR = {"15m": 25 * 248, "30m": 13 * 248, "60m": 7 * 248, "4h": 2 * 248, "dayagg": 248, "day": 248, "week": 52}
+BARS_PER_YEAR = {"15m": 25 * 248, "30m": 13 * 248, "60m": 7 * 248, "4h": 2 * 248, "dayagg": 248, "day": 248, "week": 52,
+                "dayn": 248, "weekn": 52}
 COST = 0.0022
 PROFILE_RATES = (0.002, 0.01, 0.05)
 MIN_PIVOTS = 10

@@ -14,7 +14,7 @@ import pandas as pd
 from research.model_lab import paths
 from research.model_lab.paths import check_disk, file_sym, sym_file
 
-NATIVE = ("15minute", "day")
+NATIVE = ("15minute", "day", "day_nse")
 COLS = ["timestamp", "open", "high", "low", "close", "volume"]
 _PRICE = ["open", "high", "low", "close"]
 _MAX_VOL = 2 ** 62
@@ -56,7 +56,7 @@ def clean_bars(df: pd.DataFrame, interval: str) -> pd.DataFrame:
         mins = t.dt.hour * 60 + t.dt.minute
         keep = (t.dt.minute % 15 == 0) & (mins >= 9 * 60 + 15) & (mins <= 15 * 60 + 15)
         out = out[keep]
-    elif interval == "day":
+    elif interval in ("day", "day_nse"):
         out["timestamp"] = out["timestamp"].dt.normalize()
     out = out.drop_duplicates("timestamp", keep="last").sort_values("timestamp")
     return out.reset_index(drop=True)

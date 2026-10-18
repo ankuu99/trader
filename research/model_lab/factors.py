@@ -10,7 +10,8 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 HIGHER_TF = {"15m": ["60m", "day"], "30m": ["day"], "60m": ["day"], "4h": ["day", "week"],
-             "dayagg": ["week"], "day": ["week"], "week": []}
+             "dayagg": ["week"], "day": ["week"], "week": [],
+             "dayn": ["weekn"], "weekn": []}
 HIGHER_SUBSET = ["ret_4", "ret_16", "dmin_20", "dmax_20", "dmin_100", "dmax_100", "rsi_14", "rv_16",
                  "atr_pct", "relvol_20", "bsl_20"]
 
@@ -127,7 +128,7 @@ def calendar_factors(bars: pd.DataFrame, tf: str) -> pd.DataFrame:
     ts = bars["timestamp"]
     dates = ts.dt.normalize()
     out = pd.DataFrame(index=bars.index)
-    if tf in ("day", "week"):
+    if tf in ("day", "week", "dayn", "weekn"):
         out["tod"] = 0.0
     else:
         out["tod"] = (ts.dt.hour * 60 + ts.dt.minute - (9 * 60 + 15)).astype(float)

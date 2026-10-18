@@ -55,6 +55,7 @@ _TF_TEMPLATE = {
     "4h": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 2},
     "dayagg": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 1},
     "day": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 1},
+    "dayn": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 1},
 }
 
 

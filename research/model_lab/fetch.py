@@ -40,7 +40,7 @@ def seed(db_path: Path | None = None) -> dict[str, int]:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     totals: dict[str, int] = {}
     try:
-        for interval in store.NATIVE:
+        for interval in (iv for iv in store.NATIVE if iv != "day_nse"):   # day_nse is built by nse_bhav, not Kite-cached
             syms = [r[0] for r in conn.execute(
                 "SELECT DISTINCT instrument FROM candles WHERE timeframe=?", (interval,))]
             n = 0

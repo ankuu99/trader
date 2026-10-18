@@ -9,7 +9,8 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
 
-EMBARGO = {"15m": "1D", "30m": "1D", "60m": "1D", "4h": "1D", "dayagg": "1D", "day": "5D", "week": "21D"}
+EMBARGO = {"15m": "1D", "30m": "1D", "60m": "1D", "4h": "1D", "dayagg": "1D", "day": "5D", "week": "21D",
+          "dayn": "5D", "weekn": "21D"}
 
 
 @dataclass(frozen=True)

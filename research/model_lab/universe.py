@@ -46,11 +46,15 @@ def latest_snapshot() -> pd.DataFrame:
     return pd.read_csv(files[-1])
 
 
-def build_liquidity_panel(symbols: list[str] | None = None) -> pd.DataFrame:
+def _panel_name(interval: str) -> str:
+    return "liquidity_daily.parquet" if interval == "day" else f"liquidity_{interval}.parquet"
+
+
+def build_liquidity_panel(symbols: list[str] | None = None, interval: str = "day") -> pd.DataFrame:
     paths.check_disk()
     out = []
-    for sym in symbols or store.list_symbols("day"):
-        d = store.read_bars(sym, "day")
+    for sym in symbols or store.list_symbols(interval):
+        d = store.read_bars(sym, interval)
         if d.empty:
             continue
         tv = d["close"] * d["volume"]
@@ -66,13 +70,13 @@ def build_liquidity_panel(symbols: list[str] | None = None) -> pd.DataFrame:
                            "med_tv_252": pd.Series(dtype="float64"),
                            "n_sessions": pd.Series(dtype="int64")}))
     paths.UNIVERSE_DIR.mkdir(parents=True, exist_ok=True)
-    store._atomic_write(paths.UNIVERSE_DIR / "liquidity_daily.parquet",
+    store._atomic_write(paths.UNIVERSE_DIR / _panel_name(interval),
                         lambda t: panel.to_parquet(t, engine="pyarrow", compression="zstd", index=False))
     return panel
 
 
-def _load_panel() -> pd.DataFrame:
-    return pd.read_parquet(paths.UNIVERSE_DIR / "liquidity_daily.parquet")
+def _load_panel(interval: str = "day") -> pd.DataFrame:
+    return pd.read_parquet(paths.UNIVERSE_DIR / _panel_name(interval))
 
 
 def liquid_universe(asof, top_n: int, panel: pd.DataFrame | None = None,
@@ -96,3 +100,18 @@ def intraday_fetch_list(years: list[int], top_n: int, panel: pd.DataFrame | None
     for y in years:
         syms.update(liquid_universe(date(y, 1, 1), top_n, panel))
     return sorted(syms)
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="research.model_lab.universe")
+    ap.add_argument("stage", choices=["build"])
+    ap.add_argument("--interval", default="day", choices=["day", "day_nse"])
+    args = ap.parse_args(argv)
+    panel = build_liquidity_panel(interval=args.interval)
+    print(f"liquidity panel ({args.interval}): {len(panel)} rows, {panel['symbol'].nunique()} symbols")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

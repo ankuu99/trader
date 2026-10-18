@@ -1,9 +1,10 @@
 """Lab timeframes derived from native bars, each with `avail_ts` (when the bar's values are known)."""
 import pandas as pd
 
-TFS = ("15m", "30m", "60m", "4h", "dayagg", "day", "week")
+TFS = ("15m", "30m", "60m", "4h", "dayagg", "day", "week", "dayn", "weekn")
 SOURCE = {"15m": "15minute", "30m": "15minute", "60m": "15minute", "4h": "15minute",
-          "dayagg": "15minute", "day": "day", "week": "day"}
+          "dayagg": "15minute", "day": "day", "week": "day",
+          "dayn": "day_nse", "weekn": "day_nse"}
 
 _BASE = pd.Timedelta(minutes=15)
 _OPEN_MIN = 9 * 60 + 15
@@ -39,13 +40,13 @@ def derive(src: pd.DataFrame, tf: str) -> pd.DataFrame:
         out["n_members"] = 1
         return out[_OUT].reset_index(drop=True)
 
-    if tf == "day":
+    if tf in ("day", "dayn"):
         out = src[["timestamp", "open", "high", "low", "close", "volume"]].copy()
         out["avail_ts"] = out["timestamp"].dt.normalize() + _CLOSE
         out["n_members"] = 1
         return out[_OUT].reset_index(drop=True)
 
-    if tf == "week":
+    if tf in ("week", "weekn"):
         d = src.copy()
         wk = d["timestamp"].dt.to_period("W-SUN")
         out = _agg(d, wk, d["timestamp"])

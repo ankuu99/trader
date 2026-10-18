@@ -62,7 +62,7 @@ def _factors(src, tf):
 
 
 def _complete(tf, avail):
-    if tf in ("15m", "day", "week"):
+    if tf in ("15m", "day", "week", "dayn", "weekn"):
         return True
     last = avail - QUARTER
     m = last.hour * 60 + last.minute
@@ -90,7 +90,7 @@ def test_compute_factors_causal_every_tf(tf):
         T = full.avail_ts[c]
         # weekly bars (own TF or higher TF) drop the final week of a frame, so keep the next trading day(s) of the
         # daily source as a marker; the strict avail_ts join means they cannot reach row c unless the code leaks
-        sub = _truncate(src, T, extra_days=3 if "week" in (tf, *fx.HIGHER_TF[tf]) else 0)
+        sub = _truncate(src, T, extra_days=3 if ("week" in (tf, *fx.HIGHER_TF[tf]) or "weekn" in (tf, *fx.HIGHER_TF[tf])) else 0)
         tb, tr = _factors(sub, tf)
         hit = np.flatnonzero(tr.timestamp.values == full.timestamp.values[c])
         assert len(hit) == 1, f"{tf}: row {c} missing after truncation"

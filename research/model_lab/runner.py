@@ -154,7 +154,7 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
         if r is not None:
             ranges[sym] = r
     years = list(range(min(r[0].year for r in ranges.values()), max(r[1].year for r in ranges.values()) + 1))
-    member = source.membership(years, spec.universe_top_n)
+    member = source.membership(years, spec.universe_top_n, tf=spec.tf)
     sym_years = {s: {y for y in years if s in member[y]} for s in ranges}
     symbols = sorted(s for s in ranges if sym_years[s])
     if not symbols:

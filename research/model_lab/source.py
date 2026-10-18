@@ -56,7 +56,8 @@ class LabSource:
                         out[y].add(s)
             return out
         from research.model_lab import universe
-        panel = universe._load_panel()
+        src = bars_mod.SOURCE[tf]
+        panel = universe._load_panel("day_nse" if src == "day_nse" else "day")
         return {y: set(universe.liquid_universe(date(y, 1, 1), top_n, panel)) for y in years}
 
 
