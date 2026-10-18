@@ -49,10 +49,21 @@ def replay_symbol(bars: pd.DataFrame, symbol: str, params: dict) -> pd.DataFrame
                          "score": pmin.astype("float32"), "p_max": pmax.astype("float32")})
 
 
+# Model-side keys of production's standard aggregated-TF blocks (scripts/calibrate_stock.py::TF_TEMPLATES,
+# mirrored by the day/4hour blocks in config.yaml). Exits are irrelevant to P(min) and left global.
+_TF_TEMPLATE = {
+    "4h": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 2},
+    "dayagg": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 1},
+    "day": {"warmup_bars": 100, "lookback_bars": 400, "extrema_order": 5, "retrain_every": 1},
+}
+
+
 def _resolve_params(symbol: str, tf: str, mode: str) -> tuple[dict, str]:
     from trader.core.config import config
     if mode == "per-stock" and _TF_TO_CFG.get(tf) == config.strategy_timeframe(symbol):
         return config.get_strategy_params(symbol, "lr_extrema"), "per-stock"
+    if mode == "template" and tf in _TF_TEMPLATE:
+        return {**config.strategy_config("lr_extrema"), **_TF_TEMPLATE[tf]}, "template"
     return config.strategy_config("lr_extrema"), "global"
 
 
@@ -76,7 +87,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tf", required=True)
     ap.add_argument("--symbols", nargs="*", default=None)
-    ap.add_argument("--params", choices=("global", "per-stock"), default="global")
+    ap.add_argument("--params", choices=("global", "per-stock", "template"), default="global",
+                    help="template = production's standard 4hour/day block (4h, dayagg, day); else global")
     ap.add_argument("--workers", type=int, default=1)
     a = ap.parse_args()
     paths.check_disk()

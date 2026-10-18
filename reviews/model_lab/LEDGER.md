@@ -22,7 +22,11 @@ FAIL · NULL (no effect beyond noise) · PARTIAL (one regime/TF) · ABORTED (bug
 
 ## Arms
 
-Arms tried so far: **0**.
+Arms tried so far: **4** (A01–A04 pre-registered 2026-10-18 before any run).
 
 | ID | Model | Target | TF | Universe | Split scheme | Pre-registered pass rule | Result | Status | Evidence |
 |---|---|---|---|---|---|---|---|---|---|
+| ML-A01 | pooled logistic (median impute + scaler, balanced) on all factors | `t1z_min_k5` | day (native) | PIT top-200 by trailing 252-session median traded value, re-ranked each Jan 1 (2009→) | expanding, 6M test windows, min train 3Y, embargo 5D | PASS = event-AP beats prod_pmin (day template replay) AND coin in ≥ 2/3 of folds AND ≥ 2/3 of years (≥ 10 pivots) on the primary truth (docs/03 §6); all-truths verdict reported alongside | — | PLANNED 2026-10-18 | `runs/A01_day_logit_t1z5` |
+| ML-A02 | pooled HistGBDT (depth 3, 300 iters, balanced) on all factors | `t1z_min_k5` | day (native) | PIT top-200 by trailing 252-session median traded value, re-ranked each Jan 1 (2009→) | expanding, 6M test windows, min train 3Y, embargo 5D | PASS = event-AP beats prod_pmin (day template replay) AND coin in ≥ 2/3 of folds AND ≥ 2/3 of years (≥ 10 pivots) on the primary truth (docs/03 §6); all-truths verdict reported alongside | — | PLANNED 2026-10-18 | `runs/A02_day_hgb_t1z5` |
+| ML-A03 | pooled logistic on all factors | `t1w_min_w10` | day (native) | PIT top-200 by trailing 252-session median traded value, re-ranked each Jan 1 (2009→) | expanding, 6M test windows, min train 3Y, embargo 5D | PASS = event-AP beats prod_pmin (day template replay) AND coin in ≥ 2/3 of folds AND ≥ 2/3 of years (≥ 10 pivots) on the primary truth (docs/03 §6); all-truths verdict reported alongside | — | PLANNED 2026-10-18 | `runs/A03_day_logit_t1w10` |
+| ML-A04 | pooled HistGBDT on all factors | `t1w_min_w10` | day (native) | PIT top-200 by trailing 252-session median traded value, re-ranked each Jan 1 (2009→) | expanding, 6M test windows, min train 3Y, embargo 5D | PASS = event-AP beats prod_pmin (day template replay) AND coin in ≥ 2/3 of folds AND ≥ 2/3 of years (≥ 10 pivots) on the primary truth (docs/03 §6); all-truths verdict reported alongside | — | PLANNED 2026-10-18 | `runs/A04_day_hgb_t1w10` |
