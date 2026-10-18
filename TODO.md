@@ -84,3 +84,4 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | ID | Status | Point |
 |---|---|---|
 | [TD-018](TODO/TD-018-extrema-model-campaign/DETAIL.md) | PENDING (in progress 2026-10-18) | Trough/peak model evaluation campaign — docs/01, ledger, worktree arms |
+| [TD-019](TODO/TD-019-size-weight-before-capital-cap/DETAIL.md) | PENDING (discovered 2026-10-18) | `size_weight` applied before the per-stock capital cap — downsizing inert when the cap binds |
