@@ -33,11 +33,13 @@ sell after H bars. Each with model, production P(min) and coins (day 21 draws, 1
 
 | ID | TF | H (bars) | ≈ | Status |
 |---|---|---|---|---|
-| SC2-d5 | day | 5 | 1 week | PLANNED |
-| SC2-d10 | day | 10 | 2 weeks | PLANNED |
-| SC2-d20 | day | 20 | 1 month (= SC1-3b) | PLANNED (re-run) |
-| SC2-d40 | day | 40 | 2 months | PLANNED |
-| SC2-d60 | day | 60 | 3 months | PLANNED |
-| SC2-m25 | 15m | 25 | 1 session | PLANNED |
-| SC2-m125 | 15m | 125 | 1 week (= S0 15m) | PLANNED (re-run) |
-| SC2-m500 | 15m | 500 | 1 month | PLANNED |
+| SC2-d5 | day | 5 | 1 week | DONE — all lose (costs); A01 −₹0.74 L, prod +₹5.70 L |
+| SC2-d10 | day | 10 | 2 weeks | DONE — A01 ₹4.17 L (15/21), prod ₹9.29 L |
+| SC2-d20 | day | 20 | 1 month (= SC1-3b) | DONE — A01 ₹10.40 L (19/21), Calmar 0.27 (20/21); prod ₹11.60 L / 0.30 — A01's best H |
+| SC2-d40 | day | 40 | 2 months | DONE — A01 ₹7.15 L (4/21) fades; prod ₹12.31 L / 0.32 |
+| SC2-d60 | day | 60 | 3 months | DONE — A01 ₹4.31 L (1/21), DD 70 %; **prod ₹11.54 L, Calmar 0.39, DD 31 %** |
+| SC2-m25 | 15m | 25 | 1 session | DONE — everyone loses heavily (cost churn, 18k trades) |
+| SC2-m125 | 15m | 125 | 1 week (= S0 15m) | DONE — A05 −₹4.77 L (0/11), prod −₹2.15 L |
+| SC2-m500 | 15m | 500 | 1 month | DONE — **A05 ₹6.27 L, Calmar 0.36 (11/11 coins), DD 31 % vs coin 52 %**; prod ₹3.95 L / 0.11 |
+
+SC2 results and reading: `reviews/model_lab/SC2_hold_20261018.md`.
