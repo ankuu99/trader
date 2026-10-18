@@ -85,18 +85,28 @@ def _run_window(name: str, overlay_path: str | None, symbols: list[str] | None) 
         "return_pct": round(m["return_pct"], 3),
         "max_dd_pct": round(m["max_drawdown_pct"], 3), "calmar": round(m["calmar_ratio"], 3),
         "sharpe_proxy": round(m["sharpe_proxy"], 3), "profit_factor": round(m["profit_factor"], 3),
+        # owner criterion alongside P&L (2026-10-18): win amount / (win + loss amount) = PF / (1 + PF)
+        "weighted_win_pct": round(m["money_weighted_win_rate"], 2), "win_rate": round(m["win_rate"], 2),
         "util_pct": round(util.get("time_avg_util_pct", 0.0), 2),
         "exit_counts": dict(Counter(tr["reason"] for tr in trades)),
         "pnl_by_instrument": {k: round(v, 2) for k, v in sorted(by_inst.items())},
     }
 
 
+def _wwr(r: dict) -> float:
+    """Money-weighted win % (engine definition); derived from profit_factor for runs saved before it was stored."""
+    if "weighted_win_pct" in r:
+        return r["weighted_win_pct"]
+    pf = r.get("profit_factor", 0.0)
+    return pf / (1 + pf) * 100 if pf > 0 else 0.0
+
+
 def _fmt(r: dict, base: dict | None) -> str:
     s = (f"{r['window']:<8} ₹{r['pnl'] / 1e3:8.1f}k  DD {r['max_dd_pct']:5.1f}%  Cal {r['calmar']:6.2f}  "
-         f"trades {r['trades']:4d}  util {r['util_pct']:5.1f}%")
+         f"wWin {_wwr(r):5.1f}%  trades {r['trades']:4d}  util {r['util_pct']:5.1f}%")
     if base:
         s += (f"  | Δ ₹{(r['pnl'] - base['pnl']) / 1e3:+7.1f}k  ΔDD {r['max_dd_pct'] - base['max_dd_pct']:+5.1f}pp"
-              f"  ΔCal {r['calmar'] - base['calmar']:+6.2f}")
+              f"  ΔCal {r['calmar'] - base['calmar']:+6.2f}  ΔwWin {_wwr(r) - _wwr(base):+5.1f}pp")
     return s
 
 

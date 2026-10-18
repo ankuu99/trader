@@ -158,4 +158,7 @@ verdict changes. AUC (threshold-free) is unaffected. DECISIONS row 2026-10-18.
 **Round 1 verdict (2026-10-18):** no detection arm passes; the decision-layer market-regime arm does not survive its
 plateau check. See `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`.
 
+| EXP-19 | — | Exit-parameter sensitivity of Stage A (owner question 2026-10-18): truth rebuilt with profit_pct ×0.5/×1/×1.5 and stale check_bars ×1/×2, all cached arms re-scored | baseline median AUC 0.506–0.515 in all 6 variants (paying-bar base rate 22–58 %); every arm keeps its sign; EXP-07 +0.003…+0.011 (worse 19–29 %), nothing near +0.03 | — | MEASURED — "nothing ranks paying dips" is not an artefact of the current targets | `scripts/campaign/exit_sensitivity.py` |
+| EXP-18 (wWin) | — | Money-weighted win % for the EXP-18 runs (= PF/(1+PF), derived from stored profit factor) — owner criterion alongside P&L | Δ vs baseline 63.9 % FULL / 61.5 % HORIZON: calm +0.02/+0.03/+0.05 → FULL +1.2/+1.1/+2.2 pp, HORIZON +0.7/+0.8/+1.3 pp (H2-26 negative for all three); stress −0.03/−0.05 → FULL −1.4/−0.6, HORIZON −1.8/−1.8 | — | MEASURED — calm-threshold family improves weighted win % and DD consistently; P&L still mixed | `runs/stage_b_exp18*.json` |
+
 (rows appended as arms are defined and run)
