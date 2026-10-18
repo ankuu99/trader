@@ -1,5 +1,5 @@
 # Model Lab L0b — timeframe bars, causal factor library, hindsight targets T1–T5, leakage tests
-Written: 2026-10-18 · Tag: TD-021 · Status: OPEN
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -286,3 +286,16 @@ Suites that stay green: the full suite.
 - [ ] Do NOT run `build.py` against real data (the store does not exist yet); the main session does it after L0a.
 
 ## Completion record
+- **Completed:** 2026-10-18 · trader-implementer (sonnet), validated by the main session (full suite 619 passed; 26 new tests
+  incl. per-TF causality parametrised over all 7 TFs). Code read: zigzag state machine, T5 first-hit ordering
+  (`fx < H and fx < fy`, same bar → 0), next-open entry, T1w first-occurrence ties, strict VIX/higher-TF joins.
+- **Commit:** see the L0 completion commit on `exp/model-lab`.
+- **Deviations (accepted):** the per-TF causality test keeps daily sources to T + 3 calendar days for TFs whose chain
+  includes `week` (the always-drop-last-week rule would otherwise remove the cut row) — the strict-join test covers the
+  leak that this could mask; cut rows chosen at complete buckets; `monthly_expiry` picks Thu/Tue by expiry month;
+  `sesspos` counts present bars in gapped sessions; an int64 bucket-key overflow was caught and fixed by the implementer.
+- **Performance:** 54k synthetic 15m bars — `compute_factors` 0.30 s, `build_targets` 0.26 s. Real data: 3 × 15m stocks
+  (54k bars each) built in 3.0 s; **15m factor files ≈ 9 MB per stock, targets ≈ 4 MB** → at universe scale L1 should
+  compute factors on the fly rather than cache them (disk ~7.7 GB free).
+- **Real-data sanity (CUPID 15m):** label rates t1w_min w4 4.8 % … w75 0.4 %; t1z_min k2 4.1 % / k5 0.6 % / k10 0.2 %;
+  t5 hit +7/−5 within 25/125/500 bars 7 % / 33 % / 46 %; `hday_*` mostly NaN until the daily backfill (2008→) lands.

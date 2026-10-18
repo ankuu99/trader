@@ -1,5 +1,5 @@
 # Model Lab L0a — parquet bar store, staged Kite fetcher, point-in-time universe, data QA
-Written: 2026-10-18 · Tag: TD-021 · Status: OPEN
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -179,3 +179,12 @@ Suites that stay green: the full suite (`.venv/bin/python -m pytest -q`).
       run for a smoke test only if `lab_data/model_lab/` is empty before and is deleted afterwards — prefer tests.
 
 ## Completion record
+- **Completed:** 2026-10-18 · trader-implementer (sonnet), validated by the main session (full suite 619 passed with L0b; 11 new tests).
+- **Commit:** see the L0 completion commit on `exp/model-lab`.
+- **Deviations (accepted):** tests patch `paths.BARS_DIR`/`UNIVERSE_DIR` (modules read them at call time); `qa` takes
+  `--interval day|15minute|all`; `intraday` builds the liquidity panel if missing; `gap_ranges` uses ±1 s instead of
+  half-open bounds; tokens looked up over `NSE` + `INDICES` segments; `--dry-run` still calls `instruments()`.
+- **Main-session fix:** default `--to` = end of yesterday (23:59), not now — a run during market hours would have stored
+  today's still-forming bars and the manifest would never re-request them.
+- **Validation runs:** `seed` → 105 × 15m (2.75M rows, 58 MB, ~21 B/candle) + 532 × day; `market` → NIFTY 50 / INDIA VIX
+  15m from 2015-01-09, day from 2008 (VIX from 2009-03); `daily` (2,679 symbols, ~11.2k requests) started in background.

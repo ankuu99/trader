@@ -14,8 +14,8 @@ FAIL · NULL (no effect beyond noise) · PARTIAL (one regime/TF) · ABORTED (bug
 
 | ID | Phase | Deliverable | Status | Guide / commit |
 |---|---|---|---|---|
-| ML-L0a | L0 | Parquet bar store, staged Kite fetcher, PIT liquidity universe, data QA | BUILDING | `to_develop/2026-10-18_TD-021_L0a-lab-data-store-fetcher.md` |
-| ML-L0b | L0 | Timeframe bars + `avail_ts`, causal factor library, targets T1–T5, leakage tests, build CLI | BUILDING | `to_develop/2026-10-18_TD-021_L0b-bars-factors-targets.md` |
+| ML-L0a | L0 | Parquet bar store, staged Kite fetcher, PIT liquidity universe, data QA | DONE 2026-10-18 | `to_develop/completed/2026-10-18_TD-021_L0a-lab-data-store-fetcher.md` |
+| ML-L0b | L0 | Timeframe bars + `avail_ts`, causal factor library, targets T1–T5, leakage tests, build CLI | DONE 2026-10-18 | `to_develop/completed/2026-10-18_TD-021_L0b-bars-factors-targets.md` |
 
 ## Arms
 
