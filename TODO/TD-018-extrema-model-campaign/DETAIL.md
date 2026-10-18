@@ -16,3 +16,7 @@ Source: owner, 2026-10-18. Verbatim; never delete.
 Plan (as proposed and approved 2026-10-18): `docs/01_Extrema_Model_Campaign.md`. Ledger:
 `reviews/extrema_campaign/LEDGER.md`. Open owner decisions answered by default (owner said "go ahead"): losing arms
 stay on `exp/*` branches; pass thresholds as proposed; no extra hand labels.
+
+## Addendum 2026-10-18 — round 1 complete
+
+Twelve detection arms fail Stage A; production P(min) median AUC 0.511 vs tradeable troughs; prior-day India VIX percentile is the only robust signal (median AUC 0.638, 6/7 years) but the decision-layer arm (EXP-18) did not survive its plateau check. Summary: `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`; every path: `reviews/extrema_campaign/LEDGER.md`. Code of losing arms on `exp/labels`, `exp/features`, `exp/rules`, `exp/regime`.

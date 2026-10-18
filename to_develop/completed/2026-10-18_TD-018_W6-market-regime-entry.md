@@ -85,3 +85,8 @@ Whole suite green; parity golden unchanged.
 - [ ] no live-path edits (main.py, trader/data/live.py, orders, risk)
 
 ## Completion record
+
+- **Completed:** 2026-10-18 · **Commit:** exp/regime @ 4c0a1c0 (not merged)
+- **Validation:** 592 passed, 1 known ISS-11 clock failure; 7 required tests (11 cases). Disabled = byte-identical on all 6 windows (runs/stage_b_regime_disabled.json).
+- **Deviations:** Market-regime block placed before gate_blocks; size_mult combines multiplicatively with meta size_weight.
+- **Result:** 18a/18b/18e/18f FAILED; 18c NULL (inert, TD-019); 18d passed but its plateau neighbours 18d2/18d5 did not → not a candidate.

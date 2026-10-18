@@ -98,3 +98,8 @@ Whole suite green; parity golden unchanged.
 - [ ] every add-on returns finite floats on a 30-candle series with zero volume and flat prices
 
 ## Completion record
+
+- **Completed:** 2026-10-18 · **Commit:** exp/features @ d54a0c0 (not merged)
+- **Validation:** 590 passed, 1 known ISS-11 clock failure; 8 required + 1 finite-values test.
+- **Deviations:** sup_dist assertion tolerance (0.0385 vs the guide's ≈0.04); market add-on treats non-positive Nifty/VIX as missing.
+- **Result:** EXP-05/06/08 ≈ 0 or worse, EXP-07 +0.010 ΔAUC — all FAILED Stage A.

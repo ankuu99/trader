@@ -151,3 +151,7 @@ backtest, while live (tick-level) would. Every exit A/B so far carries this opti
 
 Evaluation campaign plan proposed to the owner 2026-10-18 (pending review). Results get appended here as dated
 addenda with links to the per-experiment reviews.
+
+## Addendum 2026-10-18 — campaign round 1 result
+
+No detection arm passes; production P(min) median AUC 0.511 vs tradeable troughs; market timing (prior-day India VIX) is the only robust signal and did not convert to P&L under the protocol. `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`, ledger `reviews/extrema_campaign/LEDGER.md`.

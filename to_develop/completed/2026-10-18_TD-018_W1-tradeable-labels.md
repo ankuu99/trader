@@ -74,3 +74,8 @@ Whole suite green; parity golden unchanged.
 - [ ] training-time cost: report the wall time of test 9 and of one `label()` call on 1,200 candles (candidates: all, stride 5)
 
 ## Completion record
+
+- **Completed:** 2026-10-18 · **Commit:** exp/labels @ b99bfce (not merged — protocol: losing arms stay on their branch)
+- **Validation:** 591 passed, 1 known ISS-11 clock failure; 9 required + 1 timing test.
+- **Deviations:** test_all_candidates_stride uses a 160-bar sine; invalid enum values raise ValueError; label() on 1,200 candles (stride 5, hold 30) ≈ 1.3 ms.
+- **Result:** EXP-01 ΔAUC −0.013 / EXP-02 −0.072 — FAILED Stage A (reviews/extrema_campaign/STAGE_A_batch1_20261018.md).

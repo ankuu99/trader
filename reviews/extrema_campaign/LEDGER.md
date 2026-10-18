@@ -126,7 +126,7 @@ Evidence column: memory-file slug (`~/.claude/projects/.../memory/<slug>.md`), r
 | EXP-11 | — | EXP-02 + average-uniqueness sample weights (AFML ch 4) | — | — | PROPOSED (literature) | docs/02 arm 4 |
 | EXP-13 | — | Residual-vs-Nifty OU s-score (A&L 2010) vs raw-price control (EXP-10a) | — | — | superseded by the pre-check row below | docs/02 arm 5 |
 | EXP-14 | — | Volume-conditioned decline probe (15m names; 5-bar/50-bar volume ratio tercile on dip bars) | P(good) low/mid/high 0.303/0.328/0.327, EV 0.72/1.10/1.12 %; high > low in 5/7 stocks | — (probe) | FAILED its pre-registered rule (8 % relative < 20 %) — mild capitulation lean, not built | `scripts/campaign/exp14_volume_split.py` |
-| EXP-15 | — | News/no-news decline flag (Chan 2003) — blocked on point-in-time event data | — | — | PROPOSED · BLOCKED | docs/02 arm 3 |
+| EXP-15 | — | News/no-news decline flag (Chan 2003) — blocked on point-in-time event data | — | — | superseded by the BLOCKED row below | docs/02 arm 3 |
 | EXP-16 | — | EXP-08 + double-bottom retest feature (Lo–Mamaysky–Wang 2000) | — | — | PROPOSED (literature) | docs/02 arm 7 |
 | EXP-17 | — | Directional-change overshoot features (Glattfelder 2011) — skip if own-path W2 arms all fail | — | — | PROPOSED (literature) | docs/02 arm 8 |
 
@@ -144,8 +144,18 @@ verdict changes. AUC (threshold-free) is unaffected. DECISIONS row 2026-10-18.
 | EXP-18a | regime @ 4c0a1c0 | stress threshold −0.03 | n/a | FULL −₹36.4k, DD +1.1 pp, Calmar 1/4; HORIZON −₹293k | FAILED Stage B | `runs/stage_b_exp18a.json` |
 | EXP-18b | regime @ 4c0a1c0 | stress threshold −0.05 | n/a | FULL +₹23.1k but DD +1.1 pp (rule: ≤ +1.0); HORIZON −₹216k (crash guard −5 % fails) | FAILED Stage B | `runs/stage_b_exp18b.json` |
 | EXP-18c | regime @ 4c0a1c0 | calm size ×0.5 | n/a | FULL identical to the rupee; HORIZON −₹36.4k — size_weight is applied BEFORE the per-stock capital cap, which binds, so downsizing is inert (TD-019) | NULL (mechanism inert) | `runs/stage_b_exp18c.json` |
-| EXP-18d | regime @ 4c0a1c0 | calm threshold +0.03 | n/a | Calmar 3/4 half-years; FULL +₹4.9k, DD +0.2 pp; HORIZON −₹47.9k (−2.4 %), DD −2.8 pp | PASSED Stage B + crash guard — effect ≈ path noise; plateau check 18d2/18d5 pre-registered | `runs/stage_b_exp18d.json` |
+| EXP-18d | regime @ 4c0a1c0 | calm threshold +0.03 | n/a | Calmar 3/4 half-years; FULL +₹4.9k, DD +0.2 pp; HORIZON −₹47.9k (−2.4 %), DD −2.8 pp | PASSED Stage B + crash guard, NOT CONFIRMED by the plateau check (18d2/18d5) → not a candidate | `runs/stage_b_exp18d.json` |
 | EXP-18e | regime @ 4c0a1c0 | 18a + 18c | n/a | = 18a (18c inert): FULL −₹36.4k, HORIZON −₹309k | FAILED Stage B | `runs/stage_b_exp18e.json` |
 | EXP-18f | regime @ 4c0a1c0 | calm block (control) | n/a | FULL −₹7.3k; HORIZON −₹744k (DD −3.8 pp) — as predicted | FAILED Stage B (control) | `runs/stage_b_exp18f.json` |
+
+| EXP-18d2 | regime @ 4c0a1c0 | calm threshold +0.02 (plateau check) | n/a | Calmar 2/4; FULL +₹18.3k, DD −0.2 pp; HORIZON +₹18.8k, DD −2.4 pp | FAILED Stage B (2/4) | `runs/stage_b_exp18d2.json` |
+| EXP-18d5 | regime @ 4c0a1c0 | calm threshold +0.05 (plateau check) | n/a | Calmar 3/4; FULL +₹26.6k, DD +0.9 pp; HORIZON −₹102.1k (−5.06 %), DD −2.8 pp | FAILED crash guard (by 0.06 pp) | `runs/stage_b_exp18d5.json` |
+| EXP-11 | — | EXP-02 + uniqueness weights | — | — | NOT RUN — EXP-02 was −0.072 ΔAUC; weighting cannot plausibly flip it (docs/02 arm 4 falsifier is "not better than EXP-02") | — |
+| EXP-16 | — | EXP-08 + double-bottom feature | — | — | NOT RUN — parent EXP-08 failed; own-path features are at chance (EXP-00b) | — |
+| EXP-17 | — | Directional-change overshoot features | — | — | NOT RUN — its own pre-registered skip rule (all own-path W2 arms failed) | — |
+| EXP-15 | — | News/no-news decline flag | — | — | BLOCKED on point-in-time corporate-event data → TD-020 | docs/02 arm 3 |
+
+**Round 1 verdict (2026-10-18):** no detection arm passes; the decision-layer market-regime arm does not survive its
+plateau check. See `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`.
 
 (rows appended as arms are defined and run)

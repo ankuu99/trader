@@ -252,6 +252,14 @@ Swappable components behind nested config blocks; production defaults unchanged 
 - `model.type: gbdt` — HistGradientBoosting (depth 3). With clean sparse zigzag labels + long windows it beats logistic on trend scenarios (the old "GBM overfits" note was an artifact of noisy labels).
 - `exits.trailing.regime_widening: {lookback_bars, min_slope_pct, trail_wide}` — widens the trail during a close-level uptrend. **Falsified at 15m** (EOD force-close binds first; overnight holds hurt) — dormant, do not enable at 15m.
 
+**Detection campaign round 1 (TD-018, 2026-10-18) — every path in `reviews/extrema_campaign/LEDGER.md`:** against
+"tradeable troughs" (dip reaches +profit_pct before the stock's own non-model exits fire) the production P(min) has
+median AUC 0.511 and no label/feature/rule arm improves it (tradeable labels, lags, bar shape, ATR distance, S/R, OU,
+rules, market features — all fail Stage A; code on `exp/*` branches, not merged). The one robust signal is market
+timing — prior-day India VIX vs its trailing year (AUC 0.638, 6/7 years) — but threshold/size modulation by VIX state
+did not survive the plateau check (`market_regime`, branch `exp/regime`). Do not re-run these arms; see
+`reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`. Research tooling: `scripts/campaign/`.
+
 Validated combination (see `reviews/dayw_candidate_proposal_20260713.md` and the lab in `scripts/lab/`): zigzag vol-scaled k=2.0 + neutral 2.0 + extrema_regime [20,60,250] + gbdt @ 0.65/0.60 on **day timeframe** for all names — Calmar 2.11, DD 10.8%, 6/7 rolling windows profitable incl. the 2025-H1 correction. Not deployed.
 
 ### What makes this strategy work (and when it fails)

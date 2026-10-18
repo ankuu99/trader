@@ -76,3 +76,8 @@ Whole suite green; parity golden unchanged.
 - [ ] only the new modules, the two registry edits, one import line, and the test file changed
 
 ## Completion record
+
+- **Completed:** 2026-10-18 · **Commit:** exp/rules @ abd3233 (not merged)
+- **Validation:** 590 passed, 1 known ISS-11 clock failure; 9 required tests.
+- **Deviations:** min_history per rule kind chosen by the implementer; EMA over all closes passed in.
+- **Result:** EXP-09a/09b/10a worse than the model; EXP-10b ≈ 0 — all FAILED Stage A.
