@@ -1,0 +1,115 @@
+{
+ "run_at": "2026-10-18T12:12:51",
+ "results": [
+  {
+   "window": "FULL",
+   "seed": 1,
+   "trades": 1110,
+   "pnl": 291564.4,
+   "max_dd_pct": 10.46,
+   "calmar": 2.37,
+   "weighted_win_pct": 58.3,
+   "win_rate": 54.1,
+   "util_pct": 77.7
+  },
+  {
+   "window": "FULL",
+   "seed": 2,
+   "trades": 1098,
+   "pnl": 276413.3,
+   "max_dd_pct": 13.2,
+   "calmar": 1.79,
+   "weighted_win_pct": 57.9,
+   "win_rate": 55.4,
+   "util_pct": 76.4
+  },
+  {
+   "window": "FULL",
+   "seed": 3,
+   "trades": 1139,
+   "pnl": 157956.5,
+   "max_dd_pct": 11.93,
+   "calmar": 1.17,
+   "weighted_win_pct": 54.8,
+   "win_rate": 54.3,
+   "util_pct": 75.4
+  },
+  {
+   "window": "FULL",
+   "seed": 4,
+   "trades": 1086,
+   "pnl": 389466.3,
+   "max_dd_pct": 8.38,
+   "calmar": 3.85,
+   "weighted_win_pct": 60.6,
+   "win_rate": 57.2,
+   "util_pct": 75.9
+  },
+  {
+   "window": "FULL",
+   "seed": 5,
+   "trades": 1077,
+   "pnl": 315987.8,
+   "max_dd_pct": 10.05,
+   "calmar": 2.66,
+   "weighted_win_pct": 59.2,
+   "win_rate": 54.1,
+   "util_pct": 75.6
+  },
+  {
+   "window": "HORIZON",
+   "seed": 1,
+   "trades": 3280,
+   "pnl": 2051928.0,
+   "max_dd_pct": 74.32,
+   "calmar": 0.33,
+   "weighted_win_pct": 58.1,
+   "win_rate": 57.9,
+   "util_pct": 68.4
+  },
+  {
+   "window": "HORIZON",
+   "seed": 2,
+   "trades": 3293,
+   "pnl": 1675558.1,
+   "max_dd_pct": 46.78,
+   "calmar": 0.46,
+   "weighted_win_pct": 57.3,
+   "win_rate": 58.1,
+   "util_pct": 72.8
+  },
+  {
+   "window": "HORIZON",
+   "seed": 3,
+   "trades": 3353,
+   "pnl": 1431146.4,
+   "max_dd_pct": 57.5,
+   "calmar": 0.34,
+   "weighted_win_pct": 56.0,
+   "win_rate": 57.5,
+   "util_pct": 70.0
+  },
+  {
+   "window": "HORIZON",
+   "seed": 4,
+   "trades": 3477,
+   "pnl": 1736001.1,
+   "max_dd_pct": 43.69,
+   "calmar": 0.51,
+   "weighted_win_pct": 58.1,
+   "win_rate": 58.2,
+   "util_pct": 72.6
+  },
+  {
+   "window": "HORIZON",
+   "seed": 5,
+   "trades": 3344,
+   "pnl": 2024584.6,
+   "max_dd_pct": 60.7,
+   "calmar": 0.4,
+   "weighted_win_pct": 58.1,
+   "win_rate": 58.0,
+   "util_pct": 70.3
+  }
+ ]
+}
