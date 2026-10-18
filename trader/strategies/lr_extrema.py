@@ -509,6 +509,10 @@ class LRExtremaStrategy(Strategy):
 
         if len(rows) < MIN_SAMPLES_PER_CLASS * 2:
             return
+        # Long-history feature add-ons can drop every sample of one class early
+        # in a run — a one-class fit would crash the solver.
+        if len(set(labels)) < 2:
+            return
 
         X = np.array(rows, dtype=float)
         y = np.array(labels, dtype=int)
