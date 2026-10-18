@@ -74,3 +74,17 @@ Controls: same with coin percentiles; and the two sleeves split (7 slots A01/20d
 | SC4-b | split sleeves: 7 × ₹40k A01 best-1/day hold 20 + 8 × ₹40k production best-1/day hold 60 | DONE — worse: ₹7.31 L / 0.18 (2/10 coins) |
 
 SC3/SC4 results and reading: `reviews/model_lab/SC3_SC4_exits_combined_20261018.md`.
+
+## SC5 — A11 scores in the strategy frameworks (main session, 2026-10-19; informational)
+
+A11 (`t5_edgez_H20`, reward-minus-pain ÷ usual move) FAILED its pre-registered magnitude rule (vs vol), but its
+top-1 % picks show +4.28 % 20-day net vs production +2.73 % (10/16 yrs), and they are calm quality names (daily vol
+1.3 % vs 2.5 %, prior 3-month −6.5 %, 18 % under ₹50; HDFCBANK, COLPAL, NESTLEIND…) — the profile survivorship
+flatters LEAST. Checked in the frameworks already used, against 11 coin draws; a FAILED arm stays failed, this is
+informational only.
+
+| ID | Config | Status |
+|---|---|---|
+| SC5-a | A11 score, day, best 2/day, hold 20 | PLANNED |
+| SC5-b | A11 score, day, best 2/day, hold 60 | PLANNED |
+| SC5-c | A11 score, day, best 2/day, hold 60, target +20 % | PLANNED |
