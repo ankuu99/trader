@@ -109,4 +109,6 @@ Evidence column: memory-file slug (`~/.claude/projects/.../memory/<slug>.md`), r
 | EXP-00a | — | ISS-14 impact on the baseline (pre-fix 1dd827c vs post-fix 5970eb5) | — | FULL ₹465.4k→₹439.2k (−₹26.2k), Calmar 6.60→6.18, DD 5.7→5.8 %; H1-26 −₹23.9k; HORIZON ₹1,918k→₹2,019k (floor exits help in crashes) | MEASURED | `runs/baseline_prefix_iss14.json` vs `runs/baseline_postfix_iss14.json` |
 | EXP-00b | — | Headroom probe: univariate swing measures vs tradeable-trough truth (test 2025-01→) | p_min median AUC 0.511; −depth50 0.534; −ret20 0.515; −RSI14 0.513; −above_low20 0.496; −ret5 0.508 | — | MEASURED — the production model does not rank troughs that pay; neither do single price-position measures. Expect small ΔAUC; EV@matched is the more sensitive gate | `scripts/campaign/headroom_probe.py` |
 
+| EXP-03 | cfg @ 1409e9b | `forward_label` re-test on the fixed engine (150 bars, +1.5 %) — supersedes R-02 | median ΔAUC −0.000, worse on 62 %; median ΔEV@matched 0.00 (15m names −0.12…−0.31, CUPID +1.03); day/4h names unchanged (almost every minimum bounces 1.5 % within 150 bars) | not run (gate) | FAILED Stage A | `runs/stage_a_exp03.json` |
+
 (rows appended as arms are defined and run)
