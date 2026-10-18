@@ -90,3 +90,25 @@ Point-in-time in backtests: a rule applies only from the date its data was knowa
 | S2 | Survivorship bound / TD-022 | before trusting ₹ |
 | S3 | Model-driven exits once magnitude models pass the vol-referenced test | — |
 | S4 | Live adapter (pretrained artefact, live factors, sleeve accounting), paper, then own capital | spec-first in `to_develop/` |
+
+## Addendum 2026-10-19 — what the first ₹ studies changed (SC1–SC6, WF-1, PB-LONG, SN)
+
+- **Survivorship decides the ranking of candidates** (`reviews/model_lab/SN_survivorship_free_20261019.md`).
+  - On the delisting-inclusive `dayn` universe, the deep-low rankers (A01; production P(min) as a ranker) no longer beat
+    random picks.
+  - A11 (reward net of pain over 20 days, hold 60) beats 11/11 coin draws on ₹ and Calmar: ₹15.96 L on ₹6L
+    2011→2026, but with a 42 % worst drop.
+  - **First candidate for S1 = A11-ranked entries; A01 becomes a detector to be filtered, not a ranker.**
+- **The exclusion list (S2) is now the critical piece, not a nicety.**
+  - The losses that sink the deep-low rankers are names that kept falling into delisting or insolvency: DHFL,
+    GITANJALI, EDUCOMP, FEL, YESBANK, PCJEWELLER.
+  - A price floor alone does not separate them: sub-₹20 entries were small in ₹ for SN-1/2.
+  - Rules to evaluate PIT on `dayn` when the owner picks the candidates: fundamentals DISTRESS, ASM/GSM, BE/BZ series
+    (available in bhavcopy), traded-value floor, drawdown-from-high.
+- **Window.**
+  - Production's own setup lost in 2018–20 on its tradeable names (PB-LONG).
+  - All lab frameworks' worst drops sit in 2011–13.
+  - Every sleeve candidate is judged on the full 2011→2026 `dayn` window, per year, never on 2025–26 alone (SC6: random
+    picks on the hindsight watchlist make ₹2.8–4.8 L in 2025–26).
+- **Exits:** production's +20 % target is learnable walk-forward on survivors (WF-1) but does not rescue the production
+  ranker on `dayn`. A11 runs with a fixed 60-day hold until a model-driven exit (S3) exists.

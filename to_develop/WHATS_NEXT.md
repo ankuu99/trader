@@ -9,10 +9,9 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
 4. **TD-015** — released 2026-10-17 (release-20261017e). Positions bought before it (all 12 current) have parent_notional 0 → remainder-based sizing; only MAYURUNIQ is actually affected.
 5. **TD-014** — golden harness reads the live config.yaml.
 6. **Model Lab (TD-021) + strategy sleeve (TD-023)** on `exp/model-lab` (worktree `../trader-2-wt/model-lab`), state 2026-10-19:
-   ledgers `reviews/model_lab/LEDGER.md` (models) and `STRATEGY_LEDGER.md` (₹ sims). A01 (day deep lows) is the one clean model
-   win; no lab strategy beats the full production system on 2025-01→2026-10 (SC6), and random picks on the watchlist make
-   ₹2.8–4.8L there (hindsight selection). **PB-LONG:** production setup 2015→2026 lost 2018/19/20 (−48 % peak-to-trough,
-   liquid names −₹2.05L 2015–20) — `reviews/model_lab/PB_LONG_prod_2015_20261019.md`. In progress: TD-022 L0c survivorship-free
-   `dayn` source (rework after a validation fail: NSE corporate-actions API factors); then ML-A01n/A11n + SN-1..3 (pre-registered).
-   Owner decisions pending: TD-023 exclusion-list rules (incl. a traded-value floor); walk-forward exit selection. ISS-16 fixed.
+   ledgers `reviews/model_lab/LEDGER.md` / `STRATEGY_LEDGER.md`. **TD-022 `dayn` survivorship-free source DONE** (1,070 delisted
+   names). On it: A01 still the best swing-low detector but its ₹ edge vs coins is gone; production P(min) as a ranker too; **A11
+   ranker beats 11/11 coins (₹15.96L, DD 42 %)** — `SN_survivorship_free_20261019.md`. Production setup 2015→2026 lost 2018–20
+   (PB-LONG). No lab strategy beats production on 2025–26 (SC6). Owner decisions pending: TD-023 exclusion-list rules (now the
+   critical piece — docs/04 addendum 2026-10-19); then S1 = A11-ranked entries + exclusions on dayn, walk-forward.
 7. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13, ISS-15 (one-class training crash, latent) (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
