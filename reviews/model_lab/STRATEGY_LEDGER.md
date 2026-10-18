@@ -85,6 +85,6 @@ informational only.
 
 | ID | Config | Status |
 |---|---|---|
-| SC5-a | A11 score, day, best 2/day, hold 20 | PLANNED |
-| SC5-b | A11 score, day, best 2/day, hold 60 | PLANNED |
-| SC5-c | A11 score, day, best 2/day, hold 60, target +20 % | PLANNED |
+| SC5-a | A11 score, day, best 2/day, hold 20 | DONE — ₹6.36 L / Calmar 0.18 (2/11 coins ₹, 9/11 Calmar); capital use 59 % |
+| SC5-b | A11 score, day, best 2/day, hold 60 | DONE — ₹12.91 L / 0.32 (9/11, 9/11); production same ₹11.54 L / 0.39 |
+| SC5-c | A11 score, day, best 2/day, hold 60, target +20 % | DONE — ₹10.84 L / 0.28 (9/11, 6/11); production same ₹14.57 L / 0.50 |
