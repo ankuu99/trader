@@ -12,7 +12,7 @@ All of the 2026-10-17 review fixes the owner approved are live (release-20261017
    backtest; the edge is the entry signal, coin-flip control EXP-20/22); the only
    robust signal is market timing (prior-day India VIX), which did not convert to P&L robustly. Read
    `reviews/extrema_campaign/CAMPAIGN_ROUND1_20261018.md`. Next options: TD-020 (news flag — find PIT event data),
-   TD-019 (size_weight order) before any sizing idea. **TD-021 Model Lab** (docs/03) — L0 DONE 2026-10-18 on `exp/model-lab`
-   (worktree `../trader-2-wt/model-lab`): data store/fetcher, factors, targets, leakage tests. Next: finish the 15m PIT-universe fetch
-   (`python -m research.model_lab.fetch intraday`, after `daily`), then spec L1 (split engine + scoring + production-P(min) baseline). ISS-14 fixed — new baseline FULL ₹439.2k / Calmar 6.18.
+   TD-019 (size_weight order) before any sizing idea. **TD-021 Model Lab** (docs/03) — L0 + L1 DONE 2026-10-18 on `exp/model-lab`
+   (worktree `../trader-2-wt/model-lab`). Scoring is on the model's own terms (docs/03 §6). Next: finish the 15m PIT-universe fetch
+   (`python -m research.model_lab.fetch intraday`, after `daily`), then L2 — pre-register arms in `reviews/model_lab/LEDGER.md` and run them. ISS-14 fixed — new baseline FULL ₹439.2k / Calmar 6.18.
 7. Noted for later: ISS-05…ISS-09, ISS-11, ISS-12, ISS-13, ISS-15 (one-class training crash, latent) (non-funds broker rejects still retry by design); TD-005/006/007/010/011/012.
