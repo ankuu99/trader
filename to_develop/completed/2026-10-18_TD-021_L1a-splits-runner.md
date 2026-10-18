@@ -1,5 +1,5 @@
 # Model Lab L1a — PIT panel, split engine (purge + embargo), lab model wrapper, walk-forward runner
-Written: 2026-10-18 · Tag: TD-021 · Status: OPEN
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -219,3 +219,13 @@ Suites that stay green: the full suite.
 - [ ] Do NOT run the runner on real data (the main session does that after validation)
 
 ## Completion record
+- **Completed:** 2026-10-18 · trader-implementer (sonnet); validated by the main session — full suite 644 passed; code
+  read of `train_mask` (label-end purge + embargo, loyo both sides, non-loyo never trains after test_start),
+  `label_end_ts` (fixed look-ahead and zigzag endbars), PIT membership in both passes.
+- **Deviations (accepted):** runner tests use 120 sessions / 1M steps (60 sessions cannot give 2 quarterly folds);
+  `SynthSource.postprocess` hook for planted signals; `membership()`/`symbols()` take an optional `tf`; fitted models
+  always kept in memory (no pickling > 20 folds); `run(..., overwrite=False)` kwarg; runner rejects non-binary targets
+  (classifiers only in L1); xs table skipped for < 10 synthetic symbols.
+- **Real-data smoke (2026-10-18):** 6 watchlist 15m names, expanding 6M, `t1z_min_k5`, logistic, 14 folds, 249,675
+  scored rows in 29 s on 6 workers, peak RSS 2.7 GB. Note: CLI scripts that call `run()` with workers > 1 need an
+  `if __name__ == "__main__":` guard (macOS spawn).

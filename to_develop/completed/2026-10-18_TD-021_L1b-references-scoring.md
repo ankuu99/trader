@@ -1,5 +1,5 @@
 # Model Lab L1b — reference scores (coin, rules, production replay), curve-based scorer, run report
-Written: 2026-10-18 · Tag: TD-021 · Status: OPEN
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -182,3 +182,15 @@ Suites that stay green: the full suite.
 - [ ] Do NOT run the replay or the scorer on real data (the main session does that after validation)
 
 ## Completion record
+- **Completed:** 2026-10-18 · trader-implementer (sonnet); validated by the main session — full suite 644 passed.
+- **Deviations (accepted):** headline verdict on the primary truth (the run's own target) plus `overall_all_truths`
+  (PASS on every detection truth) reported alongside; max-side runs map refs to their mirrors; `picks(pos=…)` composite
+  keys; unjudged picks excluded from matching too; regime APs in summary/report only (not curves.parquet); scorer keeps
+  evaluated rows in memory (~100 B/row).
+- **Main-session fix (measurement flaw in this guide's spec):** unbounded event clustering made recall FALL as the
+  firing rate rose (smoke run: logistic recall 0.60 at 5 % → 0.41 at 20 %) — a long firing run counted as one pick at
+  its first bar. Now a pick claims only its tolerance window; continued firing opens a new pick every tol + 1 bars.
+  Tests `test_picks_long_run_opens_new_pick_every_window`, `test_recall_monotone_in_firing_rate` added. After the fix
+  recall is monotone (logistic 0.02 → 0.99 across RATES).
+- **Replay:** ~24 s per 15m stock (54k bars, global params), 6 workers; synthetic 10k bars ≈ 3 s.
+- **Smoke report (NOT a ledger arm — 6 hindsight-picked watchlist names):** `reviews/model_lab/runs/smoke_l1_logit_t1z5.md`.
