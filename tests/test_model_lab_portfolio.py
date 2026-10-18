@@ -354,3 +354,89 @@ def test_queue_and_current_rank_jointly(lab):
     assert list(tr["symbol"])[:2] == ["A", "B"]
     assert tr[tr["symbol"] == "B"].iloc[0]["queued_from"] == pd.Timestamp(DAYS[0])
     assert "C" not in list(tr["symbol"])[:2]
+
+
+# ------------------------------------------------------------------ S0c combined ranking
+
+def _flatbars(n, px=100.0):
+    ts = pd.bdate_range("2021-03-01", periods=n).values.astype("datetime64[ns]")
+    return _bars([(px, px + 1, px - 1, px)] * n, ts=ts)
+
+
+def test_sources_empty_is_identical(lab):
+    bars, sc = _toy1()
+    lab.make("r", "day", bars, sc)
+    tr, _, _ = _sim(lab, stop_pct=0.05, target_pct=0.10, sources=())
+    assert list(tr["symbol"]) == ["A", "B", "A"]
+    assert list(tr["reason"]) == ["STOP", "TARGET", "STOP"]
+    assert (tr["source"] == "run").all()
+
+
+def test_single_source_topk_equals_plain(lab):
+    W, H = 2, 3
+    bars = {"A": synth.synthetic_day(14, seed=1), "B": synth.synthetic_day(14, seed=2),
+            "C": synth.synthetic_day(14, seed=5)}
+    rng = np.random.default_rng(9)
+    sc = {s: rng.random(14) for s in bars}
+    lab.make("r", "day", bars, sc)
+    cut = {s: np.where(np.arange(14) < W, np.nan, v) for s, v in sc.items()}
+    lab.make("r2", "day", bars, cut)
+    kw = dict(capital=20_000, slot=10_000, topk=2, stop_pct=0.05)
+    plain, _, _ = _sim(lab, run_id="r2", hold_bars=H, **kw)
+    comb, _, _ = _sim(lab, run_id="r", hold_bars=99, sources=(("run", H),), window_sessions=W, **kw)
+    assert len(plain) > 3
+    cols = ["symbol", "entry_ts", "exit_ts", "entry_px", "exit_px"]
+    pd.testing.assert_frame_equal(plain[cols].reset_index(drop=True), comb[cols].reset_index(drop=True))
+
+
+def test_causal_percentiles():
+    d = np.array(["2021-03-01", "2021-03-01", "2021-03-02", "2021-03-03", "2021-03-04"], "datetime64[D]")
+    s = np.array([1.0, 3.0, 2.0, 2.5, 0.5])
+    p = portfolio.causal_percentiles(d, s, 2)
+    assert np.isnan(p[:3]).all()                       # warm-up: fewer than 2 prior dates
+    assert p[3] == pytest.approx(2 / 3)                # pool {1,3,2}: 1 and 2 are <= 2.5
+    assert p[4] == 0.0                                 # pool {2,2.5}
+    s2 = s.copy()
+    s2[3], s2[4] = 99.0, -5.0                          # changing D's own score / later scores
+    p2 = portfolio.causal_percentiles(d, s2, 2)
+    assert p2[3] == 1.0 and p2[4] == 0.0 and p2[3] != p[3]
+    s3 = s.copy()
+    s3[4] = 50.0                                       # a later date never moves an earlier percentile
+    assert portfolio.causal_percentiles(d, s3, 2)[3] == p[3]
+    assert np.isnan(portfolio.causal_percentiles(d, np.array([1, 3, 2, np.nan, 0.5]), 2)[3])
+
+
+def test_per_pick_hold_and_source(lab):
+    n = 12
+    run = np.full(n, NAN)
+    pr = np.full(n, NAN)
+    run[[0, 1, 5]] = [0.4, 0.5, 0.1]
+    pr[[0, 1, 5]] = [0.6, 0.5, 0.9]
+    lab.make("r", "day", {"A": _flatbars(n)}, {"A": run}, extra={"A": {"p": pr}})
+    tr, _, _ = _sim(lab, sources=(("run", 2), ("pred:p", 5)), window_sessions=1)
+    assert list(tr["source"]) == ["run", "pred:p"]
+    assert list(tr["held_bars"]) == [2, 5]
+    assert list(tr["reason"]) == ["TIME", "TIME"]
+    # ties between sources go to the first listed
+    run2 = np.full(n, NAN)
+    run2[[0, 1]] = [0.4, 0.5]
+    lab.make("t", "day", {"A": _flatbars(n)}, {"A": run2}, extra={"A": {"p": run2.copy()}})
+    a, _, _ = _sim(lab, run_id="t", sources=(("run", 2), ("pred:p", 5)), window_sessions=1)
+    b, _, _ = _sim(lab, run_id="t", sources=(("pred:p", 5), ("run", 2)), window_sessions=1)
+    assert (a.loc[0, "source"], a.loc[0, "held_bars"]) == ("run", 2)
+    assert (b.loc[0, "source"], b.loc[0, "held_bars"]) == ("pred:p", 5)
+
+
+def test_source_missing_ref_is_nan_for_that_source_only(lab):
+    n = 10
+    bars = {"A": synth.synthetic_day(n, seed=1), "B": synth.synthetic_day(n, seed=2)}
+    sc = {"A": np.full(n, NAN), "B": 10.0 + np.arange(n)}
+    lab.make("r", "day", bars, {"A": np.arange(n) * 0.1, "B": sc["B"]})
+    references.write_refs("day", ["A"], ["coin"])          # B has no ref file
+    spec = _spec(sources=(("ref:coin", 2), ("run", 2)), window_sessions=1)
+    dB = portfolio._load_symbol(spec, "day", "B")
+    assert dB is not None
+    assert not np.isfinite(dB["src_scores"][0]).any() and np.isfinite(dB["src_scores"][1]).all()
+    assert np.isfinite(portfolio._load_symbol(spec, "day", "A")["src_scores"][0]).all()
+    tr, _, _ = _sim(lab, sources=(("ref:coin", 2), ("run", 2)), window_sessions=1)
+    assert (tr["symbol"] == "B").any() and (tr[tr["symbol"] == "B"]["source"] == "run").all()

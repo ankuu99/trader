@@ -8,7 +8,7 @@ trader.costs (pure function) is allowed.
 """
 import argparse
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,9 @@ class SimSpec:
     exclusions: tuple = ()               # (symbol, from_date, to_date|None)
     queue_bars: int = 0                  # S0b: crowded-out candidates wait this many of their own bars (0 = off)
     queue_max_runup: float | None = None  # S0b: drop a queued item once close > signal_close * (1 + this)
+    # S0c: ((score_source, hold_bars), ...). Non-empty -> replaces score_source and the time stop (hold_bars is
+    # then ignored for positions; kept for the report). Scores are pooled as causal percentiles.
+    sources: tuple = ()
 
     @property
     def n_slots(self) -> int:
@@ -66,6 +69,27 @@ def causal_thresholds(dates, scores, rate: float, window: int) -> dict:
     for i in range(window, len(uniq)):
         pool = np.concatenate(per[i - window:i])
         out[uniq[i]] = float(np.quantile(pool, 1.0 - rate))
+    return out
+
+
+def causal_percentiles(dates, scores, window: int) -> np.ndarray:
+    """Per row on calendar date D: share of this source's finite scores on the `window` distinct dates strictly
+    before D that are <= the row's score. NaN for NaN scores and in warm-up (fewer than `window` prior dates)."""
+    d = np.asarray(dates).astype("datetime64[D]")
+    s = np.asarray(scores, float)
+    out = np.full(len(s), np.nan)
+    ok = np.isfinite(s)
+    if not ok.any():
+        return out
+    d_ok, s_ok, ix_ok = d[ok], s[ok], np.flatnonzero(ok)
+    order = np.argsort(d_ok, kind="stable")
+    d_ok, s_ok, ix_ok = d_ok[order], s_ok[order], ix_ok[order]
+    uniq, start = np.unique(d_ok, return_index=True)
+    per_s = np.split(s_ok, start[1:])
+    per_ix = np.split(ix_ok, start[1:])
+    for i in range(window, len(uniq)):
+        pool = np.sort(np.concatenate(per_s[i - window:i]))
+        out[per_ix[i]] = np.searchsorted(pool, per_s[i], side="right") / len(pool)
     return out
 
 
@@ -103,6 +127,20 @@ def money_metrics(trades_net: np.ndarray, equity: pd.Series, capital: float, yea
 # ------------------------------------------------------------------ data assembly
 
 def _load_symbol(spec: SimSpec, tf: str, sym: str):
+    if spec.sources:
+        # S0c: one score array per source (same rows as the plain loader); a missing ref is NaN for that source only
+        parts = [_load_symbol(replace(spec, score_source=src, sources=()), tf, sym) for src, _h in spec.sources]
+        base = next((p_ for p_ in parts if p_ is not None), None)
+        if base is None:
+            return None
+        n = len(base["ts"])
+        arrs = [p_["score"] if p_ is not None else np.full(n, np.nan) for p_ in parts]
+        if not any(np.isfinite(a).any() for a in arrs):
+            return None
+        out = dict(base)
+        out["src_scores"] = arrs
+        out["score"] = next(a for a in arrs if np.isfinite(a).any())
+        return out
     sc_path = paths.RUNS_DIR / spec.run_id / "scores" / f"{paths.sym_file(sym)}.parquet"
     if not sc_path.exists():
         return None
@@ -161,17 +199,39 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
     g_sym = np.concatenate([np.full(len(data[s]["ts"]), sid[s], np.int32) for s in syms])
     g_idx = np.concatenate([np.arange(len(data[s]["ts"]), dtype=np.int64) for s in syms])
     g_score = np.concatenate([np.where(data[s]["excl"], np.nan, data[s]["score"]) for s in syms])
+    g_srcs = ([np.concatenate([np.where(data[s]["excl"], np.nan, data[s]["src_scores"][k]) for s in syms])
+               for k in range(len(spec.sources))] if spec.sources else [])
     g_close = np.concatenate([data[s]["c"] for s in syms])
     order = np.argsort(g_ts, kind="stable")           # within a timestamp: symbol ascending
     g_ts, g_sym, g_idx, g_score, g_close = g_ts[order], g_sym[order], g_idx[order], g_score[order], g_close[order]
+    g_srcs = [a[order] for a in g_srcs]
     g_date = g_ts.astype("datetime64[D]")
+    if spec.sources:
+        # S0c: causal percentile per source, combined = best percentile (ties -> first listed), raw = its raw score
+        pcts = [causal_percentiles(g_date, a, spec.window_sessions) for a in g_srcs]
+        g_comb = np.full(len(g_ts), np.nan)
+        g_raw = np.full(len(g_ts), np.nan)
+        g_win = np.zeros(len(g_ts), np.int32)
+        for k in range(len(pcts) - 1, -1, -1):           # reverse so the first-listed wins ties
+            pk = pcts[k]
+            take = np.isfinite(pk) & (~np.isfinite(g_comb) | (pk >= g_comb))
+            g_comb[take], g_raw[take], g_win[take] = pk[take], g_srcs[k][take], k
+        any_fin = np.zeros(len(g_ts), bool)
+        for a in g_srcs:
+            any_fin |= np.isfinite(a)
+        fin_dates = g_date[any_fin]
+        g_score = g_comb
+    else:
+        g_raw = g_score
+        g_win = np.zeros(len(g_ts), np.int32)
+        fin_dates = g_date[np.isfinite(g_score)]
     nrows = len(g_ts)
     cuts = np.flatnonzero(np.diff(g_ts.astype("int64"))) + 1 if nrows else np.array([], int)
     starts = np.concatenate([[0], cuts]) if nrows else np.array([], int)
     ends = np.concatenate([cuts, [nrows]]) if nrows else np.array([], int)
 
-    thr = causal_thresholds(g_date, g_score, spec.rate, spec.window_sessions) if spec.entry_mode == "rate" else {}
-    fin_dates = g_date[np.isfinite(g_score)]
+    thr = (causal_thresholds(g_date, g_score, spec.rate, spec.window_sessions)
+           if spec.entry_mode == "rate" and not spec.sources else {})
     first_scored = fin_dates.min() if len(fin_dates) else (g_date.max() if nrows else np.datetime64("NaT"))
 
     open_pos: dict[int, dict] = {}
@@ -202,7 +262,7 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                        "exit_ts": xt.to_datetime64(), "exit_px": px, "qty": p["qty"], "reason": reason,
                        "held_bars": p["held"], "gross": gross, "cost": cost, "net": net,
                        "ret_pct": net / (p["qty"] * p["entry_px"]), "fold_id": p["fold"], "score": p["score"],
-                       "queued_from": p["queued_from"]})
+                       "queued_from": p["queued_from"], "source": p["source"]})
 
     for gi in range(len(starts)):
         a, b = int(starts[gi]), int(ends[gi])
@@ -225,7 +285,8 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                 qty_zero += 1
                 continue
             open_pos[si] = {"entry_px": px, "qty": qty, "entry_ts": t, "signal_ts": pe["signal_ts"], "held": 1,
-                            "peak": px, "fold": pe["fold"], "score": pe["score"], "queued_from": pe.get("queued_from")}
+                            "peak": px, "fold": pe["fold"], "score": pe["score"], "queued_from": pe.get("queued_from"),
+                            "hold": pe["hold"], "source": pe["source"]}
             fresh.add(si)
         # c. exits on bar t
         for si in [k for k in open_pos if k in bar]:
@@ -247,26 +308,28 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                     and c <= p["peak"] * (1 - spec.trail_pct)):
                 pend_out[si] = "TRAIL"
                 continue
-            if p["held"] >= spec.hold_bars:
+            if p["held"] >= p["hold"]:
                 close(si, c, t, i, "TIME")
         # d. entries
         sc = g_score[a:b]
         fin = np.isfinite(sc)
         if fin.any():
             if spec.entry_mode == "rate":
-                th = thr.get(g_date[a])
+                th = (1.0 - spec.rate) if spec.sources else thr.get(g_date[a])
                 cand = np.flatnonzero(fin & (sc >= th)) if th is not None else np.array([], int)
             else:
                 fi = np.flatnonzero(fin)
-                srt = fi[np.lexsort((g_sym[a:b][fi], -sc[fi]))]
+                srt = fi[np.lexsort((g_sym[a:b][fi], -g_raw[a:b][fi], -sc[fi]))]
                 cand = srt[:max(spec.topk, 0)]
             free = spec.n_slots - len(open_pos) - len(pend_in)
-            cand = cand[np.lexsort((g_sym[a:b][cand], -sc[cand]))] if len(cand) else cand
+            cand = cand[np.lexsort((g_sym[a:b][cand], -g_raw[a:b][cand], -sc[cand]))] if len(cand) else cand
         else:
             free = spec.n_slots - len(open_pos) - len(pend_in)
             cand = np.array([], int)
-        # pool: (score, symbol index, bar index, fold, queued_from|None); queued items only when the queue is on
-        pool = [(float(sc[k]), int(g_sym[a + k]), int(g_idx[a + k]), None, None) for k in cand]
+        # pool: (score, symbol index, bar index, fold, queued_from|None, raw score, source index); queued items
+        # only when the queue is on (they keep the source/hold of the original pick)
+        pool = [(float(sc[k]), int(g_sym[a + k]), int(g_idx[a + k]), None, None, float(g_raw[a + k]),
+                 int(g_win[a + k])) for k in cand]
         if spec.queue_bars > 0 and queue:
             cur = {p_[1] for p_ in pool}
             for si in list(queue):
@@ -281,23 +344,25 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                         or si in open_pos or si in pend_in or d["excl"][i]):
                     del queue[si]
                     continue
-                pool.append((q["score"], si, i, q["fold"], q["signal_ts"]))
-            pool.sort(key=lambda r: (-r[0], r[1]))
-        for score_, si, i, fold_, qfrom in pool:
+                pool.append((q["score"], si, i, q["fold"], q["signal_ts"], q["raw"], q["src"]))
+            pool.sort(key=lambda r: (-r[0], -r[5], r[1]))
+        for score_, si, i, fold_, qfrom, raw_, src_ in pool:
             eligible = not (si in open_pos or si in pend_in)
             if eligible and spec.reentry_gap_bars and si in last_exit and i - last_exit[si] < spec.reentry_gap_bars:
                 eligible = False
             if eligible and free > 0:
                 if fold_ is None:
                     fold_ = int(data[syms[si]]["fold"][i])
-                pend_in[si] = {"signal_ts": t, "fold": fold_, "score": score_, "queued_from": qfrom}
+                pend_in[si] = {"signal_ts": t, "fold": fold_, "score": score_, "queued_from": qfrom,
+                               "hold": spec.sources[src_][1] if spec.sources else spec.hold_bars,
+                               "source": spec.sources[src_][0] if spec.sources else spec.score_source}
                 free -= 1
                 queue.pop(si, None)
                 if qfrom is not None:
                     queue_entries += 1
             elif eligible and spec.queue_bars > 0 and qfrom is None:
                 queue[si] = {"signal_ts": t, "signal_idx": i, "signal_close": float(data[syms[si]]["c"][i]),
-                             "score": score_, "fold": int(data[syms[si]]["fold"][i])}
+                             "score": score_, "fold": int(data[syms[si]]["fold"][i]), "raw": raw_, "src": src_}
         # e. end-of-date equity row (from the first date with any score: bars start years before the run's
         # first test fold, and counting those idle years would understate the annualised return)
         if g_date[a] < first_scored:
@@ -323,7 +388,7 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
         eq_rows[-1]["utilisation"] = 0.0
         eq_rows[-1]["open_positions"] = 0
     cols = ["symbol", "signal_ts", "entry_ts", "entry_px", "exit_ts", "exit_px", "qty", "reason", "held_bars",
-            "gross", "cost", "net", "ret_pct", "fold_id", "score", "queued_from"]
+            "gross", "cost", "net", "ret_pct", "fold_id", "score", "queued_from", "source"]
     tr = pd.DataFrame(trades, columns=cols)
     for c in ("signal_ts", "entry_ts", "exit_ts", "queued_from"):
         tr[c] = pd.to_datetime(tr[c]).astype("datetime64[ns]")
@@ -383,6 +448,9 @@ def run(spec: SimSpec) -> dict:
             yrs.append({"year": int(y), "trades": int(len(t)), "net": float(t["net"].sum()),
                         "max_dd_pct": _max_dd(e)[1]})
         summary["by_year"] = yrs
+        if spec.sources and len(tr):
+            bs = tr.groupby("source")["net"].agg(["count", "sum"])
+            summary["by_source"] = {k: {"trades": int(r["count"]), "net": float(r["sum"])} for k, r in bs.iterrows()}
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
     report_portfolio(summary)
     return summary
@@ -414,6 +482,10 @@ def report_portfolio(summary: dict) -> str:
         L += ["", "## By calendar year", "", "| year | trades | net ₹ | max DD % |", "|---|---|---|---|"]
         for y in summary["by_year"]:
             L.append(f"| {y['year']} | {y['trades']} | {_f(y['net'], 0)} | {_f(y['max_dd_pct'], 1)} |")
+    if summary.get("by_source"):
+        L += ["", "## By score source", "", "| source | trades | net ₹ |", "|---|---|---|"]
+        for k, v in summary["by_source"].items():
+            L.append(f"| {k} | {v['trades']} | {_f(v['net'], 0)} |")
     L += ["", "## Notes", "",
           "- Rate-mode threshold: (1-rate) quantile of eligible scores pooled over the previous "
           f"{spec['window_sessions']} distinct dates (strictly before); the window crosses fold boundaries, so a "
