@@ -43,3 +43,32 @@ sell after H bars. Each with model, production P(min) and coins (day 21 draws, 1
 | SC2-m500 | 15m | 500 | 1 month | DONE — **A05 ₹6.27 L, Calmar 0.36 (11/11 coins), DD 31 % vs coin 52 %**; prod ₹3.95 L / 0.11 |
 
 SC2 results and reading: `reviews/model_lab/SC2_hold_20261018.md`.
+
+## SC3 — exits on the two best SC2 frameworks (owner: "Do all three", 2026-10-18)
+
+Frameworks: **P60** = production P(min) score, day, best 2 per day, max hold 60 bars; **M500** = A05 score, 15m,
+top-1 % causal threshold, max hold 500 bars. ₹6L, 15 × ₹40k. Each exit set run with the framework's score and 11
+coin draws (stored + seeds 101–110); P60 also with A01's score, M500 also with production's (cross-reference).
+Fractions: stop/target vs entry price; trail = drop from the highest close since entry, active once that close is
+≥ entry × (1 + activate).
+
+| ID | Exit set | Status |
+|---|---|---|
+| SC3-x0 | none (time only) = SC2 baseline | PLANNED (re-run) |
+| SC3-x1 | stop −20 % (production's black-swan stop) | PLANNED |
+| SC3-x2 | stop −10 % | PLANNED |
+| SC3-x3 | trail 10 % after +10 % | PLANNED |
+| SC3-x4 | trail 15 % after +10 % | PLANNED |
+| SC3-x5 | target +20 % | PLANNED |
+| SC3-x6 | stop −20 % + trail 10 % after +10 % | PLANNED |
+
+## SC4 — combined ranking, per-pick hold (owner, 2026-10-18; needs simulator S0c)
+
+Day, ₹6L, 15 × ₹40k, best 2 per day from one pooled ranking of A01 and production P(min); each score converted to its
+causal percentile (vs its own previous 60 sessions); a pick holds 20 bars if it came from A01, 60 if from production.
+Controls: same with coin percentiles; and the two sleeves split (7 slots A01/20d + 8 slots production/60d, summed).
+
+| ID | Config | Status |
+|---|---|---|
+| SC4-a | pooled A01 (hold 20) + production (hold 60), best 2/day | PLANNED (needs S0c) |
+| SC4-b | split sleeves: 7 × ₹40k A01 best-1/day hold 20 + 8 × ₹40k production best-1/day hold 60 | PLANNED |
