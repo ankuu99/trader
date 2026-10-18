@@ -1,5 +1,5 @@
 # Strategy S0c — combined ranking of several scores with a per-pick hold
-Written: 2026-10-18 · Tag: TD-023 · Status: TO DO
+Written: 2026-10-18 · Tag: TD-023 · Status: DONE
 
 ## Source
 
@@ -64,4 +64,10 @@ byte-identical to today.**
 - [ ] Do NOT run on real data; do not touch `lab_data/`
 
 ## Completion record
-_(filled by the main session after validation)_
+- **Completed:** 2026-10-18 · trader-implementer (sonnet) in a separate worktree; validated by the main session —
+  full suite 684 passed; diff read against every step; real-data use in SC4 (pooled A01 + production: per-source
+  trades 598 / 762, holds 20 / 60 applied).
+- **Implementer choices (accepted):** percentile warm-up counts dates with finite scores of that source (a
+  single-source run therefore enters nothing in its first `window` dates — the equality test NaNs those dates on
+  the plain side); equity start = first date with any finite raw source score; `source` column on every trades
+  frame; no CLI flag for `sources` (Python API only).
