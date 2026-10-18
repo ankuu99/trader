@@ -24,3 +24,20 @@ coin vs production; per year in the reports.
 | SC1-3c | top-K per day | best 3 each day | DONE — ₹10.15 L (19/21), Calmar 0.22 (19/21), use 93 %; production ₹11.34 L / 0.27 |
 
 Luck band: each config also run with 20 extra coin seeds (`coin:101…120`) + the stored coin = 21 draws; "x/21" = coins the model beats. Results and reading: `reviews/model_lab/SC1_capacity_20261018.md`.
+
+## SC2 — hold duration (owner: "Try different hold durations", 2026-10-18)
+
+Day: SC1-3b framework (A01, ₹6L, 15 × ₹40k, best 2 per day, no stop/target/trail), exit = sell after H bars.
+15m: A05, ₹6L, 15 × ₹40k, top-1 % causal threshold (the S0 baseline; top-K per 15m bar would trade ~50 a day),
+sell after H bars. Each with model, production P(min) and coins (day 21 draws, 15m 11 draws).
+
+| ID | TF | H (bars) | ≈ | Status |
+|---|---|---|---|---|
+| SC2-d5 | day | 5 | 1 week | PLANNED |
+| SC2-d10 | day | 10 | 2 weeks | PLANNED |
+| SC2-d20 | day | 20 | 1 month (= SC1-3b) | PLANNED (re-run) |
+| SC2-d40 | day | 40 | 2 months | PLANNED |
+| SC2-d60 | day | 60 | 3 months | PLANNED |
+| SC2-m25 | 15m | 25 | 1 session | PLANNED |
+| SC2-m125 | 15m | 125 | 1 week (= S0 15m) | PLANNED (re-run) |
+| SC2-m500 | 15m | 500 | 1 month | PLANNED |
