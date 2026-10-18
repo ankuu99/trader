@@ -232,6 +232,10 @@ def test_score_source_ref_and_pred(lab, monkeypatch):
         coin = references.read_ref("day", "coin", s)["score"].to_numpy(float)
         np.testing.assert_allclose(ref["score"][m], coin[m])
         np.testing.assert_allclose(pr["score"][m], pred[s]["pred_x"][m], rtol=1e-6)
+        c11 = portfolio._load_symbol(_spec(score_source="coin:11"), "day", s)
+        np.testing.assert_allclose(c11["score"][m], coin[m], rtol=1e-6)   # on-the-fly seed 11 == stored coin
+        c12 = portfolio._load_symbol(_spec(score_source="coin:12"), "day", s)
+        assert (np.isfinite(c12["score"]) == m).all() and not np.allclose(c12["score"][m], coin[m])
 
 
 def test_money_metrics_hand_case():
@@ -282,3 +286,71 @@ def test_ex2020_headline_excludes_2020_equity_change():
     m = portfolio._headline(tr, eq, _spec(), drop2020=True)
     assert m["total_net"] == 20_000.0
     assert m["max_dd_abs"] == 0.0        # the 2020 crash is not in the ex-2020 curve
+
+
+# ------------------------------------------------------------------ S0b carry-over queue
+
+def _flat(px, n=7):
+    return _bars([(px, px + 1, px - 1, px)] * n)
+
+
+def _queue_world(lab, b_closes=None, c_score=False):
+    """1 slot, hold 2 bars. d0: A (.9) and B (.5 or .8) both score; A fills d1, TIME-exits d2 close (slot frees at d2)."""
+    B = _flat(50)
+    if b_closes is not None:
+        B["close"] = b_closes
+    bars = {"A": _flat(100), "B": B}
+    sc = {"A": [0.9] + [NAN] * 6, "B": [0.8] + [NAN] * 6}
+    if c_score:
+        bars["C"] = _flat(20)
+        sc["C"] = [NAN, NAN, 0.3, NAN, NAN, NAN, NAN]
+    lab.make("r", "day", bars, sc)
+
+
+def test_queue_off_is_identical(lab):
+    bars, sc = _toy1()
+    lab.make("r", "day", bars, sc)
+    t0, e0, _ = _sim(lab, stop_pct=0.05, target_pct=0.10)
+    t1, e1, _ = _sim(lab, stop_pct=0.05, target_pct=0.10, queue_bars=0)
+    pd.testing.assert_frame_equal(t0, t1)
+    pd.testing.assert_frame_equal(e0, e1)
+    assert t1["queued_from"].isna().all()
+
+
+def test_queue_enters_crowded_out_candidate_later(lab):
+    _queue_world(lab)
+    tr, _, info = _sim(lab, topk=2, hold_bars=2, queue_bars=3)
+    assert list(tr["symbol"]) == ["A", "B"]
+    b = tr[tr["symbol"] == "B"].iloc[0]
+    assert b["queued_from"] == pd.Timestamp(DAYS[0])
+    assert b["signal_ts"] == pd.Timestamp(DAYS[2])
+    assert b["entry_ts"] == pd.Timestamp(DAYS[3])
+    assert tr[tr["symbol"] == "A"].iloc[0]["queued_from"] is pd.NaT
+    assert info["queue_entries"] == 1
+
+
+def test_queue_expires(lab):
+    _queue_world(lab)
+    tr, _, info = _sim(lab, topk=2, hold_bars=2, queue_bars=1)
+    assert list(tr["symbol"]) == ["A"]
+    assert info["queue_entries"] == 0
+    tr0, _, _ = _sim(lab, topk=2, hold_bars=2)
+    assert list(tr0["symbol"]) == ["A"]
+
+
+def test_queue_runup_drop(lab):
+    closes = [50, 50, 52, 50, 50, 50, 50]          # d2 close 52 > 50 * 1.02 at the moment the slot frees
+    _queue_world(lab, b_closes=closes)
+    tr, _, _ = _sim(lab, topk=2, hold_bars=2, queue_bars=3, queue_max_runup=0.02)
+    assert list(tr["symbol"]) == ["A"]
+    tr2, _, _ = _sim(lab, topk=2, hold_bars=2, queue_bars=3, queue_max_runup=0.05)
+    assert list(tr2["symbol"]) == ["A", "B"]
+
+
+def test_queue_and_current_rank_jointly(lab):
+    _queue_world(lab, c_score=True)
+    tr, _, _ = _sim(lab, topk=2, hold_bars=2, queue_bars=3)
+    # d2: queued B (original .8) beats current C (.3) for the single freed slot; C is then queued behind it
+    assert list(tr["symbol"])[:2] == ["A", "B"]
+    assert tr[tr["symbol"] == "B"].iloc[0]["queued_from"] == pd.Timestamp(DAYS[0])
+    assert "C" not in list(tr["symbol"])[:2]

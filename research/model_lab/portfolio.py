@@ -39,6 +39,8 @@ class SimSpec:
     trail_activate_pct: float = 0.0
     reentry_gap_bars: int = 0
     exclusions: tuple = ()               # (symbol, from_date, to_date|None)
+    queue_bars: int = 0                  # S0b: crowded-out candidates wait this many of their own bars (0 = off)
+    queue_max_runup: float | None = None  # S0b: drop a queued item once close > signal_close * (1 + this)
 
     @property
     def n_slots(self) -> int:
@@ -116,6 +118,10 @@ def _load_symbol(spec: SimSpec, tf: str, sym: str):
         val = sc["score"].to_numpy(float)
     elif spec.score_source.startswith("pred:"):
         val = sc[spec.score_source[5:]].to_numpy(float)
+    elif spec.score_source.startswith("coin:"):
+        # coin with any seed, generated on the fly on the run's rows (coin:11 == the stored ref:coin) — repeated
+        # seeds give the luck band a single coin draw cannot (main session 2026-10-18)
+        val = references.ref_scores(b, "coin", sym, int(spec.score_source[5:]))[ix]
     elif spec.score_source.startswith("ref:"):
         ref = references.read_ref(tf, spec.score_source[4:], sym)
         if ref is None:
@@ -177,6 +183,8 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
     eq_rows: list[dict] = []
     realised = 0.0
     qty_zero = 0
+    queue: dict[int, dict] = {}
+    queue_entries = 0
 
     def close(si, px, ts, idx, reason):
         nonlocal realised
@@ -193,7 +201,8 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
         trades.append({"symbol": s, "signal_ts": p["signal_ts"], "entry_ts": p["entry_ts"], "entry_px": p["entry_px"],
                        "exit_ts": xt.to_datetime64(), "exit_px": px, "qty": p["qty"], "reason": reason,
                        "held_bars": p["held"], "gross": gross, "cost": cost, "net": net,
-                       "ret_pct": net / (p["qty"] * p["entry_px"]), "fold_id": p["fold"], "score": p["score"]})
+                       "ret_pct": net / (p["qty"] * p["entry_px"]), "fold_id": p["fold"], "score": p["score"],
+                       "queued_from": p["queued_from"]})
 
     for gi in range(len(starts)):
         a, b = int(starts[gi]), int(ends[gi])
@@ -216,7 +225,7 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                 qty_zero += 1
                 continue
             open_pos[si] = {"entry_px": px, "qty": qty, "entry_ts": t, "signal_ts": pe["signal_ts"], "held": 1,
-                            "peak": px, "fold": pe["fold"], "score": pe["score"]}
+                            "peak": px, "fold": pe["fold"], "score": pe["score"], "queued_from": pe.get("queued_from")}
             fresh.add(si)
         # c. exits on bar t
         for si in [k for k in open_pos if k in bar]:
@@ -252,19 +261,43 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                 srt = fi[np.lexsort((g_sym[a:b][fi], -sc[fi]))]
                 cand = srt[:max(spec.topk, 0)]
             free = spec.n_slots - len(open_pos) - len(pend_in)
-            if free > 0 and len(cand):
-                cand = cand[np.lexsort((g_sym[a:b][cand], -sc[cand]))]
-                for k in cand:
-                    if free <= 0:
-                        break
-                    si = int(g_sym[a + k])
-                    if si in open_pos or si in pend_in:
-                        continue
-                    i = int(g_idx[a + k])
-                    if spec.reentry_gap_bars and si in last_exit and i - last_exit[si] < spec.reentry_gap_bars:
-                        continue
-                    pend_in[si] = {"signal_ts": t, "fold": int(data[syms[si]]["fold"][i]), "score": float(sc[k])}
-                    free -= 1
+            cand = cand[np.lexsort((g_sym[a:b][cand], -sc[cand]))] if len(cand) else cand
+        else:
+            free = spec.n_slots - len(open_pos) - len(pend_in)
+            cand = np.array([], int)
+        # pool: (score, symbol index, bar index, fold, queued_from|None); queued items only when the queue is on
+        pool = [(float(sc[k]), int(g_sym[a + k]), int(g_idx[a + k]), None, None) for k in cand]
+        if spec.queue_bars > 0 and queue:
+            cur = {p_[1] for p_ in pool}
+            for si in list(queue):
+                if si not in bar:
+                    continue                      # no bar at t: kept unchanged
+                q = queue[si]
+                i = bar[si]
+                d = data[syms[si]]
+                if (si in cur or i - q["signal_idx"] > spec.queue_bars
+                        or (spec.queue_max_runup is not None
+                            and d["c"][i] > q["signal_close"] * (1 + spec.queue_max_runup))
+                        or si in open_pos or si in pend_in or d["excl"][i]):
+                    del queue[si]
+                    continue
+                pool.append((q["score"], si, i, q["fold"], q["signal_ts"]))
+            pool.sort(key=lambda r: (-r[0], r[1]))
+        for score_, si, i, fold_, qfrom in pool:
+            eligible = not (si in open_pos or si in pend_in)
+            if eligible and spec.reentry_gap_bars and si in last_exit and i - last_exit[si] < spec.reentry_gap_bars:
+                eligible = False
+            if eligible and free > 0:
+                if fold_ is None:
+                    fold_ = int(data[syms[si]]["fold"][i])
+                pend_in[si] = {"signal_ts": t, "fold": fold_, "score": score_, "queued_from": qfrom}
+                free -= 1
+                queue.pop(si, None)
+                if qfrom is not None:
+                    queue_entries += 1
+            elif eligible and spec.queue_bars > 0 and qfrom is None:
+                queue[si] = {"signal_ts": t, "signal_idx": i, "signal_close": float(data[syms[si]]["c"][i]),
+                             "score": score_, "fold": int(data[syms[si]]["fold"][i])}
         # e. end-of-date equity row (from the first date with any score: bars start years before the run's
         # first test fold, and counting those idle years would understate the annualised return)
         if g_date[a] < first_scored:
@@ -290,11 +323,11 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
         eq_rows[-1]["utilisation"] = 0.0
         eq_rows[-1]["open_positions"] = 0
     cols = ["symbol", "signal_ts", "entry_ts", "entry_px", "exit_ts", "exit_px", "qty", "reason", "held_bars",
-            "gross", "cost", "net", "ret_pct", "fold_id", "score"]
+            "gross", "cost", "net", "ret_pct", "fold_id", "score", "queued_from"]
     tr = pd.DataFrame(trades, columns=cols)
-    for c in ("signal_ts", "entry_ts", "exit_ts"):
+    for c in ("signal_ts", "entry_ts", "exit_ts", "queued_from"):
         tr[c] = pd.to_datetime(tr[c]).astype("datetime64[ns]")
-    return tr, pd.DataFrame(eq_rows), {"qty_zero": qty_zero, "n_slots": spec.n_slots}
+    return tr, pd.DataFrame(eq_rows), {"qty_zero": qty_zero, "n_slots": spec.n_slots, "queue_entries": queue_entries}
 
 
 # ------------------------------------------------------------------ run + report
@@ -386,7 +419,8 @@ def report_portfolio(summary: dict) -> str:
           f"{spec['window_sessions']} distinct dates (strictly before); the window crosses fold boundaries, so a "
           "model refit that shifts the score scale shifts the threshold only gradually.",
           f"- Skipped symbols (no scores/bars/ref): {len(summary.get('skipped_symbols', []))}; "
-          f"qty_zero skips: {summary['info']['qty_zero']}.",
+          f"qty_zero skips: {summary['info']['qty_zero']}; entries from the carry-over queue: "
+          f"{summary['info'].get('queue_entries', 0)} (queue_bars {spec.get('queue_bars', 0)}).",
           "", "## Spec", "", "```json", json.dumps(spec, indent=2, default=str), "```", ""]
     text = "\n".join(L)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -409,11 +443,14 @@ def main() -> None:
     ap.add_argument("--slot", type=float, default=40_000)
     ap.add_argument("--entry-mode", default="rate", choices=["rate", "topk"])
     ap.add_argument("--topk", type=int, default=0)
+    ap.add_argument("--queue-bars", type=int, default=0)
+    ap.add_argument("--queue-max-runup", type=float, default=None)
     a = ap.parse_args()
     spec = SimSpec(sim_id=a.sim_id, run_id=a.run, hold_bars=a.hold_bars, score_source=a.score_source,
                    capital=a.capital, slot=a.slot, entry_mode=a.entry_mode, rate=a.rate, topk=a.topk,
                    stop_pct=a.stop_pct, target_pct=a.target_pct, trail_pct=a.trail_pct,
-                   trail_activate_pct=a.trail_activate_pct)
+                   trail_activate_pct=a.trail_activate_pct,
+                   queue_bars=a.queue_bars, queue_max_runup=a.queue_max_runup)
     s = run(spec)
     print(f"sim {a.sim_id}: {s.get('headline', {}).get('trades', 0)} trades -> {paths.PORTFOLIOS_DIR / a.sim_id}")
 
