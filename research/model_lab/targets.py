@@ -126,7 +126,9 @@ def build_targets(bars: pd.DataFrame, tf: str, **overrides) -> pd.DataFrame:
             ret = c[ni] / c[t] - 1
             r3[ok3] = ret[ok3]
             b3[ok3] = (ni - t)[ok3]
-            s3[ok3] = (100.0 * ret / sig_p)[ok3]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sg = np.where(sig_p > 0, 100.0 * ret / sig_p, np.nan)      # σ_t = 0 -> NaN, never inf
+            s3[ok3] = sg[ok3]
             e3[ok3] = (conf[np.minimum(nxt, len(pidx) - 1)] - t)[ok3]
         out[f"t1z_min_k{k}"] = mn; out[f"t1z_max_k{k}"] = mxx; out[f"t1z_endbars_k{k}"] = eb
         out[f"t3_ret_k{k}"] = r3; out[f"t3_bars_k{k}"] = b3

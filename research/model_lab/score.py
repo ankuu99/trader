@@ -211,6 +211,116 @@ def detection_truths(tgt_cols, tf: str, side: str, run_target: str | None) -> li
     return cols
 
 
+def _is_continuous(target: str | None) -> bool:
+    """Run targets scored on magnitude: T3/T4/T5 continuous columns (not the T5 hit flags or endbars)."""
+    t = target or ""
+    return t.startswith(("t3_", "t4_", "t5_")) and not t.startswith("t5_hit_") and "_endbars_" not in t
+
+
+def decile_table(score, y, n: int = 10) -> dict:
+    """Bin rows by deciles of `score` (rank-based, ties broken by order); mean / median realised y per bin."""
+    score = np.asarray(score, float); y = np.asarray(y, float)
+    ok = ~(np.isnan(score) | np.isnan(y))
+    score, y = score[ok], y[ok]
+    if len(y) < n:
+        return {"rows": [], "spread": float("nan")}
+    r = pd.Series(score).rank(method="first").to_numpy()
+    b = np.minimum(((r - 1) * n / len(r)).astype(int), n - 1)
+    rows = [{"decile": i + 1, "n": int((b == i).sum()), "mean": float(y[b == i].mean()),
+             "median": float(np.median(y[b == i]))} for i in range(n)]
+    return {"rows": rows, "spread": float(rows[-1]["mean"] - rows[0]["mean"])}
+
+
+def magnitude_verdict(score_mat: np.ndarray, models: list[str], y: np.ndarray, fold_idx: np.ndarray,
+                      year: np.ndarray, side: str, fold_ids: list[int], min_rows: int = 200) -> dict:
+    """Does the model (column 0) rank the realised run target better than each reference, fold by fold and year
+    by year? model: signed Spearman; refs: |Spearman| (a reference may rank either way)."""
+    y = np.asarray(y, float)
+    M = len(models)
+
+    def groups(labels):
+        out = {}
+        for g in np.unique(labels):
+            sel = (labels == g) & ~np.isnan(y)
+            if sel.sum() >= min_rows:
+                out[g] = sel
+        return out
+
+    def shares(grp):
+        res = {}
+        for j in range(1, M):
+            wins = n = 0
+            for sel in grp.values():
+                rm = spearman(score_mat[sel, 0], y[sel]); rr = abs(spearman(score_mat[sel, j], y[sel]))
+                if np.isnan(rm) or np.isnan(rr):
+                    continue
+                n += 1; wins += int(rm > rr)
+            res[j] = (wins / n if n else float("nan"), n)
+        return res
+
+    fg = groups(fold_idx); yg = groups(year)
+    fs, ys = shares(fg), shares(yg)
+    vs = {}
+    for j in range(1, M):
+        f_, nf_ = fs[j]; y_, ny_ = ys[j]
+        vs[models[j]] = {"fold_win_share": f_, "n_folds": nf_, "year_win_share": y_, "n_years": ny_,
+                         "win": bool(nf_ > 0 and ny_ > 0 and f_ >= WIN_SHARE and y_ >= WIN_SHARE)}
+    allsel = ~np.isnan(y)
+    pooled = {models[j]: spearman(score_mat[allsel, j], y[allsel]) for j in range(M)}
+    pooled_abs = {k: (abs(v) if not np.isnan(v) else float("nan")) for k, v in pooled.items()}
+    need = ["prod_pmax", "rsi_hi"] if side == "max" else ["prod_pmin", "rsi"]
+    overall = "NO_REF" if any(r not in vs for r in need) else ("PASS" if all(vs[r]["win"] for r in need) else "FAIL")
+    return {"verdicts": vs, "pooled_rho": pooled, "pooled_abs_rho": pooled_abs, "overall": overall,
+            "required_refs": need, "n_folds": len(fg), "n_years": len(yg)}
+
+
+def afterpick_by_year(arrs: dict, model: str, prod: str | None, qa_available: bool) -> dict:
+    """arrs: name -> array [year, net_ret, qa_flag] of the picks at one rate (net_ret may be NaN).
+    Per calendar year mean / median / count for each name; years the model beats prod; pooled ex-QA, ex-2020."""
+    out: dict = {"by_year": {}, "years_model_mean_gt_prod": None, "years_model_median_gt_prod": None,
+                 "years_compared": None, "pooled": {}}
+    clean = {k: (a[~np.isnan(a[:, 1])] if len(a) else np.zeros((0, 3))) for k, a in arrs.items()}
+    years = sorted({int(y) for a in clean.values() for y in a[:, 0]})
+    for y in years:
+        out["by_year"][str(y)] = {}
+        for k, a in clean.items():
+            v = a[a[:, 0] == y, 1]
+            out["by_year"][str(y)][k] = {"picks": int(len(v)), "mean": float(v.mean()) if len(v) else np.nan,
+                                         "median": float(np.median(v)) if len(v) else np.nan}
+    if prod and prod in clean and model in clean:
+        gm = gd = n = 0
+        for y in years:
+            m_, p_ = out["by_year"][str(y)][model], out["by_year"][str(y)][prod]
+            if m_["picks"] == 0 or p_["picks"] == 0:
+                continue
+            n += 1; gm += int(m_["mean"] > p_["mean"]); gd += int(m_["median"] > p_["median"])
+        out["years_model_mean_gt_prod"] = gm; out["years_model_median_gt_prod"] = gd; out["years_compared"] = n
+
+    def pool(filt):
+        res = {}
+        for k, a in clean.items():
+            v = a[filt(a), 1] if len(a) else np.zeros(0)
+            res[k] = {"picks": int(len(v)), "mean": float(v.mean()) if len(v) else np.nan,
+                      "median": float(np.median(v)) if len(v) else np.nan}
+        return res
+
+    out["pooled"]["all"] = pool(lambda a: np.ones(len(a), bool))
+    if qa_available:
+        out["pooled"]["ex_qa"] = pool(lambda a: a[:, 2] == 0)
+    out["pooled"]["ex_2020"] = pool(lambda a: a[:, 0] != 2020)
+    return out
+
+
+def _qa_flagged(tf: str) -> set | None:
+    p = paths.LAB_ROOT / f"qa_{bars_mod.SOURCE[tf]}.csv"
+    if not p.exists():
+        return None
+    q = pd.read_csv(p)
+    if "symbol" not in q.columns or "n_jumps_30" not in q.columns:
+        return None
+    return set(q.loc[q["n_jumps_30"] > 0, "symbol"])
+
+
 def _gid_tables(fold_ids: list[int]):
     keys = [("all", "all")] + [("fold", str(f)) for f in fold_ids] + [("year", str(y)) for y in YEARS] \
         + [("vix", k) for k in VIX_LABELS] + [("nifty", k) for k in NIFTY_LABELS]
@@ -251,6 +361,8 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
     mfe, mae, ttm, ret, hit = (f"t5_mfe_H{Hmid}", f"t5_maepre_H{Hmid}", f"t5_ttm_H{Hmid}", f"t5_ret_H{Hmid}",
                                f"t5_hit_x5_y3_H{Hmid}")
     sp_cols = ["t3_ret_k5", "t4_ret_h16", mfe, mae, ttm]
+    continuous = _is_continuous(run_target)
+    qa_set = _qa_flagged(tf)
     t2_pat = "t2_up_h" if side == "min" else "t2_dn_h"
 
     data: list[dict] = []
@@ -312,12 +424,13 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
         for k, c in enumerate(truths):
             v = tgt[c].to_numpy(float)[pos]
             tt[:, k] = np.where(np.isnan(v), -1, np.nan_to_num(v).astype(np.int8))
-        extra = {c: tgt[c].to_numpy(float)[pos] for c in dict.fromkeys(sp_cols + [ret, hit] + t2_cols + pred_bases)
+        extra = {c: tgt[c].to_numpy(float)[pos] for c in dict.fromkeys(sp_cols + [ret, hit] + t2_cols + pred_bases + ([run_target] if continuous else []))
                  if c in tgt.columns}
         pred = {c: sc[c].to_numpy(float) for c in pred_cols}
         data.append({"sym": sym, "comp": comp, "pos": pos, "fidx": fidx, "G": G, "score": mat, "truth": tt,
                      "close": b["close"].to_numpy(float)[pos], "low": b["low"].to_numpy(float)[pos],
-                     "high": b["high"].to_numpy(float)[pos], "extra": extra, "pred": pred})
+                     "high": b["high"].to_numpy(float)[pos], "extra": extra, "pred": pred,
+                     "year": ts.dt.year.to_numpy(), "qa": float(qa_set is not None and sym in qa_set)})
     truths = truths or []
     tol_t = [truth_tol(tc, tf) for tc in truths]
     T = len(truths)
@@ -358,7 +471,8 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
                 if len(pk) == 0:
                     continue
                 if rate in PROFILE_RATES:
-                    prof[(m, rate)].append(np.column_stack([d["extra"][c][pk] for c in (mfe, mae, ttm, ret, hit)]))
+                    prof[(m, rate)].append(np.column_stack([d["extra"][c][pk] for c in (mfe, mae, ttm, ret, hit)]
+                                                      + [d["year"][pk], np.full(len(pk), d["qa"])]))
                 cg = np.bincount(d["G"][pk].ravel(), minlength=NG)
                 for t in range(T):
                     tr = d["truth"][pk, t]
@@ -534,7 +648,7 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
         after[str(rate)] = {}
         for m, mn in enumerate(models):
             parts = prof[(m, rate)]
-            arr = np.vstack(parts) if parts else np.zeros((0, 5))
+            arr = np.vstack(parts) if parts else np.zeros((0, 7))
             out = {"picks": int(len(arr))}
             for j, nm in enumerate(("mfe", "maepre", "ttm", "ret")):
                 v = arr[:, j]; v = v[~np.isnan(v)]
@@ -548,6 +662,30 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
             out["t5_nan_excluded"] = int(np.isnan(arr[:, 3]).sum())
             after[str(rate)][mn] = out
 
+    # after-pick by year (every run, informational): picks at rate 0.01, net of COST
+    prod_name = prod if prod in models[1:] else None
+    abyy = afterpick_by_year(
+        {mn: (lambda a: np.column_stack([a[:, 5], a[:, 3] - COST, a[:, 6]]) if len(a) else np.zeros((0, 3)))(
+            np.vstack(prof[(m, 0.01)]) if prof[(m, 0.01)] else np.zeros((0, 7))) for m, mn in enumerate(models)},
+        models[0], prod_name, qa_set is not None)
+    abyy["rate"] = 0.01; abyy["hold_H"] = Hmid; abyy["qa_file_found"] = qa_set is not None
+
+    # magnitude verdict + deciles (continuous run targets only)
+    magnitude = None; deciles = None
+    if continuous and data and run_target in data[0]["extra"]:
+        y_all = np.concatenate([d["extra"][run_target] for d in data])
+        year_all = np.concatenate([d["year"] for d in data])
+        magnitude = magnitude_verdict(score_all, models, y_all, fold_all, year_all, side, fold_ids)
+        deciles = {"model": decile_table(score_all[:, 0], y_all)}
+        if prod_name:
+            j = models.index(prod_name)
+            deciles[prod_name] = decile_table(score_all[:, j], y_all)
+        deciles["target"] = run_target
+        overall_detection = overall
+        overall = magnitude["overall"]
+    else:
+        overall_detection = overall
+
     summary = {"run_id": run_id, "tf": tf, "side": side, "tol": tol, "truth_tol": dict(zip(truths, tol_t)), "models": models, "truths": truths,
                "primary_truth": primary, "meta": {k: meta.get(k) for k in
                                                   ("tf", "scheme", "target", "model", "symbols",
@@ -555,6 +693,8 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
                "folds": fold_ids, "rows_total": int(total_rows),
                "rows_evaluated": int(a_bars[0]), "symbols_scored": [d["sym"] for d in data],
                "coverage": coverage_out, "verdicts": verdicts, "overall": overall,
+               "overall_detection": overall_detection, "continuous": continuous,
+               "magnitude": magnitude, "deciles": deciles, "afterpick_by_year": abyy,
                "overall_by_truth": overall_by_truth, "overall_all_truths": overall_all,
                "ap": ap, "pivots": pivots, "t2": t2, "spearman": spear, "preds": preds,
                "after_pick_informational": after, "rates": RATES, "hold_H": Hmid}

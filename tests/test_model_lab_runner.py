@@ -137,3 +137,43 @@ def test_one_class_fold_skipped():
     fo = pd.read_parquet(d / "folds.parquet")
     sc = pd.read_parquet(next((d / "scores").glob("*.parquet")))
     assert 0 not in set(sc["fold_id"])
+
+
+class _ContPlant(SynthSource):
+    """plant_signal = future 4-bar log return (+ noise) so a regressor can learn it."""
+    def postprocess(self, symbol, factors, targets):
+        rng = np.random.default_rng(self.seed + 17)
+        y = targets["t4_ret_h4"].to_numpy(float)
+        factors = factors.copy()
+        factors["plant_signal"] = y + rng.normal(0.0, 0.002, len(y))
+        return factors, targets
+
+
+def test_runner_regression_end_to_end():
+    from scipy.stats import spearmanr
+    src = _ContPlant(n_symbols=6, n_sessions=120, seed=1)
+    d = runner.run(_spec(target="t4_ret_h4", model="hgb_q", model_params={"max_iter": 60}), src)
+    meta = json.loads((d / "meta.json").read_text())
+    assert meta["task"] == "regress"
+    frames = []
+    for sym in meta["symbols"]:
+        sc = pd.read_parquet(d / "scores" / f"{paths.sym_file(sym)}.parquet")
+        for c in ("score", "pred_t4_ret_h4", "pred_t4_ret_h4_q10", "pred_t4_ret_h4_q50", "pred_t4_ret_h4_q90"):
+            assert c in sc.columns and sc[c].dtype == np.float32
+        assert np.array_equal(sc["score"], sc["pred_t4_ret_h4"])
+        _, t = symbol_frames(src, sym, "15m")
+        frames.append(sc.merge(t[["timestamp", "t4_ret_h4"]], on="timestamp").dropna())
+    al = pd.concat(frames)
+    assert spearmanr(al["score"], al["t4_ret_h4"])[0] > 0.3
+
+
+def test_classification_path_unchanged():
+    a = runner.run(_spec("c1"), _src())
+    b = runner.run(_spec("c2"), _src())
+    meta = json.loads((a / "meta.json").read_text())
+    assert meta["task"] == "classify"
+    for sym in meta["symbols"]:
+        f = f"{paths.sym_file(sym)}.parquet"
+        x, y = pd.read_parquet(a / "scores" / f), pd.read_parquet(b / "scores" / f)
+        assert list(x.columns) == ["timestamp", "fold_id", "score"]        # no pred_* columns on classify runs
+        pd.testing.assert_frame_equal(x, y)

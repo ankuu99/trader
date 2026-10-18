@@ -64,7 +64,7 @@ def _member_mask(timestamps: pd.Series, years_ok: set[int]) -> np.ndarray:
 
 
 def _pass_a(args):
-    source, symbol, tf, xs, target, feats, years_ok, cap, seed = args
+    source, symbol, tf, xs, target, feats, years_ok, cap, seed, task = args
     f, t = symbol_frames(source, symbol, tf, xs)
     le = label_end_ts(t, f["timestamp"], target)
     y = t[target].to_numpy(float)
@@ -72,14 +72,17 @@ def _pass_a(args):
     idx = np.flatnonzero(elig)
     seen = int(len(idx))
     rng = np.random.default_rng(_seed_for(seed, symbol))
-    pos = idx[y[idx] == 1]
-    neg = idx[y[idx] != 1]
-    if len(pos) > cap // 2:
-        pos = rng.choice(pos, cap // 2, replace=False)
-    room = max(cap - len(pos), 0)
-    if len(neg) > room:
-        neg = rng.choice(neg, room, replace=False)
-    keep = np.sort(np.concatenate([pos, neg]).astype(np.int64))
+    if task == "regress":
+        keep = np.sort((rng.choice(idx, cap, replace=False) if len(idx) > cap else idx).astype(np.int64))
+    else:
+        pos = idx[y[idx] == 1]
+        neg = idx[y[idx] != 1]
+        if len(pos) > cap // 2:
+            pos = rng.choice(pos, cap // 2, replace=False)
+        room = max(cap - len(pos), 0)
+        if len(neg) > room:
+            neg = rng.choice(neg, room, replace=False)
+        keep = np.sort(np.concatenate([pos, neg]).astype(np.int64))
     return {"symbol": symbol, "seen": seen, "kept": int(len(keep)), "pos": int((y[keep] == 1).sum()),
             "X": f[feats].to_numpy(np.float32)[keep], "y": y[keep].astype(np.float32),
             "avail": f["avail_ts"].to_numpy("datetime64[ns]")[keep],
@@ -92,7 +95,7 @@ def _init_models(models):
 
 
 def _pass_b(args):
-    source, symbol, tf, xs, feats, years_ok, folds, n_groups = args
+    source, symbol, tf, xs, feats, years_ok, folds, n_groups, target = args
     f, _ = symbol_frames(source, symbol, tf, xs)
     member = _member_mask(f["timestamp"], years_ok)
     X = f[feats].to_numpy(np.float32)
@@ -106,9 +109,15 @@ def _pass_b(args):
             continue
         sel = splits.test_mask(fo, av, syms, n_groups) & member
         if sel.any():
-            parts.append(pd.DataFrame({"timestamp": ts[sel],
-                                       "fold_id": np.full(int(sel.sum()), fo.fold_id, dtype=np.int32),
-                                       "score": m.predict(X[sel]).astype(np.float32)}))
+            sc = m.predict(X[sel]).astype(np.float32)
+            d = {"timestamp": ts[sel], "fold_id": np.full(int(sel.sum()), fo.fold_id, dtype=np.int32),
+                 "score": sc}
+            if m.task == "regress":
+                d[f"pred_{target}"] = sc
+                if hasattr(m, "predict_multi"):
+                    for k, v in m.predict_multi(X[sel]).items():
+                        d[f"pred_{target}_{k}"] = np.asarray(v).astype(np.float32)
+            parts.append(pd.DataFrame(d))
     if not parts:
         return symbol, None
     return symbol, pd.concat(parts, ignore_index=True)
@@ -183,8 +192,12 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
         feats = [c for c in f0.columns if c not in ("timestamp", "avail_ts")]
 
     # 3. pass A — training pool
+    if spec.model not in models_mod.MODELS:
+        raise ValueError(f"unknown model {spec.model!r}; have {sorted(models_mod.MODELS)}")
+    task = models_mod.MODELS[spec.model].task
     cap = max(spec.max_train_rows // len(symbols), 2)
-    jobs = [(source, s, tf, xs_by.get(s), spec.target, feats, sym_years[s], cap, spec.seed) for s in symbols]
+    jobs = [(source, s, tf, xs_by.get(s), spec.target, feats, sym_years[s], cap, spec.seed, task)
+            for s in symbols]
     pools = [p for p in _map(_pass_a, jobs, spec.workers) if p["kept"] > 0]
     sampling = {"rows_seen": int(sum(p["seen"] for p in pools)), "rows_kept": int(sum(p["kept"] for p in pools)),
                 "positives_kept": int(sum(p["pos"] for p in pools)), "cap_per_symbol": int(cap)}
@@ -196,8 +209,11 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
     le = np.concatenate([p["le"] for p in pools])
     sym_arr = np.concatenate([np.full(len(p["y"]), p["symbol"], dtype=object) for p in pools])
     del pools
-    if not np.isin(np.unique(y), [0.0, 1.0]).all():
-        raise ValueError(f"target {spec.target!r} is not binary — L1a trains classifiers only")
+    if task == "classify":
+        if not np.isin(np.unique(y), [0.0, 1.0]).all():
+            raise ValueError(f"target {spec.target!r} is not binary — classifier models need a binary target")
+    elif len(np.unique(y[~np.isnan(y)])) < 2:
+        raise ValueError(f"target {spec.target!r} has fewer than 2 distinct values — nothing to regress")
 
     # 4. fit per fold
     fitted: dict[int, models_mod.LabModel] = {}
@@ -206,7 +222,7 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
         _last_fit_rows.clear()
     for fo in folds:
         m = splits.train_mask(fo, avail, le, sym_arr, tf, spec.n_groups)
-        info = {"fold_id": fo.fold_id, "train_rows": int(m.sum()), "positives": int((y[m] == 1).sum()),
+        info = {"fold_id": fo.fold_id, "train_rows": int(m.sum()), "positives": int((y[m] == 1).sum()) if task == "classify" else None,
                 "skipped": None}
         try:
             if not m.any():
@@ -232,7 +248,7 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
     paths.check_disk()
     sdir = run_dir / "scores"
     sdir.mkdir(exist_ok=True)
-    jobs = [(source, s, tf, xs_by.get(s), feats, sym_years[s], folds, spec.n_groups) for s in symbols]
+    jobs = [(source, s, tf, xs_by.get(s), feats, sym_years[s], folds, spec.n_groups, spec.target) for s in symbols]
     n_scored = 0
     for sym, df in _map(_pass_b, jobs, spec.workers, _init_models, (fitted,)):
         if df is None:
@@ -243,7 +259,7 @@ def run(spec: RunSpec, source=None, overwrite: bool = False) -> Path:
 
     # 6. meta
     meta = {"run_id": spec.run_id, "tf": tf, "scheme": spec.scheme, "target": spec.target, "model": spec.model,
-            "model_params": spec.model_params, "features": feats, "universe_top_n": spec.universe_top_n,
+            "model_params": spec.model_params, "task": task, "features": feats, "universe_top_n": spec.universe_top_n,
             "symbols": symbols, "train_rows_per_fold": [i["train_rows"] for i in fold_info],
             "seed": spec.seed, "created": datetime.now().isoformat(timespec="seconds"),
             "elapsed_s": round(time.time() - t0, 1),

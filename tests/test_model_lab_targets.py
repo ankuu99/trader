@@ -157,3 +157,22 @@ def test_targets_runtime_budget():
     t0 = time.time()
     build_targets(bars, "15m")
     assert time.time() - t0 < 5.0
+
+
+def test_t3_sig_zero_sigma_is_nan():
+    import warnings
+    n = 400
+    c = np.full(n, 100.0)
+    c[300:] = np.linspace(100, 110, 100)               # flat stretch (σ = 0 in the trailing window) then a move
+    c[150:200] = 100 + 5 * np.sin(np.arange(50))       # some earlier pivots
+    b = pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=n, freq="D"), "open": c, "high": c + .1,
+                      "low": c - .1, "close": c, "volume": np.ones(n)})
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        t = build_targets(b, "day", scales=[2], hold_h=[2], zz_k=[2], fwd_h=[1], zz_sigma_window=20)
+    assert not [x for x in w if issubclass(x.category, RuntimeWarning)]
+    s3 = t["t3_sig_k2"].to_numpy()
+    assert not np.isinf(s3).any()
+    flat = np.flatnonzero(~np.isnan(t["t3_ret_k2"].to_numpy()) & (np.arange(n) < 150) & (np.arange(n) >= 21))
+    # sigma is 0 on the flat opening stretch: wherever t3_ret is defined there, t3_sig must be NaN
+    assert np.isnan(s3[flat]).all()

@@ -1,5 +1,5 @@
 # Model Lab L2a — magnitude models (regression + quantiles), magnitude verdict, after-pick by year
-Written: 2026-10-18 · Tag: TD-021 · Status: OPEN
+Written: 2026-10-18 · Tag: TD-021 · Status: DONE
 
 ## Source
 
@@ -112,3 +112,9 @@ Suites that stay green: the full suite.
 - [ ] Do NOT run on real data; do not touch `lab_data/` (a background download writes there)
 
 ## Completion record
+- **Completed:** 2026-10-18 · trader-implementer (sonnet); validated by the main session — full suite 657 passed; real
+  re-score of A01: detection verdict table byte-identical to before; the new after-pick-by-year table reproduces the
+  main session's ad-hoc check exactly (12/16 years, 3.67 % vs 2.73 %, ex-QA 3.49 % vs 2.59 %, ex-2020 3.36 % vs 2.48 %).
+- **Deviations (accepted):** classification-unchanged test compares two seeded runs (real-data re-score covers the
+  rest); unknown model name fails before pass A; `positives` = None for regress runs; continuous plant is a test-local
+  subclass; NaN-y rows dropped before winsorising.

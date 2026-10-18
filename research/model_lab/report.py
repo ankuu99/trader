@@ -63,8 +63,36 @@ def write_report(run_id: str, summary: dict, curves: pd.DataFrame | None = None)
     L.append("- reference coverage (share of the run's rows where the score is non-NaN): "
              + ", ".join(f"`{m}` {_f(v, 3)}" for m, v in s["coverage"].items()))
     L.append("")
-    L.append(f"## Verdict: **{s['overall']}** (primary truth `{s['primary_truth']}`; all detection truths: "
-             f"{s['overall_all_truths']})\n")
+    mag = s.get("magnitude")
+    if mag:
+        L.append(f"## Magnitude verdict: **{mag['overall']}** (headline; run target `{meta.get('target')}`)\n")
+        L.append("PASS = WIN vs production P(min)/P(max) AND WIN vs RSI; WIN = signed Spearman of the model score with "
+                 "the realised target beats the reference's |Spearman| in >= 2/3 of folds AND >= 2/3 of calendar years "
+                 f"(groups with >= 200 evaluated rows; {mag['n_folds']} folds, {mag['n_years']} years).\n")
+        L.append(_table(["ref", "fold win share", "folds", "year win share", "years", "verdict"],
+                        [[rn, _f(v["fold_win_share"], 2), v["n_folds"], _f(v["year_win_share"], 2), v["n_years"],
+                          "WIN" if v["win"] else "—"] for rn, v in mag["verdicts"].items()]))
+        L.append("Pooled Spearman with the realised target: "
+                 + ", ".join(f"`{m}` {_f(v, 3)}" for m, v in mag["pooled_rho"].items()) + "\n")
+        dec = s.get("deciles") or {}
+        if dec:
+            L.append(f"## Deciles — realised `{dec.get('target')}` by decile of score (1 = lowest)\n")
+            names = [k for k in dec if k != "target"]
+            rows = []
+            for i in range(10):
+                row = [i + 1]
+                for k in names:
+                    r = dec[k]["rows"][i] if len(dec[k]["rows"]) > i else None
+                    row.append(f"{_f(r['mean'], 4)} / {_f(r['median'], 4)}" if r else "—")
+                rows.append(row)
+            L.append("cells: mean / median\n")
+            L.append(_table(["decile"] + names, rows))
+            L.append("top-minus-bottom decile spread (mean): "
+                     + ", ".join(f"`{k}` {_f(dec[k]['spread'], 4)}" for k in names) + "\n")
+        L.append(f"## Detection verdict: **{s.get('overall_detection')}**\n")
+    else:
+        L.append(f"## Verdict: **{s['overall']}** (primary truth `{s['primary_truth']}`; all detection truths: "
+                 f"{s['overall_all_truths']})\n")
     L.append("PASS = WIN vs production P(min)/P(max) AND WIN vs coin; WIN = event-AP beaten in >= 2/3 of folds AND "
              ">= 2/3 of years (folds/years with >= 10 pivots).\n")
     rows = []
@@ -126,6 +154,26 @@ def write_report(run_id: str, summary: dict, curves: pd.DataFrame | None = None)
                           _f(v["net_ret_mean"] and v["net_ret_mean"] * 100, 2) + "%",
                           _f(v["net_ret_median"] and v["net_ret_median"] * 100, 2) + "%",
                           _f(v["hit_x5_y3_rate"], 3), v["t5_nan_excluded"]] for m, v in per_m.items()]))
+    ay = s.get("afterpick_by_year")
+    if ay:
+        L.append(f"## After-pick by year (informational — not a pass condition)\n")
+        L.append(f"Picks at firing rate {ay['rate']}, net return t5_ret_H{ay['hold_H']} − 0.22% cost.\n")
+        names = list(next(iter(ay["by_year"].values())).keys()) if ay["by_year"] else []
+        L.append(_table(["year"] + [f"{m} (n / mean / median)" for m in names],
+                        [[y] + [f"{v[m]['picks']} / {_f(v[m]['mean'] and v[m]['mean'] * 100, 2)}% / "
+                                f"{_f(v[m]['median'] and v[m]['median'] * 100, 2)}%" for m in names]
+                         for y, v in ay["by_year"].items()]))
+        if ay.get("years_compared") is not None:
+            L.append(f"Years model mean > prod: {ay['years_model_mean_gt_prod']}/{ay['years_compared']}; "
+                     f"median > prod: {ay['years_model_median_gt_prod']}/{ay['years_compared']}.\n")
+        for key, title in (("all", "pooled"), ("ex_qa", "pooled excluding QA-flagged symbols"),
+                           ("ex_2020", "pooled excluding 2020")):
+            if key in ay["pooled"]:
+                L.append(f"{title}: " + "; ".join(
+                    f"`{m}` n={v['picks']} mean {_f(v['mean'] and v['mean'] * 100, 2)}% "
+                    f"median {_f(v['median'] and v['median'] * 100, 2)}%" for m, v in ay["pooled"][key].items()) + "\n")
+        if not ay.get("qa_file_found"):
+            L.append("(ex-QA line skipped: QA file not found)\n")
     L.append("---\nScored on the model's own terms (docs/03 §6): hindsight truth across all firing rates; the strategy "
              "does not judge the model.\n")
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
