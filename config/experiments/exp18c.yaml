@@ -1,0 +1,6 @@
+# EXP-18c — market-regime entry modulation (W6, exp/regime; DECISIONS 2026-10-18)
+strategies:
+  lr_extrema:
+    market_regime:
+      enabled: true
+      calm: {size_mult: 0.5}
