@@ -1,5 +1,5 @@
 # Strategy S0 — lab portfolio simulator (model-agnostic: scores in, ₹ curve out)
-Written: 2026-10-18 · Tag: TD-023 · Status: TO DO
+Written: 2026-10-18 · Tag: TD-023 · Status: DONE
 
 ## Source
 
@@ -141,4 +141,16 @@ exclusion-list rules themselves (file + criteria — owner to pick), survivorshi
 All are TD-023 phases, not new TDs.
 
 ## Completion record
-_(filled by the main session after validation)_
+- **Completed:** 2026-10-18 · trader-implementer (sonnet) in a separate worktree; validated by the main session —
+  full suite 674 passed; code read against every step; **real-data parity:** A01 day scores, rate 1 %, time exit 20
+  bars → 1,934 trades, all 1,920 TIME trades reproduce `t5_ret_H20` at their signal row (0 mismatches, rtol 1e-9);
+  24 s for 430 stocks × 16 years.
+- **Main-session fixes:** (1) ex-2020 headline diffed the equity AFTER dropping 2020, carrying 2020's whole P&L into
+  the first 2021 day → daily changes now taken on the full series, then 2020 dropped (regression test
+  `test_ex2020_headline_excludes_2020_equity_change`); (2) equity rows now start at the first date with any score —
+  bars start in 2008 but A01's first test fold in 2011, and the idle years understated the annual return.
+- **Judgment calls by the implementer (accepted):** a TRAIL mark beats the time stop on the same bar (exit next
+  open); a slot freed by STOP/TARGET/TIME at t can be refilled by an entry decided at t, a TRAIL-marked position keeps
+  its slot until its exit fills; qty from the fill bar's open; warm-up counts dates with ≥ 1 finite eligible score;
+  `ref:` NaN rows ineligible, symbols without a ref file skipped and listed; annual return simple (not compounded);
+  per-year table by exit year with within-year max DD; PF with no losses = inf → money-weighted win % 1.0.
