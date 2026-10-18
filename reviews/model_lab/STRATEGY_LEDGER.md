@@ -100,9 +100,9 @@ production P(min) refs replayed for the missing watchlist names. Each with 11 co
 
 | ID | Universe | Strategy | Status |
 |---|---|---|---|
-| SC6-L1-wl / -all | watchlist only / whole universe | A01 score, best 2/day, hold 20 | PLANNED |
-| SC6-L2-wl / -all | watchlist only / whole universe | production-score ranker, best 2/day, hold 60, target +20 % | PLANNED |
-| SC6-L3-wl / -all | watchlist only / whole universe | A11 score, best 2/day, hold 60 | PLANNED |
+| SC6-L1-wl / -all | watchlist only / whole universe | A01 score, best 2/day, hold 20 | DONE — wl ₹2.35 L / DD 8.9 % / Calmar 2.46 (coins ₹3.41 L median, beats 0/11 ₹); all ₹0.96 L / 14.9 % / 0.60 (beats 10/11) |
+| SC6-L2-wl / -all | watchlist only / whole universe | production-score ranker, best 2/day, hold 60, target +20 % | DONE — wl ₹3.28 L / 12.4 % / 2.46 (coins ₹3.44 L, 4/11); all ₹0.71 L / 15.6 % / 0.43 (10/11) |
+| SC6-L3-wl / -all | watchlist only / whole universe | A11 score, best 2/day, hold 60 | DONE — wl ₹4.00 L / 9.0 % / 4.15 (coins ₹4.47 L, 2/11 ₹, 11/11 Calmar); all −₹0.27 L (0/11). **None beats production ₹4.39 L / 5.8 % / 6.18; random picks on the watchlist make ₹2.8–4.8 L = hindsight selection.** `SC6_vs_production_20261019.md` |
 
 ## PB-LONG — the current production setup backtested from 2015 (owner, 2026-10-19)
 
