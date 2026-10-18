@@ -171,4 +171,31 @@ capture what makes the model's entries valuable — the model scores ≈ chance 
 edge over a coin. Stage A is therefore NOT a valid filter; all Stage-A-failed arms are re-run through Stage B
 (DECISIONS 2026-10-18).
 
+### Stage B of the 12 Stage-A arms (2026-10-18, after Stage A was demoted)
+
+Each arm at its calibration-matched thresholds (`config/experiments/<arm>_stageb.yaml`), same windows, same pass rule +
+crash guard. Δ vs baseline_postfix_iss14 (FULL ₹439.2k / DD 5.8 % / wWin 63.9 %; HORIZON ₹2,018.7k / DD 36.5 % /
+wWin 61.5 %). Calmar = half-years beating baseline Calmar.
+
+| ID | Branch | Arm | Calmar | FULL ΔP&L / ΔDD / ΔwWin | HORIZON ΔP&L / ΔDD / ΔwWin | Status | Evidence |
+|---|---|---|---|---|---|---|---|
+| EXP-01-B | labels @ b99bfce | tradeable labels (extrema candidates) | 0/4 | −₹254.8k / +2.5 pp / −5.5 pp | −₹936.6k / −3.5 pp / −5.2 pp | FAILED Stage B | `runs/stage_b_exp01.json` |
+| EXP-02-B | labels @ b99bfce | tradeable labels (all bars) | 0/4 | −₹329.4k / +4.5 pp / −7.6 pp | −₹1,255.2k / −4.5 pp / −5.7 pp | FAILED Stage B | `runs/stage_b_exp02.json` |
+| EXP-03-B | main | forward_label | 1/4 | −₹44.1k / +0.5 pp / −0.5 pp | −₹229.4k / +0.6 pp / −0.7 pp | FAILED Stage B | `runs/stage_b_exp03.json` |
+| EXP-04-B | main | lags [1,2] | 1/4 | −₹151.5k / +1.2 pp / −3.4 pp | −₹270.3k / −3.5 pp / −1.6 pp | FAILED Stage B | `runs/stage_b_exp04.json` |
+| EXP-05-B | features @ d54a0c0 | bar-shape add-on | 1/4 | −₹10.2k / +2.0 pp / −0.6 pp | −₹608.6k / −2.0 pp / −2.6 pp | FAILED Stage B | `runs/stage_b_exp05.json` |
+| EXP-06-B | features @ 70ea899 | ATR-distance add-on | 2/4 | −₹83.9k / +2.0 pp / −1.9 pp | −₹434.6k / −0.7 pp / −1.7 pp | FAILED Stage B (first attempt crashed → ISS-15) | `runs/stage_b_exp06.json` |
+| EXP-07-B | features @ d54a0c0 | market add-on (Nifty/VIX features) | 0/4 | −₹110.9k / +3.0 pp / −1.9 pp | −₹663.2k / +2.8 pp / −2.4 pp | FAILED Stage B | `runs/stage_b_exp07.json` |
+| EXP-08-B | features @ 70ea899 | S/R add-on | 1/4 | −₹207.6k / +3.5 pp / −4.2 pp | −₹706.6k / −1.5 pp / −2.6 pp | FAILED Stage B (first attempt crashed → ISS-15) | `runs/stage_b_exp08.json` |
+| EXP-09a-B | rules @ abd3233 | RSI-bounce rule (no ML) | 0/4 | −₹420.0k / +1.1 pp / −12.0 pp (util 23 %) | −₹1,844.0k / −22.6 pp / −7.5 pp | FAILED Stage B | `runs/stage_b_exp09a.json` |
+| EXP-09b-B | rules @ abd3233 | lowest-turn rule (no ML) | 1/4 | −₹132.5k / +4.8 pp / −4.7 pp | −₹718.2k / −4.1 pp / −4.3 pp | FAILED Stage B | `runs/stage_b_exp09b.json` |
+| EXP-10a-B | rules @ abd3233 | OU s-score rule (no ML) | 2/4 | −₹281.1k / +1.3 pp / −5.9 pp | −₹1,107.8k / −11.3 pp / −4.0 pp | FAILED Stage B | `runs/stage_b_exp10a.json` |
+| EXP-10b-B | rules @ abd3233 | OU s-score as model feature | **3/4** | −₹11.6k / +1.2 pp / **+0.5 pp** | −₹370.8k / −0.6 pp / −0.9 pp | FAILED Stage B (FULL P&L, DD by 0.2 pp) + crash guard (−18 %) — closest arm | `runs/stage_b_exp10b.json` |
+
+**Stage B verdict (2026-10-18):** none of the 12 passes. Stage A's EV@matched ordering largely held up on money: the
+least-negative EV arms (EXP-10b −0.16 pp, EXP-07 −0.18, EXP-06 −0.28) are among the closest in Stage B, and the most
+negative (EXP-02 −1.10, EXP-09a −1.80) are among the worst. So Stage A was a poor AUC yardstick but did not wrongly
+discard a winner. The only arm with a positive weighted-win delta (EXP-10b, +0.5 pp FULL) is
+−0.9 pp over 2020–26. Every arm loses in 2025-H1 (the correction) and over HORIZON.
+
 (rows appended as arms are defined and run)

@@ -8,7 +8,9 @@ every path built on other branches and in the literature, with persistent docume
 ## Bottom line
 
 1. **No detection change improves on the production model.** Twelve arms (labels, features, rules, models) all fail
-   Stage A. Not one ranks "troughs that pay under our exits" meaningfully better than today's P(min).
+   Stage A. Not one ranks "troughs that pay under our exits" meaningfully better than today's P(min). After Stage A was
+   demoted (see the addendum below), all twelve were also run through the full Stage-B backtest, and **all twelve fail
+   on money too**.
 2. **But today's P(min) doesn't rank them either** (median AUC 0.511). Nor does any single own-price measure (best
    0.534). Whether a dip pays is almost unpredictable from the stock's own price path. The strategy earns from its
    exits and from *when* it happens to trade, not from picking better dips. "Missing good troughs" is real, but no
@@ -66,3 +68,23 @@ Losing arms stay on pushed branches, not on the main line (owner default 2026-10
 - If detection is revisited: a model that pools across stocks (outside today's per-stock contract, see the inventory
   §1) is the only remaining structural lever for slow variables like market state. That is a refactor, not a config
   arm.
+
+
+## Addendum 2026-10-18 — controls and Stage B of every arm
+
+- **Coin-flip control (EXP-20):** random entries/tops at the bot's own firing rates make money on these names
+  (FULL ₹158–389k) because the watchlist was picked with hindsight and the exits cut losers. The bot beats every
+  seed on every metric: ₹439k, DD 5.8 % vs 8–13 %, weighted win 63.9 % vs 55–61 %.
+- **Edge attribution (EXP-22):** model entries + coin tops ≈ the bot (₹408–439k, wWin 63–64 %); coin entries + model
+  tops ≈ the coin. **The edge is the entry signal.** The pattern-top signal is no better than a coin at the same rate.
+- So the Stage-A truth (AUC ≈ 0.51 for a signal that carries the whole edge) does not measure entry value. Stage A
+  was demoted to a diagnostic (DECISIONS 2026-10-18) and every arm went through Stage B at matched thresholds.
+- **Stage B: 0/12 pass** (ledger, "Stage B of the 12 Stage-A arms"). Closest: EXP-10b (OU s-score as a feature),
+  Calmar 3/4 half-years, FULL −₹11.6k, DD +1.2 pp, wWin +0.5 pp, but HORIZON −₹371k / wWin −0.9 pp. Worst: the
+  outcome-aligned labels (EXP-01/02, −₹255k/−₹329k FULL, wWin −5.5/−7.6 pp) and the no-ML rules. Every arm loses
+  2025-H1 and the 2020–26 horizon.
+- Stage A's EV@matched ordering largely held up on money, so the demotion did not uncover a wrongly discarded winner.
+- Side finding: ISS-15 (training can fit a one-class sample set and crash; latent on HEAD, fixed on `exp/features`).
+
+**Round 1 conclusion stands, now on P&L, drawdown, Calmar and weighted win %:** today's production entry model is not
+beaten by any label, feature, rule or market-feature variant tried.
