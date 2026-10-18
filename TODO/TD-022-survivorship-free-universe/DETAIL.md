@@ -29,3 +29,10 @@ is NOT adjusted on bonus/split ex-dates (RELIANCE 2017-09-07 and 2024-10-28 bonu
 were not fetched. Rework (addendum in the L0c guide): adjustment factors from NSE's corporate-actions API (2008→,
 includes delisted names; 1,280 bonus/split events), every calendar day fetched. `dayn` must not be used until the
 re-validation passes.
+
+## Addendum 2026-10-19 (later) — L0c signed off; survivorship-free `dayn` source available
+
+Rework validated (completion record in `to_develop/completed/2026-10-18_TD-022_L0c-*`): 4,045 securities incl. 1,070
+delisted, split/bonus adjusted from NSE corporate actions; daily returns agree with Kite on 99.3 % of days (level
+offsets = Kite's recent dividend adjustments; the worst mismatches are Kite's own broken history). Next: ML-A01n /
+ML-A11n and SN-1..3 (pre-registered) — then A07 un-SUSPECT or confirm.
