@@ -114,4 +114,4 @@ watchlist and per-stock settings were chosen in 2025–26, so earlier years are 
 
 | ID | Window | Status |
 |---|---|---|
-| PB-LONG | 2015-07-01 → 2026-10-16, per-year breakdown | PLANNED |
+| PB-LONG | 2015-07-01 → 2026-10-16, per-year breakdown | DONE — ₹27.9 L total (P&L reinvested); worst drop −48 % of peak equity (Jan 2018 → Mar 2020, recovered Jun 2021); 2018/19/20 −9.3/−6.7/−1.6 %, 2021–26 every year +12…+38 %; liquid names lost ₹2.05 L over 2015–20, early profit came from untradeable thin names (TIPSMUSIC/THANGAMAYL); real cache md5 unchanged. `PB_LONG_prod_2015_20261019.md` |
