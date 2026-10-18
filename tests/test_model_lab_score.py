@@ -235,3 +235,10 @@ def test_arms_counter(tmp_path):
     p.write_text("# x\n\n## Infrastructure\n\n| a |\n|---|\n| r1 |\n\n## Arms\n\nArms tried so far: **0**.\n\n"
                  "| ID | M |\n|---|---|\n| A1 | x |\n| A2 | y |\n")
     assert report.arms_tried(p) == 2
+
+
+def test_truth_tol_never_wider_than_half_window():
+    assert score.truth_tol("t1w_min_w3", "day") == 1
+    assert score.truth_tol("t1w_min_w10", "day") == 3
+    assert score.truth_tol("t1w_max_w4", "15m") == 2
+    assert score.truth_tol("t1z_min_k5", "day") == score.TOL["day"]

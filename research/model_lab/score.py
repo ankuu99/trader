@@ -16,7 +16,14 @@ from research.model_lab import paths, references, store
 from research.model_lab import targets as tgt_mod
 
 RATES = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]   # share of bars at/above the threshold
-TOL = {tf: tgt_mod.SCALES[tf][0] for tf in tgt_mod.SCALES}          # match tolerance in bars (15m: 4)
+TOL = {tf: tgt_mod.SCALES[tf][0] for tf in tgt_mod.SCALES}          # pick window in bars (15m: 4)
+
+
+def truth_tol(truth: str, tf: str) -> int:
+    """Match tolerance for one truth column: TOL[tf], but never wider than half a ±w window (w // 2, ≥ 1).
+    Main session 2026-10-18: with tol == w (day t1w_w3, tol 3) a coin reached AP 0.41 — the truth saturated."""
+    m = re.match(r"^t1w_(?:min|max)_w(\d+)$", truth)
+    return min(TOL[tf], max(1, int(m.group(1)) // 2)) if m else TOL[tf]
 BARS_PER_YEAR = {"15m": 25 * 248, "30m": 13 * 248, "60m": 7 * 248, "4h": 2 * 248, "dayagg": 248, "day": 248, "week": 52}
 COST = 0.0022
 PROFILE_RATES = (0.002, 0.01, 0.05)
@@ -312,6 +319,7 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
                      "close": b["close"].to_numpy(float)[pos], "low": b["low"].to_numpy(float)[pos],
                      "high": b["high"].to_numpy(float)[pos], "extra": extra, "pred": pred})
     truths = truths or []
+    tol_t = [truth_tol(tc, tf) for tc in truths]
     T = len(truths)
     R = len(RATES)
     coverage_out = {m: (float(ref_nonnan[i] / total_rows) if total_rows else float("nan")) for i, m in enumerate(models)}
@@ -359,7 +367,7 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
                     ug = np.bincount(d["G"][pk[~jm]].ravel(), minlength=NG)
                     a_picks[m, t, ri] += cg
                     a_unj[m, t, ri] += ug
-                    mp, mq = _match(d["comp"][jp], d["comp"][piv_rows[t]], tol)
+                    mp, mq = _match(d["comp"][jp], d["comp"][piv_rows[t]], tol_t[t])
                     if len(mp) == 0:
                         continue
                     pr_ = jp[mp]; qr_ = piv_rows[t][mq]
@@ -540,7 +548,7 @@ def score_run(run_id: str, refs: list[str], targets: list[str] | None = None, tf
             out["t5_nan_excluded"] = int(np.isnan(arr[:, 3]).sum())
             after[str(rate)][mn] = out
 
-    summary = {"run_id": run_id, "tf": tf, "side": side, "tol": tol, "models": models, "truths": truths,
+    summary = {"run_id": run_id, "tf": tf, "side": side, "tol": tol, "truth_tol": dict(zip(truths, tol_t)), "models": models, "truths": truths,
                "primary_truth": primary, "meta": {k: meta.get(k) for k in
                                                   ("tf", "scheme", "target", "model", "symbols",
                                                    "universe_top_n", "seed", "created")},

@@ -57,7 +57,7 @@ def write_report(run_id: str, summary: dict, curves: pd.DataFrame | None = None)
     L.append(f"- tf `{s['tf']}` · scheme `{meta.get('scheme')}` · target `{meta.get('target')}` · "
              f"model `{meta.get('model')}` · universe top-N `{meta.get('universe_top_n')}`")
     L.append(f"- folds {len(s['folds'])} · symbols scored {len(s['symbols_scored'])} · rows {s['rows_total']} "
-             f"(evaluated {s['rows_evaluated']}) · side `{s['side']}` · match tolerance {s['tol']} bars")
+             f"(evaluated {s['rows_evaluated']}) · side `{s['side']}` · pick window {s['tol']} bars · match tolerance per truth {s.get('truth_tol', {})}")
     L.append(f"- **Arms tried so far: {arms if arms is not None else 'unknown (ledger missing)'}** "
              f"(LEDGER.md `## Arms` rows)")
     L.append("- reference coverage (share of the run's rows where the score is non-NaN): "
