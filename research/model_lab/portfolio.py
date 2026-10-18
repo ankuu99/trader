@@ -165,6 +165,8 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
     ends = np.concatenate([cuts, [nrows]]) if nrows else np.array([], int)
 
     thr = causal_thresholds(g_date, g_score, spec.rate, spec.window_sessions) if spec.entry_mode == "rate" else {}
+    fin_dates = g_date[np.isfinite(g_score)]
+    first_scored = fin_dates.min() if len(fin_dates) else (g_date.max() if nrows else np.datetime64("NaT"))
 
     open_pos: dict[int, dict] = {}
     pend_in: dict[int, dict] = {}
@@ -263,7 +265,10 @@ def simulate(spec: SimSpec, data: dict) -> tuple[pd.DataFrame, pd.DataFrame, dic
                         continue
                     pend_in[si] = {"signal_ts": t, "fold": int(data[syms[si]]["fold"][i]), "score": float(sc[k])}
                     free -= 1
-        # e. end-of-date equity row
+        # e. end-of-date equity row (from the first date with any score: bars start years before the run's
+        # first test fold, and counting those idle years would understate the annualised return)
+        if g_date[a] < first_scored:
+            continue
         if gi == len(starts) - 1 or g_date[int(starts[gi + 1])] != g_date[a]:
             mtm = sum(p["qty"] * (last_close[si] - p["entry_px"]) for si, p in open_pos.items())
             dep = sum(p["qty"] * p["entry_px"] for p in open_pos.values())
