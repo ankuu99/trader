@@ -157,7 +157,7 @@ Rules for every scheme:
 - per market regime (VIX tercile, Nifty trend up/down/flat);
 - per timeframe and per stock-liquidity bucket.
 
-A model passes only if it beats the production P(min) in most folds AND most years, not just on the pooled average.
+A model wins only if its curves dominate production P(min)'s (§6) in most folds AND most years, not just on the pooled average.
 Also track feature-importance drift across folds: a factor that matters only in one era is a red flag.
 
 **Known or suspected structural breaks** to mark on every per-year chart (verify the dates before relying on them):
@@ -175,8 +175,9 @@ Also track feature-importance drift across folds: a factor that matters only in 
    - a coin at the same firing rate;
    - lowest-of-N turn;
    - RSI;
-   - **the production LR-Extrema P(min)**, the bar to beat. Scores 2023-01 → 2026-10-16 are cached at
-     `lab_data/campaign/scores/<label>.pkl` (TD-018 Stage A); re-score other ranges with `scripts/campaign/stage_a.py`.
+   - **the production LR-Extrema P(min)**, the reference to beat on the §6 curves. Scores 2023-01 → 2026-10-16 are
+     cached at `lab_data/campaign/scores/<label>.pkl` for the 21 watchlist names (TD-018 Stage A); L1 replays the
+     model (`score_current`, position-independent) on the lab's bars for any stock and range.
 2. Pooled logistic regression on the factor library.
 3. Gradient-boosted trees (sklearn HistGradientBoosting, xgboost). Classifiers for T1/T2, quantile regressors for
    T3–T5.
@@ -186,28 +187,35 @@ Also track feature-importance drift across folds: a factor that matters only in 
 
 Per-stock vs pooled vs pooled-with-stock-embedding is itself an arm.
 
-### 6. Scoring: model-only but money-aware
+### 6. Scoring: the model on its own terms (owner, 2026-10-18 — supersedes the matched-rate / production-exit gate)
 
-Round 1's lesson: a ranking metric (AUC) did not track money. So:
+The strategy does NOT judge the model. No matched pick counts, no production exits as the referee: a model that finds
+more good entries and exits is better, full stop. Hindsight truth (§3) is the referee, and every model is shown across
+**all** firing rates (thresholds), so firing more is never penalised by construction. The strategy is designed later,
+around what the winning model predicts.
 
-- **Detection (T1/T2):**
-  - precision / recall at a matched firing rate (= production's per-stock rate);
-  - PR-AUC;
-  - distance of the fired bar from the true pivot (bars and %);
-  - lateness.
-- **Path and magnitude (T3–T5):**
-  - rank correlation of predicted vs realised MFE, MAE and time-to-MFE;
-  - quantile calibration (pinball loss, coverage).
-- **Payoff of fired candles (the gate):** for the top-k fired bars per stock per fold, compute:
-  - forward returns at fixed horizons;
-  - P(+X % before −Y %) on an X/Y grid;
-  - mean MFE/MAE.
-
-  Compare against the production model's fired bars and a coin at the same rate. Costs ~0.22 % per round trip,
-  decision at bar close, fill at the next open.
-- **Gate to the strategy:** beat production P(min) on top-k payoff across most folds and years (§4). Only then run
-  the existing Stage B (`scripts/campaign/run_windows.py`: pass rule + crash guard, weighted win % reported). A model's
-  T5 outputs (expected hold, potential) are inputs for a later *strategy* study, not changes inside the lab.
+- **Finding turning points (T1w, T1z), as curves over the firing rate:**
+  - event recall: share of true pivots caught (a firing within a small tolerance window of the pivot);
+  - precision: share of firings that are a true pivot (within the same tolerance);
+  - lateness: bars between the true pivot and the firing;
+  - entry distance: % above the true low (below the true high for tops).
+- **Will the direction change, and by how much (T2, T3):** classification curves for the turn; rank correlation and
+  calibration of the predicted move size vs the realised one.
+- **Forward path (T4, T5):** predicted potential (MFE), pain (MAE before the MFE) and time-to-peak (hold period) vs
+  realised — rank correlation, quantile calibration (pinball loss, coverage); hit-rate curves for +X % before −Y %.
+- **Measurement rules (not restrictions):**
+  - **events, not bars** — consecutive firings on the same dip count as one catch, so clustering cannot inflate
+    "more entries";
+  - **net-of-cost view** — every pick also shows its move net of ~0.22 % round-trip cost (entry at the next open), as
+    an informational column, never a pass condition.
+- **References on the same charts:** production LR-Extrema P(min) (replayed on the lab's bars for any stock; on TFs
+  production never trades, the same construct at default settings, labelled as such), a coin at every rate,
+  lowest-of-N turn, RSI.
+- **What counts as a win:** the model's curves dominate production's (more true pivots caught at the same precision,
+  or the same catches more precisely / earlier / closer to the low) in most walk-forward folds AND most calendar
+  years (§4), and beat the coin.
+- **After a win:** the strategy is designed around the model's outputs (expected hold, potential, pain) in a separate
+  study; only then does any backtest (e.g. `scripts/campaign/run_windows.py`) enter the picture.
 
 ### 7. Integration path (only for a winner)
 
