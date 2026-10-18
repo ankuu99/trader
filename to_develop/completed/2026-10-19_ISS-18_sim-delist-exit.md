@@ -1,5 +1,5 @@
 # ISS-18 — DELIST exit in the portfolio simulator
-Written: 2026-10-19 · Tag: ISS-18 · Status: TO DO
+Written: 2026-10-19 · Tag: ISS-18 · Status: DONE 2026-10-19
 
 ## Source
 
@@ -33,4 +33,4 @@ results of any sim where every symbol's data runs to the global end (all existin
 - [ ] full pytest green · [ ] DELIST rule as specified · [ ] None = old behaviour · [ ] no other file changed
 
 ## Completion record
-_(filled by the main session after validation)_
+Validated 2026-10-19 (main session): diff matches the guide; full pytest **706 passed** on the merged branch; commit 7c9b45c. Implementer placed the rule at the top of the per-timestamp loop (before steps a/b) — equivalent, accepted. Real data: SN-1..3 re-run on dayn with the rule (see STRATEGY_LEDGER SN).

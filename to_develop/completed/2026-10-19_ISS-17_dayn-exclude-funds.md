@@ -1,5 +1,5 @@
 # ISS-17 — keep ETFs / fund units out of the `dayn` liquidity universe
-Written: 2026-10-19 · Tag: ISS-17 · Status: TO DO
+Written: 2026-10-19 · Tag: ISS-17 · Status: DONE 2026-10-19
 
 ## Source
 
@@ -38,4 +38,4 @@ Funds keep their bar files (harmless) but are excluded from the `day_nse` liquid
 - [ ] no other behaviour changed · [ ] no network / `lab_data/` untouched
 
 ## Completion record
-_(filled by the main session after validation)_
+Validated 2026-10-19 (main session): diff matches the guide; full pytest **706 passed** on the merged branch; commit ef6d50e. Implementer deviations accepted: `is_fund` also accepts a ';'-joined ISIN string (the stored format); indices are no longer rows of `liquidity_day_nse.parquet` (they were already filtered out of every universe). Real data: `nse_bhav panel` rebuilt the panel; PIT top-200 ever-members 505, none ETF-like.
