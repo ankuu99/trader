@@ -18,12 +18,17 @@ def _is_etf(name: str, ts: str) -> bool:
     return ("ETF" in name.upper() or ts.endswith(("BEES", "ETF", "IETF")) or "BEES" in ts)
 
 
+def _is_series_variant(ts: str) -> bool:
+    """XYZ-BE, XYZ-SG, XYZ-N1 … (2-char code after the last '-') are series / bond variants; BAJAJ-AUTO is a stock."""
+    return "-" in ts and len(ts.rsplit("-", 1)[1]) == 2
+
+
 def snapshot_instruments(kite) -> pd.DataFrame:
     rows = []
     for r in kite.instruments("NSE"):
         ts = r.get("tradingsymbol") or ""
         name = r.get("name") or ""
-        if r.get("segment") != "NSE" or r.get("instrument_type") != "EQ" or "-" in ts:
+        if r.get("segment") != "NSE" or r.get("instrument_type") != "EQ" or _is_series_variant(ts):
             continue
         if _is_etf(name, ts):
             continue
