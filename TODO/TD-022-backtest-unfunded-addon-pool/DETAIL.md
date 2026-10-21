@@ -35,3 +35,8 @@ frees the pool), marked at the 21 Oct close:
 - Unlimited pool: all 11 names, ₹2.13L deployed, gross +₹417 — the afternoon signals near the lows did best.
 First-come-first-served spends the pool on the morning signals of a falling day. One day = noise; outcome is only
 known when the positions exit.
+
+## Addendum 2026-10-22 — pool-size A/B
+
+Owner asked for the unlimited-add-on test: `reviews/addon_pool_size_ab_20261022.md`. Bigger pool beats ₹60k in 6/7
+years (2020 crash −₹38k); ₹2.4L ≈ unlimited; ~0.2 ₹/yr per ₹ of extra add-on cash. No config change.
