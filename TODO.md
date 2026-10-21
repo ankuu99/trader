@@ -71,6 +71,7 @@ Open points under `TODO/TD-NNN-<slug>/` (SUMMARY · DETAIL verbatim · DONE|PEND
 | ID | Status | Point |
 |---|---|---|
 | [TD-015](TODO/TD-015-parent-notional-after-scaleout-reboot/DETAIL.md) | DONE 2026-10-17 (release-20261017e) | Persist original parent notional (add-on sizing after scale-out + reboot) |
+| [TD-022](TODO/TD-022-backtest-unfunded-addon-pool/DETAIL.md) | PENDING (discovered 2026-10-22) | Backtests assume a funded add-on pool; live with equity < base runs loss-block-only (the unvalidated, worst-tested setting) |
 
 ## Dashboard
 
