@@ -58,3 +58,15 @@ failed the plateau check (TD-018, `exp/regime`), so no rule change follows from 
 - The stale tier-1 checks will exit more of the book if there's no bounce: ADFFOODS (−14 %), ENGINERSIN, ACMESOLAR.
 - Oil headlines and the VIX. A de-escalation bounce is the scenario where these dip entries pay.
 - Loss-block countdowns (state): RADICO 2, TIPSMUSIC 2, QUESS 1, THANGAMAYL 1 sessions.
+
+## Addendum 2026-10-22 — realised P&L (FIFO match of live fills, gross; charges via `trader.costs`)
+
+| Window | Realised (gross) | Note |
+|---|---|---|
+| 21 Oct | −₹3,939 | QUESS −2,041, THANGAMAYL −1,898 |
+| 22 Oct | −₹3,231 | TIPSMUSIC −1,943, RADICO −1,288 |
+| Since 17 Oct (= `cumulative_pnl` −₹5,872) | −₹5,872 | 19 Oct +₹1,298 offsets; the state key was 0.0 at the ISS-04 fix, so it only counts from then |
+| October to date | +₹9,898 | ≈ +₹8.0k after ₹1.9k charges |
+| Lifetime (since 28 Apr) | +₹47,043 | excludes 1,222 sold shares with no matching buy (early test orders with null prices) |
+
+Charges add about ₹100 per round trip. The larger exposure is the −₹21.6k unrealised on the 10 open positions.
