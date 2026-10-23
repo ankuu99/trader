@@ -70,3 +70,27 @@ failed the plateau check (TD-018, `exp/regime`), so no rule change follows from 
 | Lifetime (since 28 Apr) | +₹47,043 | excludes 1,222 sold shares with no matching buy (early test orders with null prices) |
 
 Charges add about ₹100 per round trip. The larger exposure is the −₹21.6k unrealised on the 10 open positions.
+
+## Addendum 2026-10-23 — day 4 of the slide
+
+**Market:** fourth straight down day. Nifty 22,600 (−0.39 %), Midcap 100 −2.21 %, Smallcap 100 −2.94 %, every NSE sector red.
+Nifty lost 2.4 % on the week. Brent ≈ $114 after renewed Houthi attacks on Saudi Arabia. The Jio Platforms IPO
+(13.8× subscribed, $3.2 bn) reportedly drew liquidity away. Bot candles: Smallcap 250 at 16,398, −10.9 % since 23 Sep.
+Sources: HDFC Sky and Kotak Neo closing reports (23 Oct), Business Standard close report (VIX +6 %).
+
+**Book:**
+
+| | |
+|---|---|
+| Realised today | **−₹14,530**: ADFFOODS −7,191 (STALE_REARM), ENGINERSIN −5,205 (STALE), CGPOWER −2,134 (`STRATEGY` = hold_bars timeout) |
+| Of which already unrealised at 22 Oct close | −₹10,883, so these exits only added −₹3.6k today |
+| Open-book MTM today | −₹9,618 (8 positions, ₹3.14L deployed). CUPID −3.9k, ACMESOLAR −2.9k, ATHER −1.8k; CHENNPETRO +1.1k |
+| **Account move today** | **≈ −₹13.3k** |
+| `cumulative_pnl` (realised since 17 Oct) | −₹20,401 |
+| Still unrealised | ≈ −₹15.4k: ACMESOLAR −5.1k, CUMMINSIND −3.4k, MAYURUNIQ −2.8k, CUPID −2.0k, ATHER −1.5k |
+| October realised | −₹4.6k gross (it was +₹9.9k on 22 Oct) |
+
+- One new entry: KPL at 09:30, +₹0.5k by close.
+- The loss block refused 17 rebuys. QUESS signalled at 306 → 298 and TIPSMUSIC at 716 → 704 while blocked, so both kept
+  falling after the block. ADFFOODS, ENGINERSIN and CGPOWER are now blocked for 2 sessions.
+- Nothing hit the 20 % hard stop.
