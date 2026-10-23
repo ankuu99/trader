@@ -1,0 +1,16 @@
+# 16:00 IST Mon–Fri: 25 min after the 15:35 post-market job (holdings reconcile,
+# benchmark refresh, daily-P&L Telegram) — the last scheduled job of the day.
+# 23:55 IST daily: catch-all so a box started by hand for an evening release is
+# never left running overnight. Persistent=false on purpose: a missed trigger
+# must NOT fire at the next boot (it would power off a box we just started).
+
+[Unit]
+Description=Scheduled power-off of the trader box
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 16:00:00 Asia/Kolkata
+OnCalendar=*-*-* 23:55:00 Asia/Kolkata
+Persistent=false
+
+[Install]
+WantedBy=timers.target

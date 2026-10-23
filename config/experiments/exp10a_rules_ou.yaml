@@ -1,0 +1,2 @@
+# EXP-10a — no-ML rule: OU s-score graded entry (W5, exp/rules)
+strategies: {lr_extrema: {features: {type: rules, rules: {kind: ou}}, model: {type: passthrough}}}

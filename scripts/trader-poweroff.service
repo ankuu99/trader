@@ -1,0 +1,18 @@
+# Oneshot fired by trader-poweroff.timer — powers the EC2 box off.
+# instanceInitiatedShutdownBehavior is "stop" on this instance, so an OS
+# poweroff = EC2 stop: EBS root, Elastic IP and host key all survive; billing
+# for compute halts. The box is started again by the GitHub Actions workflow
+# .github/workflows/ec2-schedule.yml (07:00 IST Mon–Fri), which also carries a
+# 16:30 IST backup stop in case this timer ever fails to fire.
+#
+# Install (as root on EC2):
+#   sudo cp scripts/trader-poweroff.service scripts/trader-poweroff.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now trader-poweroff.timer
+#   systemctl list-timers trader-poweroff.timer
+
+[Unit]
+Description=Power off the trader box (scheduled EC2 stop)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl poweroff

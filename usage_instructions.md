@@ -2,373 +2,512 @@
 
 ## Prerequisites
 
-1. Activate the virtual environment:
-   ```
-   source .venv/bin/activate
-   ```
-
-2. Ensure `config/.env` has valid Kite credentials:
-   ```
-   KITE_API_KEY=...
-   KITE_API_SECRET=...
-   KITE_ACCESS_TOKEN=...
-   ```
-
-3. If the access token is expired or missing, run the login script:
-   ```
-   python scripts/login.py
-   ```
-   It opens a browser for Kite OAuth and writes the new token to `config/.env`.
+- Python 3.11+
+- A Zerodha account with Kite Connect API access (kite.trade/developers)
+- Dependencies installed: `pip install -r requirements.txt`
 
 ---
 
-## Intraday Trading
+## One-Time Setup
 
-**Config:** `config/config.yaml`
-**Strategies:** RSI, ORB (with volume + gap filters), VWAP Reversion, VWAP Pullback, Supertrend, Bollinger, EMA Pullback (+ strategy groups)
-**Product type:** MIS — positions auto-close at 3:15 PM
+### 1. Create a Kite Connect App
 
-### Run (paper or live)
+1. Log in at [kite.trade/developers](https://kite.trade/developers)
+2. Create a new app
+3. Set the **redirect URL** to: `http://127.0.0.1:8080/callback`
+4. Note your **API Key** and **API Secret**
+
+### 2. Create `config/.env`
+
 ```
+KITE_API_KEY=your_api_key_here
+KITE_API_SECRET=your_api_secret_here
+KITE_ACCESS_TOKEN=
+KITE_USER_ID=your_zerodha_user_id
+KITE_PASSWORD=your_zerodha_password
+KITE_TOTP_SECRET=your_totp_base32_secret
+TELEGRAM_BOT_TOKEN=optional
+TELEGRAM_CHAT_ID=optional
+```
+
+Leave `KITE_ACCESS_TOKEN` blank — the login script fills it in every day.
+
+### 3. Configure `config/config.yaml`
+
+```yaml
+env: paper                  # paper (no real orders) or live (real orders)
+candle_timeframe: day       # 5minute / 15minute / 30minute / 60minute / day
+
+capital:
+  total: 50000
+  max_risk_per_trade_pct: 7.0
+  daily_loss_limit_pct: 10.0
+
+watchlist:
+  - NSE:RELIANCE
+  - NSE:INFY
+
+strategies:
+  lr_extrema:
+    enabled: true
+    warmup_bars: 300
+    lookback_bars: 600
+    threshold: 0.85
+    profit_pct: 10
+    trail_pct: 1.5
+    stop_pct: 5
+    hold_bars: 300
+    retrain_every: 25
+    extrema_order: 5
+    trading_start: "09:15"
+    trading_end: "15:30"
+
+risk:
+  gtt_enabled: false
+  order_type: market        # market or limit
+  max_open_positions: 5
+  default_sl_pct: 2
+  risk_reward: 4
+  max_capital_per_stock_pct: 25.0
+
+data:
+  db_path: data/market.db
+  historical_cache_days: 90
+
+logging:
+  level: INFO
+  dir: logs
+```
+
+---
+
+## Every Trading Day
+
+### Token Refresh (automated on EC2)
+
+On EC2 the TOTP refresh runs automatically at **08:15 IST** every weekday via cron
+(the `trader` user's crontab):
+
+```bash
+45 2 * * 1-5 /opt/trader/.venv/bin/python /opt/trader/scripts/kite_totp_refresh.py --no-restart >> /opt/trader/logs/totp_refresh.log 2>&1
+```
+
+This logs in headlessly using TOTP and saves the new token to `config/.env`. A Telegram
+notification confirms success. **The bot is NOT restarted** (`--no-restart`): the running
+process adopts the new token itself at the 09:00 pre-market job (hot-reload — new token
+into the REST client + a rebuilt KiteTicker, validated via `kite.profile()`, Telegram
+alert if validation fails).
+
+**Weekly restart (hygiene)** — the bot restarts once a week, Monday **08:40 IST**
+(after the token refresh, before pre-market), via a systemd timer:
+
+```bash
+systemctl list-timers trader-restart.timer     # next/last fire
+# units live in scripts/trader-restart.{service,timer}; install steps in the .service comments
+```
+
+The service itself is `Restart=always` with no start limit — if it ever restarts into the
+token-dead window (token expires at midnight IST; weekends have no refresh) it crash-loops
+harmlessly at 60s intervals and self-heals as soon as a valid token appears in `.env`.
+
+**Token status on the dashboard** — the Persistent State card shows a *Kite token* block:
+VALID/INVALID badge, user, last check time and source (startup / hot-reload / 30-min
+heartbeat probe / ui-reload). The **"Reload token from .env"** button forces the running
+bot to adopt whatever token is currently in `.env` — use it after a manual refresh instead
+of waiting for pre-market.
+
+**Manual fallback** (if TOTP refresh fails):
+
+```bash
+python scripts/kite_auth_server.py
+```
+
+Runs an OAuth callback server on EC2. Open the printed URL in any browser, log in, and the token is saved automatically.
+
+### Run the trader
+
+```bash
 python main.py
-```
-Mode is controlled by `env:` in `config/config.yaml` (`paper` or `live`).
-
-### Backtest — Isolated mode (default)
-```
-python scripts/backtest.py
-python scripts/backtest.py --from 2026-01-01 --to 2026-03-31
-python scripts/backtest.py --from 2026-01-01 --save      # saves per-strategy CSVs to backtest_results/
-```
-Runs each (symbol × strategy) combination independently with full capital. Results are additive but do not model shared capital. Use for strategy-level performance analysis and calibration.
-
-### Backtest — Portfolio mode
-```
-python scripts/backtest.py --portfolio
-python scripts/backtest.py --portfolio --from 2026-01-01
-python scripts/backtest.py --portfolio --from 2026-01-01 --save   # saves backtest_results/portfolio.csv
-```
-Replays all symbols simultaneously with a **shared** `RiskManager` and **shared** capital — exactly how live/paper trading works. Enforces `max_open_positions` across the entire watchlist. Produces a single portfolio equity curve with per-symbol breakdown.
-
-**When to use which:**
-
-| | Isolated (default) | Portfolio (`--portfolio`) |
-|---|---|---|
-| Capital | Full budget per symbol | Single shared pool |
-| Position limits | Per run (not realistic) | Portfolio-wide (realistic) |
-| Use for | Calibrating individual strategies | Simulating actual live trading |
-| Output | One report per strategy | One combined portfolio report |
-
-Defaults to the last 90 days (from `historical_cache_days` in config).
-
-## Parameter Calibration
-
-Finds the best strategy parameters by running backtests across a parameter search space and ranking results.
-
-**Requires cached candle data** — run `main.py` or `scripts/backtest.py` first to warm up the SQLite DB.
-
-### Basic usage
-```
-python scripts/calibrate.py --strategy rsi --from 2026-03-01 --iterations 20
-```
-Runs 20 random parameter combinations for RSI across all watchlist symbols, ranked by Sharpe ratio.
-
-### Options
-```
---strategy     rsi | orb | vwap | vwap_pullback | supertrend | bollinger | ema_pullback
-               orb_supertrend | orb_adx | orb_ema_pullback
-               rsi_bollinger | rsi_supertrend | rsi_vwap
-               vwap_pullback_adx | ema_pullback_adx
---symbols      NSE:XXX NSE:YYY   (default: config.watchlist)
---from         Start date YYYY-MM-DD  (required)
---to           End date YYYY-MM-DD    (default: today)
---iterations   How many combinations to test in random mode (default: 20)
---metric       sharpe | total_pnl | win_rate | max_drawdown  (default: sharpe)
---mode         random (default) | grid (all combinations)
---seed         Integer seed for reproducible random search
---top          Rows to show in ranked table (default: 10)
---update-config  Write best params back to config.yaml after calibration
+python main.py --config path/to/config.yaml   # alternate config
 ```
 
-### Examples
+On startup it will:
+1. Verify your Kite session
+2. Fetch available Kite cash and set effective capital
+3. Fetch instruments and validate watchlist
+4. Refresh and warm up candle cache (last 90 days)
+5. Train `LRExtremaStrategy` on cached history
+6. Reconcile open positions from DB / Kite
+7. Start the live WebSocket feed
+
+At **09:00** pre-market warm-up runs. At **15:35** post-market logs P&L summary, resets daily counters, and disconnects the feed.
+
+Press **Ctrl+C** to stop cleanly.
+
+### Local paper trading — day-TF winner candidate
+
+The validated day-timeframe candidate (see `reviews/dayw_candidate_proposal_20260713.md`)
+can be paper-traded locally, fully independent of the EC2 live bot:
+
+```bash
+# make sure the local token is fresh (local and EC2 tokens never collide)
+python scripts/kite_totp_refresh.py --no-restart
+
+# run the candidate in paper mode via main.py
+python main.py --config config/config_paper_dayw.yaml
 ```
-# Full grid search for VWAP (6 combinations), write best params to config
-python scripts/calibrate.py --strategy vwap --from 2026-03-01 --mode grid --update-config
 
-# Calibrate VWAP Pullback Continuation
-python scripts/calibrate.py --strategy vwap_pullback --from 2026-01-01 --iterations 20
-
-# Calibrate ORB+Supertrend group, optimise for total P&L
-python scripts/calibrate.py --strategy orb_supertrend --from 2026-03-01 --iterations 20 --metric total_pnl
-
-# Calibrate on a single stock only
-python scripts/calibrate.py --strategy supertrend --from 2026-03-01 --symbols NSE:INDHOTEL --mode grid
-
-# Interday config
-python scripts/calibrate.py --config config/config_interday.yaml --strategy ema_pullback --from 2025-01-01
-```
-
-### Output
-- Progress line per iteration showing params and metric value
-- Ranked table of top 10 results with all params + sharpe, P&L, win rate, drawdown
-- Best params summary with per-symbol breakdown
-- `--update-config` rewrites the strategy block in config.yaml (note: YAML comments are removed on rewrite)
+- **Own database** (`data/paper_dayw.db`) — backtest cache wipes never touch it; first
+  startup fetches ~2.2 years of 15m history for the day-TF warm-up (~10 min).
+- **Own dashboard** on **http://localhost:8081** (8080 stays free for the EC2 SSH tunnel).
+- Paper state is in-memory — a restart re-warms and starts flat (standard paper behaviour).
+- Run it during market hours (long-running foreground process, Ctrl+C to stop; or
+  `nohup python main.py --config config/config_paper_dayw.yaml > logs/paper_dayw.out 2>&1 &`).
+- Telegram messages from this bot are tagged `paper` — they share the same chat as live.
+- To compare against expectation: the same config runs through the backtest engine with
+  `python scripts/backtest.py --from <paper-start-date> --cache-only --config config/config_paper_dayw.yaml`.
 
 ---
 
-## Key Config Files
+## How Orders Work
 
-| File | Purpose |
-|---|---|
-| `config/config.yaml` | Intraday settings (capital, watchlist, strategies, risk) |
-| `config/config_interday.yaml` | Interday settings (CNC, daily candles, EMA params) |
-| `config/.env` | Kite API credentials and access token (never commit this) |
+### Entry
 
----
+When `LRExtremaStrategy` generates a BUY signal:
+1. RiskManager checks: daily halt, max open positions, already in position, available capital
+2. Sizes quantity: `max_risk_per_trade ÷ sl_distance`, capped by `max_capital_per_stock` and available capital
+3. Places a **market or limit BUY order** (CNC delivery)
 
-## Risk Controls
+### Exit
 
-The following risk controls are configured in `config/config.yaml` under the `risk:` block:
+Exits are managed entirely by the strategy (GTT is disabled):
+- **Hard stop** — fires on every tick when `price <= entry × (1 - stop_pct/100)`
+- **Trailing stop** — activates once `price >= entry × (1 + profit_pct/100)`; then exits when price pulls back `trail_pct%` from peak
+- **Hold timeout** — exits at candle close after `hold_bars` candles
 
-| Control | Config key | Default | Description |
-|---|---|---|---|
-| Daily loss limit | `capital.daily_loss_limit_pct` | 2% | Halt all new entries for the day once realised loss hits this % of capital |
-| Weekly circuit breaker | `risk.weekly_loss_limit_pct` | 4% | Halt new entries for the rest of the week when weekly loss exceeds this. Resets Monday. Set `0` to disable. |
-| Regime overlay | `risk.regime_filter.enabled` | false | Block entries when NIFTY is below its 200 DMA or has drawn down >15% from 52w high |
-| Max open positions | `risk.max_open_positions` | varies | Cap on simultaneous open positions across all instruments |
-| ATR-based sizing | `risk.position_sizing.atr_based` | false | Size positions using `risk_amount / (atr_multiplier × ATR_14)` instead of fixed SL distance |
-| Position cap | `risk.position_sizing.max_position_pct` | 8% | Max % of capital in a single position (applies to both sizing methods) |
-| Chandelier trailing SL | `risk.trailing_stop.enabled` | false | Backtest only: trail SL as `highest_high − 3 × ATR_22`, ratchets up only |
+### Paper Mode
+
+In `env: paper`, no real orders are placed. BUY orders fill at the **next candle's open**. Exit logic (trailing, hard stop, hold timeout) runs identically to live.
 
 ---
 
-## VWAP Pullback Strategy
+## Backtesting
 
-A trend-continuation intraday strategy. Different from the existing VWAP Reversion strategy.
+```bash
+# Backtest from a start date to today
+python scripts/backtest.py --from 2025-01-01
 
-**3-step entry logic:**
-1. Close is above the SMA (default 50-period) — confirms the stock is in an uptrend
-2. Previous close was above VWAP; current candle's low touches VWAP (within tolerance) and close stays near VWAP — the pullback touch
-3. The next candle closes above the pullback candle's high — trend resumes → **BUY signal**
+# Specific date range
+python scripts/backtest.py --from 2025-01-01 --to 2025-06-30
 
-**Exit:** Close falls below VWAP — trend support broken.
-
-**How to enable** (`config/config.yaml`):
-```yaml
-strategies:
-  vwap_pullback:
-    enabled: true
-    sma_period: 50
-    vwap_touch_tolerance_pct: 0.2   # how close low/close must be to VWAP (%)
+# Override candle timeframe
+python scripts/backtest.py --from 2025-01-01 --timeframe 15minute
 ```
 
-**Flow impact:**
-- State is maintained across candles within a day: `watching` → `awaiting_resume` → entry signal
-- If price crashes through VWAP after the touch (close < VWAP × (1 − 3×tolerance)), state resets to `watching` — no entry
-- SMA accumulates across days (cross-day window); VWAP and pullback state reset each morning
-- Calibratable: `python scripts/calibrate.py --strategy vwap_pullback --from 2026-01-01 --iterations 20`
+**Flags:**
 
----
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start date (YYYY-MM-DD) |
+| `--to` | today | End date (YYYY-MM-DD) |
+| `--timeframe` | from config | `5minute / 15minute / 30minute / 60minute / day` |
 
-## ORB Signal Quality Filters
+**Intrabar simulation** — checks each candle's low (hard SL), high (trailing peak), and close (trailing exit) so exits fire at the exact price rather than slipping to the next candle open.
 
-Configured under `strategies.orb` in `config/config.yaml`:
+### Rolling backtest
 
-```yaml
-strategies:
-  orb:
-    range_minutes: 15
-    volume_filter: true
-    volume_lookback: 20       # days of range-volume history to build average
-    volume_multiplier: 1.5    # entry blocked if range volume < 1.5× 20-day avg
-    gap_filter: true
-    gap_pct: 2.0              # entry blocked if open gaps > 2% vs previous close
+Slides a fixed-width window across a long date range — reveals how the strategy performs across different market regimes.
+
+```bash
+python scripts/backtest_rolling.py --from 2024-01-01 --to 2025-12-31
+python scripts/backtest_rolling.py --from 2024-01-01 --window 6 --step 3 --symbols NSE:RELIANCE NSE:TCS
 ```
 
-**Volume filter flow:**
-- ORB accumulates the first-15-min cumulative volume for each trading day
-- From day 6 onward: if today's range volume < `volume_multiplier × 20-day avg`, the breakout signal is suppressed
-- Days 1–5: filter bypasses automatically (insufficient history) — trades still fire
+**Flags:**
 
-**Gap filter flow:**
-- On each new day, computes `|today's open / yesterday's close − 1|`
-- If gap > `gap_pct`, the entire day's ORB signals are skipped
-- Day 1 (no previous close): gap filter bypasses automatically
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Overall start date |
+| `--to` | today | Overall end date |
+| `--window` | 6 | Window width in months |
+| `--step` | 3 | Slide step in months |
+| `--symbols` | watchlist | Override instrument list |
+| `--timeframe` | from config | Candle timeframe |
 
-**Why these matter:** Low-volume breakouts have higher false positive rates. Large gap days have different opening dynamics that the standard ORB range doesn't capture well.
+### Walk-forward backtest
+
+True out-of-sample validation. Each fold trains the model on a dedicated training window, then tests on a separate non-overlapping window — the model never sees the test period during training. This is the most reliable measure of live performance.
+
+```bash
+python scripts/walk_forward.py --from 2025-01-01
+python scripts/walk_forward.py --from 2024-01-01 --to 2025-12-31 --train 6 --test 3
+python scripts/walk_forward.py --from 2025-01-01 --cache-only   # if candles already fetched
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Test period start date |
+| `--to` | today | Test period end date |
+| `--train` | 6 | Training window in months (pre-warmup, no trades) |
+| `--test` | 3 | Test window in months; also the slide step |
+| `--symbols` | watchlist | Override instrument list |
+| `--timeframe` | from config | Candle timeframe |
+| `--cache-only` | false | Skip Kite auth, use local SQLite data only |
+
+**Fold structure** (`--train 6 --test 3 --from 2025-01-01`):
+```
+Fold 1: train Jul–Dec 2024  →  test Jan–Mar 2025
+Fold 2: train Oct 2024–Mar 2025  →  test Apr–Jun 2025
+Fold 3: train Jan–Jun 2025  →  test Jul–Sep 2025
+...
+```
+
+**Key metric — Consistency**: percentage of folds that were profitable. Target >60%. A strategy with 80%+ consistency is robust across different market regimes.
+
+**Interpreting the results:**
+- If walk-forward return is significantly below regular backtest → rolling training buffer was seeing test-period data (expected; 10–20% degradation is normal)
+- Stable profit factor >1.2 across all folds → edge is real, not period-specific
+- One or two bad folds in a bear/sideways market → acceptable; check which regime they correspond to
+
+### Visual UI (local, browser-based)
+
+```bash
+source .venv/bin/activate
+streamlit run scripts/ui.py
+```
+
+Opens at `http://localhost:8501`.
+
+| Tab | Contents |
+|-----|----------|
+| **Portfolio** | Metric cards (trades, money-weighted win%, P&L, return, max drawdown, avg win/loss, Sharpe*), equity curve, trade table |
+| **Stock Chart** | Candlestick + volume + per-stock equity curve; ▲ entry and ▼ exit markers with exit reason and P&L on hover; optional live trades overlay from EC2 |
+| **Trade Breakdown** | P&L distribution histogram, exit reasons (SL / TRAILING / STRATEGY / OPEN@END), hold duration vs P&L scatter, money-weighted win rate by instrument |
+
+**Win rate** shown everywhere is **money-weighted**: `total_profit_from_wins / (total_profit_from_wins + total_loss_from_losses)`. A 30% trade-count win rate with large wins and small losses shows as 80%+ here.
+
+**Cache-only mode** — if the Kite token is expired the UI falls back to SQLite-cached candles. Charts and strategy replay still work for already-fetched symbols.
 
 ---
 
-## Strategy Groups
+## Calibration
 
-Strategy groups combine a primary signal strategy with one or more filter strategies using AND-logic.
+Find the best `LRExtremaStrategy` parameters on your watchlist.
 
-**Available groups:**
+```bash
+# Random search — 50 combinations (default, fast)
+python scripts/calibrate.py --from 2024-01-01
 
-| Group | Primary | Filter | What it does |
-|---|---|---|---|
-| `orb_supertrend` | ORB | Supertrend | ORB breakout only when Supertrend is trending in the same direction |
-| `orb_adx` | ORB | ADX | ORB breakout only when ADX confirms sufficient trend strength (no ranging) |
-| `orb_ema_pullback` | ORB | EMA Pullback | ORB breakout only when stock is already above its slow EMA |
-| `rsi_bollinger` | RSI | Bollinger | RSI oversold entry only when price is also at/below the lower Bollinger Band |
-| `rsi_supertrend` | RSI | Supertrend | RSI oversold only when Supertrend is bullish — avoids buying into downtrends |
-| `rsi_vwap` | RSI | VWAP | RSI oversold + price below VWAP — double mean-reversion confirmation |
-| `vwap_pullback_adx` | VWAP Pullback | ADX | VWAP pullback entry only when ADX confirms the trend has sufficient strength |
-| `ema_pullback_adx` | EMA Pullback | ADX | EMA pullback entry only when ADX confirms trend strength |
-| `ema_adx` | EMA Crossover | ADX | Interday: EMA crossover only when ADX confirms trend momentum |
+# More iterations
+python scripts/calibrate.py --from 2024-01-01 --mode random --iterations 200
+
+# Calibrate only specific params — rest fixed at config values
+python scripts/calibrate.py --from 2024-01-01 --params threshold profit_pct trail_pct
+
+# Grid search over a subset (full grid is too large to be practical)
+python scripts/calibrate.py --from 2024-01-01 --mode grid --params trail_pct stop_pct
+
+# Override timeframe
+python scripts/calibrate.py --from 2024-01-01 --timeframe 15minute
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start date |
+| `--to` | today | End date |
+| `--mode` | random | `grid` or `random` |
+| `--iterations` | 50 | Combinations to try (random mode) |
+| `--params` | all | Params to vary; rest fixed at config |
+| `--timeframe` | from config | Candle timeframe |
 
 **How it works:**
-- The primary strategy's `on_candle()` generates the signal
-- Each filter's `on_candle()` runs every bar to keep its indicators current
-- On an ENTRY signal: all filters must return `confirm_entry() = True` or the signal is dropped
-- EXIT signals always pass through — filters never block exits
+1. Pre-fetches candle data for all watchlist symbols once — subsequent iterations hit SQLite cache, no API calls
+2. For each combination, runs a full backtest and computes metrics
+3. Prints a ranked table sorted by return %
+4. Prints best params ready to paste into `config.yaml`
 
-**Calibrating a group:**
-```
-python scripts/calibrate.py --strategy orb_supertrend --from 2026-01-01 --iterations 30
-```
-Both primary and filter parameters are searched together and displayed with prefixed names (e.g. `orb__period`, `supertrend__multiplier`).
+**Parameter search space:**
+
+| Parameter | Values |
+|-----------|--------|
+| `warmup_bars` | 100, 150, 200, 300, 400 |
+| `lookback_bars` | 400, 500, 600, 800 |
+| `threshold` | 0.65, 0.70, 0.75, 0.80, 0.85, 0.90 |
+| `profit_pct` | 3.0, 4.0, 5.0, 6.0, 8.0, 9.0, 10.0 |
+| `trail_pct` | 1.0, 1.5, 2.0, 2.5 |
+| `stop_pct` | 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 |
+| `hold_bars` | 100, 150, 200, 250, 300 |
+| `retrain_every` | 25, 50, 100 |
+| `extrema_order` | 3, 5, 7 |
+
+> Full grid is ~1.5M combinations — always use `--mode random` or `--params` to restrict scope.
 
 ---
 
-## Regime Overlay
+## Stock Screening
 
-Prevents new entries during unfavourable broad market conditions.
+Backtest `LRExtremaStrategy` against all ~2,000 NSE EQ stocks to find where it performs best. Uses the current `lr_extrema` params from `config.yaml` — run calibration first.
 
-**How to enable** (`config/config.yaml`):
+```bash
+python scripts/screen.py --from 2025-01-01
+python scripts/screen.py --from 2025-01-01 --to 2025-06-30 --min-trades 3 --output results.csv
+python scripts/screen.py --from 2025-01-01 --timeframe 15minute
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--from` | required | Start date |
+| `--to` | today | End date |
+| `--min-trades` | 2 | Min trades to appear in final table |
+| `--output` | screen_results.csv | Output CSV path |
+| `--timeframe` | from config | Candle timeframe |
+
+**Resumable** — re-running the same command resumes from where it left off. Already-processed symbols are skipped; errored symbols are retried.
+
+**Rate limiting** — ~3 req/sec (0.35s sleep). Full scan of ~2,000 stocks takes ~12 minutes.
+
+**Good candidate signals:**
+- `return_pct > 5%` over the period
+- `win_rate >= 50%` (money-weighted)
+- `total_trades >= 3`
+- `avg_win / abs(avg_loss) > 1.5`
+
+---
+
+## File Structure
+
+```
+config/
+  config.yaml           — all runtime settings
+  .env                  — API credentials (never commit)
+
+trader/
+  auth/                 — Kite session management
+  backtest/             — engine shared by all backtest scripts
+  core/                 — config loader, logger
+  costs.py              — Zerodha brokerage calculator (CNC/MIS)
+  data/                 — historical fetch/cache, live WebSocket feed, SQLite store
+  notifications/        — Telegram alerts
+  orders/               — order placement (live + paper simulation)
+  portfolio/            — position tracking
+  risk/                 — signal validation, position sizing, capital tracking
+  scheduler/            — pre/post market jobs (APScheduler)
+  strategies/           — LRExtremaStrategy, base class, registry
+
+scripts/
+  kite_totp_refresh.py  — automated daily token refresh (runs on EC2 via cron)
+  kite_auth_server.py   — manual OAuth fallback token refresh
+  backtest.py           — historical replay (CLI)
+  backtest_rolling.py   — sliding-window backtest across date range
+  walk_forward.py       — true out-of-sample walk-forward validation
+  calibrate.py          — parameter search (grid / random)
+  screen.py             — backtest across all NSE EQ stocks
+  ui.py                 — backtest visualisation UI (Streamlit)
+  trader.service        — systemd unit file for EC2
+
+data/
+  market.db             — SQLite: candles, orders, signals, state (auto-created)
+
+logs/                   — rotating log files (auto-created)
+```
+
+---
+
+## Cloud Deployment (AWS EC2)
+
+- **Instance**: t2.micro, Ubuntu 24.04 LTS, ap-south-1 (Mumbai)
+- **Elastic IP**: `13.202.187.191` — whitelist in Zerodha API settings
+- **SSH port**: 9654
+- **Process manager**: systemd (`trader.service`) — auto-starts on boot, `Restart=always`
+  (60s backoff, no start limit — survives the token-dead window); weekly hygiene restart
+  Monday 08:40 IST via `trader-restart.timer`
+
+### Deploying Code Changes
+
+Deployments are tag-based — only explicitly tagged commits are deployed. This prevents unintended code from reaching the server.
+
+**Step 1 — Cut a release tag (on your local machine):**
+```bash
+git tag release-YYYY-MM-DD <commit-sha>
+git push origin release-YYYY-MM-DD
+```
+
+**Step 2 — Deploy the tag:**
+```bash
+./scripts/deploy.sh release-YYYY-MM-DD
+```
+The script will fail loudly if no tag is provided.
+
+**Force Refresh of Kite on Remote** (no service restart needed — then click
+"Reload token from .env" on the dashboard, or wait for the next pre-market/heartbeat):
+```bash
+ssh trader "sudo -u trader bash -c 'cd /opt/trader && .venv/bin/python scripts/kite_totp_refresh.py --no-restart'"
+```
+If the bot is stuck in a crash-loop (started while the token was dead), it self-heals
+within ~60s of the refresh — no manual restart required.
+**Rolling back** to a previous release is just:
+```bash
+./scripts/deploy.sh release-YYYY-MM-DD   # an earlier date
+```
+
+**Check what's running on EC2:**
+```bash
+ssh trader "git -C /opt/trader describe --tags"
+```
+
+### Monitoring
+
+```bash
+ssh trader "sudo systemctl status trader"
+ssh trader "sudo journalctl -u trader -f"
+ssh trader "sudo journalctl -u trader -n 100"
+ssh trader "free -h && df -h /"
+```
+
+### Live Dashboard
+
+```bash
+# Open SSH tunnel
+ssh -fN -L 8080:localhost:8080 trader
+
+# Open in browser
+open http://localhost:8080
+
+# Close tunnel
+pkill -f "ssh -fN -L 8080"
+```
+
+Enable in `config.yaml`:
 ```yaml
-risk:
-  regime_filter:
-    enabled: true
-    index_symbol: "NSE:NIFTY 50"
-    dma_period: 200
-    max_drawdown_pct: 15.0
-```
-
-**Flow impact:**
-- Pre-market, the system computes NIFTY 50's 200-day SMA and 52-week high
-- If NIFTY close < 200 DMA **or** NIFTY is down > 15% from its 52-week high → `RiskManager.update_regime(False)` is called
-- While regime is blocked: all ENTRY signals are rejected with reason `"regime_filter"` (logged to the signals table)
-- EXIT signals are never blocked by regime — existing positions can always be closed
-- Regime check is portfolio-level — applies to all instruments simultaneously
-- When regime clears (NIFTY recovers above 200 DMA): `update_regime(True)` re-enables entries
-
----
-
-## Weekly Circuit Breaker
-
-Protects against persistent losing streaks across multiple days in the same week.
-
-**How to enable** (`config/config.yaml`, intraday only):
-```yaml
-risk:
-  weekly_loss_limit_pct: 4.0   # halt if weekly loss exceeds 4% of total capital
-                                # set to 0 to disable
-```
-
-**Flow:**
-- RiskManager accumulates realised P&L across all trades within the week
-- When `weekly_realised_pnl < −(capital × weekly_loss_limit_pct / 100)` → `_weekly_halted = True`
-- All ENTRY signals are rejected for the rest of the week; EXIT signals still pass
-- On Monday: `reset_day(is_monday=True)` resets the weekly counter and clears the halt flag
-- The daily loss limit (`daily_loss_limit_pct`) operates independently — either can halt entries on any given day
-
----
-
-## ATR-Based Position Sizing
-
-Sizes positions relative to recent volatility instead of a fixed stop-loss distance.
-
-**How to enable** (`config/config.yaml`):
-```yaml
-risk:
-  position_sizing:
-    atr_based: true
-    atr_multiplier: 2.0       # quantity = risk_amount / (multiplier × ATR_14)
-    max_position_pct: 8.0     # hard cap: no single position > 8% of total capital
-```
-
-**Two sizing modes:**
-
-| Mode | Formula | When to use |
-|---|---|---|
-| Default (SL-distance) | `qty = risk_amount / sl_distance` | Fixed, predictable risk per trade |
-| ATR-based | `qty = risk_amount / (atr_multiplier × ATR_14)` | Sizes down automatically in volatile conditions |
-
-Both modes respect `max_position_pct` — the calculated quantity is capped so the total position value never exceeds that % of capital.
-
-**Flow impact:** No change to signal generation or order placement flow. Only the quantity attached to each order changes.
-
----
-
-## Chandelier Trailing Stop (Backtest)
-
-Trails the stop-loss upward as the trade moves in your favour. Only active in backtests — live trailing SL management is not yet implemented.
-
-**Per-run (override config):**
-```python
-from trader.backtest.engine import Backtest
-bt = Backtest(store, strategy, capital=200000.0, chandelier=True)
-```
-
-**Via config** (`config/config.yaml`):
-```yaml
-risk:
-  trailing_stop:
-    enabled: true       # applies to all backtest runs using default chandelier=None
-    period: 22          # look-back for ATR and highest-high
-    multiplier: 3.0     # SL = highest_high_since_entry − (3 × ATR_22)
-```
-
-**How it works:**
-- On entry fill: starts tracking the highest candle high since entry
-- Each subsequent candle: `chandelier_sl = highest_high − multiplier × ATR_22`
-- SL only ratchets **up** — it never moves down even if price pulls back
-- When `chandelier_sl > current stop_loss` → `trade.stop_loss` is updated
-- Trade exits when `candle.low ≤ stop_loss` (same SL-hit logic as fixed SL)
-
-**CLI backtest flag:**
-```
-python scripts/backtest.py --chandelier        # enable for this run
-python scripts/backtest.py --no-chandelier     # disable regardless of config
+ui:
+  enabled: true
+  port: 8080
 ```
 
 ---
 
-## Signal Audit Log
+## Common Issues
 
-Every signal the system generates — accepted or rejected — is written to the `signals` table in the SQLite database.
+**"Missing required environment variables"**
+→ Check that `config/.env` exists and has `KITE_API_KEY` and `KITE_API_SECRET`.
 
-**Schema:**
-```
-id, logged_at, instrument, strategy, direction, signal_type, price_hint, accepted, reject_reason
-```
+**"Access token is invalid or expired"**
+→ Run `python scripts/kite_auth_server.py` to refresh the token manually.
 
-**Rejection reasons written to the log:**
-- `"daily_limit"` — daily loss limit hit
-- `"weekly_limit"` — weekly circuit breaker active
-- `"regime_filter"` — regime overlay blocking entries
-- `"max_positions"` — at max open position count
-- `"duplicate"` — already have an open position in this instrument
-- `"zero_quantity"` — sizing formula produced qty = 0 (SL too wide)
+**"Instruments not found on NSE"**
+→ Check symbol format in watchlist: must be `NSE:SYMBOL` e.g. `NSE:RELIANCE`.
 
-**How to query (example):**
-```python
-import sqlite3, pandas as pd
-conn = sqlite3.connect("data/market.db")
-df = pd.read_sql("SELECT * FROM signals ORDER BY logged_at DESC LIMIT 100", conn)
-print(df[df["accepted"] == 0].groupby("reject_reason").size())  # rejection breakdown
-```
+**No signals firing**
+→ Confirm `lr_extrema` has `enabled: true`. The model needs `warmup_bars` candles before it starts predicting — check logs for "TRAINED" status.
 
-**Note:** Signal logging is only active in live/paper mode when `RiskManager` is constructed with `signal_logger=store.log_signal`. Backtest runs do not write to the signals table by default.
+**Backtest shows no trades**
+→ Widen the date range or lower `threshold`. Check that candles exist for the symbol and timeframe (`--timeframe` must match what was cached).
 
----
-
-## Notes on Capital
-
-- `capital.total` is the **total account capital**, not per-stock.
-- Position sizing is derived from `max_risk_per_trade_pct` × total capital.
-  - Default: Quantity = risk amount ÷ stop-loss distance in rupees
-  - ATR mode (when `atr_based: true`): Quantity = risk amount ÷ (`atr_multiplier` × ATR_14), capped at `max_position_pct` of capital
-- In **live/paper mode**, one risk manager is shared across all instruments — they compete for the same capital and `max_open_positions` slots.
-- In **backtesting**, each instrument/strategy is run independently with the full capital. The combined "Overall P&L" is additive and does not model capital allocation across instruments.
+**TOTP refresh failed**
+→ Check `logs/totp_refresh.log` on EC2. Common causes: wrong `KITE_TOTP_SECRET`, Zerodha password changed, network issue. Use `kite_auth_server.py` as fallback.

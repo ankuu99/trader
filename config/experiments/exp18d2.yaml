@@ -1,0 +1,6 @@
+# EXP-18d2 — plateau check for 18d (calm threshold +0.02)
+strategies:
+  lr_extrema:
+    market_regime:
+      enabled: true
+      calm: {threshold_delta: 0.02}

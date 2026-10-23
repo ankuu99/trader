@@ -1,0 +1,2 @@
+# EXP-02 — tradeable-trough labels, candidates = every 5th bar (W1, exp/labels)
+strategies: {lr_extrema: {labels: {type: tradeable, tradeable: {candidates: all, stride: 5, failed_class: neutral}}}}

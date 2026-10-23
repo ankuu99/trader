@@ -1,0 +1,16 @@
+# Oneshot unit fired by trader-restart.timer — weekly hygiene restart of the bot.
+#
+# Weekly-restart operation (replaces the old daily restart-on-token-refresh):
+#   1. sudo cp scripts/trader-restart.service scripts/trader-restart.timer /etc/systemd/system/
+#   2. sudo systemctl daemon-reload && sudo systemctl enable --now trader-restart.timer
+#   3. Update the 08:15 IST cron to: .venv/bin/python scripts/kite_totp_refresh.py --no-restart
+#      (the bot hot-reloads the new token itself at the 09:00 pre-market job)
+#   4. Verify: systemctl list-timers trader-restart.timer
+
+[Unit]
+Description=Weekly restart of the trader bot
+Requisite=trader.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart trader.service

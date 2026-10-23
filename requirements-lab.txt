@@ -1,0 +1,5 @@
+# Model Lab (TD-021, docs/03_Model_Lab_Proposal.md) — LOCAL research only.
+# Never installed on the EC2 t2.micro; production deps stay in requirements.txt.
+-r requirements.txt
+torch==2.14.1
+# lightgbm needs Homebrew libomp on macOS (`brew install libomp`); not installed — xgboost + sklearn cover trees.

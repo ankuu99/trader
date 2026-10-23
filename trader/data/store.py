@@ -1,0 +1,688 @@
+"""
+SQLite interface — all raw SQL lives here and nowhere else.
+
+Tables
+------
+candles        : OHLCV data for all instruments and timeframes
+orders         : every order action with full lifecycle tracking
+trades         : filled trade records linked to orders
+open_positions : paper-mode positions that survive restarts
+"""
+
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+from trader.core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class Store:
+    _DB_WARN_MB = 500  # warn if DB exceeds this size on startup
+
+    def __init__(self, db_path: Path):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = str(db_path)
+        self._init_schema()
+        self._log_db_size()
+
+    def _log_db_size(self):
+        try:
+            size_bytes = os.path.getsize(self._path)
+        except OSError:
+            return
+        size_mb = size_bytes / (1024 * 1024)
+        if size_mb >= self._DB_WARN_MB:
+            logger.warning(
+                "DB size WARNING | %.1f MB >= %d MB threshold — consider pruning old candles | path=%s",
+                size_mb, self._DB_WARN_MB, self._path,
+            )
+        else:
+            logger.info("DB size | %.1f MB | path=%s", size_mb, self._path)
+
+    @contextmanager
+    def _conn(self):
+        conn = sqlite3.connect(self._path, detect_types=sqlite3.PARSE_DECLTYPES)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------ #
+    # Schema                                                               #
+    # ------------------------------------------------------------------ #
+
+    def _init_schema(self):
+        with self._conn() as conn:
+            conn.executescript("""
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                CREATE TABLE IF NOT EXISTS candles (
+                    instrument  TEXT    NOT NULL,
+                    timeframe   TEXT    NOT NULL,
+                    timestamp   TEXT    NOT NULL,
+                    open        REAL    NOT NULL,
+                    high        REAL    NOT NULL,
+                    low         REAL    NOT NULL,
+                    close       REAL    NOT NULL,
+                    volume      INTEGER NOT NULL,
+                    PRIMARY KEY (instrument, timeframe, timestamp)
+                );
+
+                CREATE TABLE IF NOT EXISTS orders (
+                    order_id      TEXT    PRIMARY KEY,
+                    instrument    TEXT    NOT NULL,
+                    order_type    TEXT    NOT NULL,
+                    product       TEXT    NOT NULL,
+                    direction     TEXT    NOT NULL,
+                    quantity      INTEGER NOT NULL,
+                    price         REAL,
+                    trigger_price REAL,
+                    status        TEXT    NOT NULL,
+                    mode          TEXT    NOT NULL,
+                    placed_at     TEXT    NOT NULL,
+                    updated_at    TEXT    NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS trades (
+                    trade_id    TEXT    PRIMARY KEY,
+                    order_id    TEXT    NOT NULL,
+                    instrument  TEXT    NOT NULL,
+                    direction   TEXT    NOT NULL,
+                    quantity    INTEGER NOT NULL,
+                    price       REAL    NOT NULL,
+                    traded_at   TEXT    NOT NULL,
+                    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS open_positions (
+                    instrument           TEXT    PRIMARY KEY,
+                    entry_price          REAL    NOT NULL,
+                    quantity             INTEGER NOT NULL,
+                    held_bars            INTEGER NOT NULL DEFAULT 0,
+                    entry_time           TEXT    NOT NULL,
+                    current_price        REAL    DEFAULT 0,
+                    pct_change           REAL    DEFAULT 0,
+                    unrealised_pnl       REAL    DEFAULT 0,
+                    peak_close           REAL    DEFAULT 0,
+                    trailing_active      INTEGER DEFAULT 0,
+                    low_since_entry      REAL    DEFAULT 0,
+                    pattern_top_trailing INTEGER DEFAULT 0,
+                    addon_lots           TEXT,
+                    partial_taken        INTEGER DEFAULT 0,
+                    breakeven_active     INTEGER DEFAULT 0,
+                    parent_notional      REAL    DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS signals (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    logged_at     TEXT    NOT NULL,
+                    instrument    TEXT    NOT NULL,
+                    strategy      TEXT    NOT NULL,
+                    direction     TEXT    NOT NULL,
+                    signal_type   TEXT    NOT NULL,
+                    price_hint    REAL    NOT NULL,
+                    accepted      INTEGER NOT NULL,
+                    reject_reason TEXT,
+                    exit_reason   TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS state (
+                    key   TEXT PRIMARY KEY,
+                    value REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS model_scores (
+                    instrument TEXT NOT NULL,
+                    timestamp  TEXT NOT NULL,
+                    p_min      REAL NOT NULL,
+                    p_max      REAL NOT NULL,
+                    PRIMARY KEY (instrument, timestamp)
+                );
+            """)
+            # Migration: add new columns to open_positions for existing DBs
+            for col, defn in [
+                ("current_price",        "REAL DEFAULT 0"),
+                ("pct_change",           "REAL DEFAULT 0"),
+                ("unrealised_pnl",       "REAL DEFAULT 0"),
+                ("peak_close",           "REAL DEFAULT 0"),
+                ("trailing_active",      "INTEGER DEFAULT 0"),
+                ("low_since_entry",      "REAL DEFAULT 0"),
+                ("pattern_top_trailing", "INTEGER DEFAULT 0"),
+                ("addon_lots",           "TEXT"),  # scale-in add-on lots (JSON list)
+                ("partial_taken",        "INTEGER DEFAULT 0"),  # exit flags restored on restart
+                ("breakeven_active",     "INTEGER DEFAULT 0"),
+                # original parent ₹ notional — sizes the first add-on after a scale-out + reboot (TD-015)
+                ("parent_notional",      "REAL DEFAULT 0"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE open_positions ADD COLUMN {col} {defn}")
+                except sqlite3.OperationalError:
+                    continue  # column already exists
+                if col == "partial_taken":
+                    # Positions already scaled out before this column existed: a
+                    # pattern-top trail is only armed by the scale-out, so carry the
+                    # once-per-position guard over (else the first restart re-arms it).
+                    conn.execute("UPDATE open_positions SET partial_taken = 1 "
+                                 "WHERE pattern_top_trailing = 1")
+            # Migration: add exit_reason to signals for existing DBs
+            try:
+                conn.execute("ALTER TABLE signals ADD COLUMN exit_reason TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+    @staticmethod
+    def _to_naive(dt: datetime) -> datetime:
+        """Strip timezone info, keeping the wall-clock time (IST)."""
+        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+    def get_state(self, key: str, default: float = 0.0) -> float:
+        """Read a named float value from the state table."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM state WHERE key = ?", (key,)
+            ).fetchone()
+        return float(row[0]) if row else default
+
+    def set_state(self, key: str, value: float) -> None:
+        """Persist a named float value to the state table."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def read_state(self) -> list[dict]:
+        """Return all rows from the state table as {key, value} dicts."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT key, value FROM state ORDER BY key").fetchall()
+        return [{"key": r[0], "value": float(r[1])} for r in rows]
+
+    def delete_state(self, key: str) -> None:
+        """Delete a single key from the state table."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM state WHERE key = ?", (key,))
+
+    def save_loss_reentry(self, state: dict[str, int], instruments) -> None:
+        """Persist the loss re-entry countdown (instrument -> sessions left) as
+        `<instrument>.loss_reentry_sessions` keys; clears the key for every other
+        instrument in `instruments`, so expired blocks don't resurrect on restart."""
+        for inst in set(instruments) | set(state):
+            key = f"{inst}.loss_reentry_sessions"
+            if state.get(inst):
+                self.set_state(key, float(state[inst]))
+            else:
+                self.delete_state(key)
+
+    def load_loss_reentry(self, instruments) -> dict[str, int]:
+        """Read back the countdown written by save_loss_reentry (0 = not blocked)."""
+        out = {}
+        for inst in instruments:
+            left = int(self.get_state(f"{inst}.loss_reentry_sessions", 0))
+            if left > 0:
+                out[inst] = left
+        return out
+
+    def clear_backtest_data(self):
+        """Delete all data from all tables."""
+        with self._conn() as conn:
+            conn.executescript("DELETE FROM candles; DELETE FROM orders; DELETE FROM trades; DELETE FROM signals;")
+        logger.info("Backtest DB cleared (candles, orders, trades, signals)")
+
+    # ------------------------------------------------------------------ #
+    # Model scores (UI conviction trajectory)                            #
+    # ------------------------------------------------------------------ #
+
+    def write_model_score(self, instrument: str, timestamp, p_min: float,
+                          p_max: float, keep: int = 500) -> None:
+        """Record the model's (p_min, p_max) for one candle so the UI can draw a
+        conviction trajectory. Keyed on (instrument, timestamp) — re-scoring the
+        same candle overwrites. Trims to the most recent `keep` rows per
+        instrument so the table stays bounded under live operation."""
+        ts = timestamp
+        if isinstance(ts, datetime):
+            ts = self._to_naive(ts).isoformat()
+        ts = str(ts)
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO model_scores (instrument, timestamp, p_min, p_max) "
+                "VALUES (?, ?, ?, ?)",
+                (instrument, ts, float(p_min), float(p_max)),
+            )
+            conn.execute(
+                "DELETE FROM model_scores WHERE instrument = ? AND timestamp NOT IN "
+                "(SELECT timestamp FROM model_scores WHERE instrument = ? "
+                " ORDER BY timestamp DESC LIMIT ?)",
+                (instrument, instrument, keep),
+            )
+
+    def get_model_scores(self, instrument: str, limit: int = 80) -> list[dict]:
+        """Most recent `limit` model scores for an instrument, oldest-first
+        (chronological) so the caller can plot left-to-right."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT timestamp, p_min, p_max FROM model_scores WHERE instrument = ? "
+                "ORDER BY timestamp DESC LIMIT ?",
+                (instrument, limit),
+            ).fetchall()
+        return [
+            {"timestamp": r[0], "p_min": float(r[1]), "p_max": float(r[2])}
+            for r in reversed(rows)
+        ]
+
+    # ------------------------------------------------------------------ #
+    # Candles                                                              #
+    # ------------------------------------------------------------------ #
+
+    def write_candle(self, instrument: str, timeframe: str, candle: dict):
+        """Upsert a single live candle (dict with timestamp, open, high, low, close, volume)."""
+        ts = self._to_naive(candle["timestamp"])
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO candles
+                    (instrument, timeframe, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    instrument, timeframe, ts.isoformat(),
+                    candle["open"], candle["high"], candle["low"], candle["close"],
+                    int(candle["volume"]),
+                ),
+            )
+
+    def write_candles(self, instrument: str, timeframe: str, df: pd.DataFrame):
+        """
+        Upsert candles from a DataFrame with columns:
+            timestamp (datetime), open, high, low, close, volume
+        """
+        if df.empty:
+            return
+
+        # SQLite INTEGER is signed 64-bit; Kite occasionally returns garbage
+        # volume values (observed: exactly 2**63) that overflow it.
+        SQLITE_MAX_INT = 2**63 - 1
+
+        rows = []
+        for _, row in df.iterrows():
+            volume = int(row["volume"])
+            if volume > SQLITE_MAX_INT or volume < -SQLITE_MAX_INT - 1:
+                logger.warning(
+                    "Clamping out-of-range volume %d for %s [%s] @ %s to 0",
+                    volume, instrument, timeframe, row["timestamp"],
+                )
+                volume = 0
+            rows.append((
+                instrument,
+                timeframe,
+                self._to_naive(row["timestamp"]).isoformat(),
+                row["open"],
+                row["high"],
+                row["low"],
+                row["close"],
+                volume,
+            ))
+
+        with self._conn() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO candles
+                    (instrument, timeframe, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        logger.debug("Wrote %d candles for %s [%s]", len(rows), instrument, timeframe)
+
+    def read_candles(
+        self,
+        instrument: str,
+        timeframe: str,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> pd.DataFrame:
+        """Return candles as a DataFrame sorted by timestamp ascending."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT timestamp, open, high, low, close, volume
+                FROM candles
+                WHERE instrument = ? AND timeframe = ?
+                  AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+                """,
+                (instrument, timeframe, from_dt.isoformat(), to_dt.isoformat()),
+            ).fetchall()
+
+        if not rows:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+
+    def latest_candle_timestamp(
+        self, instrument: str, timeframe: str
+    ) -> datetime | None:
+        """Return the most recent candle timestamp we have cached, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(timestamp) FROM candles
+                WHERE instrument = ? AND timeframe = ?
+                """,
+                (instrument, timeframe),
+            ).fetchone()
+        value = row[0] if row else None
+        if not value:
+            return None
+        return self._to_naive(datetime.fromisoformat(value))
+
+    # ------------------------------------------------------------------ #
+    # Orders                                                               #
+    # ------------------------------------------------------------------ #
+
+    def upsert_order(self, order: dict):
+        """Insert or update an order record."""
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO orders
+                    (order_id, instrument, order_type, product, direction,
+                     quantity, price, trigger_price, status, mode, placed_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(order_id) DO UPDATE SET
+                    status     = excluded.status,
+                    price      = COALESCE(excluded.price, orders.price),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    order["order_id"],
+                    order["instrument"],
+                    order["order_type"],
+                    order["product"],
+                    order["direction"],
+                    order["quantity"],
+                    order.get("price"),
+                    order.get("trigger_price"),
+                    order["status"],
+                    order.get("mode", "live"),
+                    order.get("placed_at", now),
+                    now,
+                ),
+            )
+
+    def log_signal(
+        self,
+        timestamp: datetime,
+        instrument: str,
+        strategy: str,
+        direction: str,
+        signal_type: str,
+        price_hint: float,
+        accepted: bool,
+        reject_reason: str | None = None,
+        exit_reason: str | None = None,
+    ):
+        """Record a signal validation event (accepted or rejected)."""
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO signals
+                    (logged_at, instrument, strategy, direction, signal_type,
+                     price_hint, accepted, reject_reason, exit_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._to_naive(timestamp).isoformat(),
+                    instrument,
+                    strategy,
+                    direction,
+                    signal_type,
+                    price_hint,
+                    1 if accepted else 0,
+                    reject_reason,
+                    exit_reason,
+                ),
+            )
+
+    def mark_signal_broker_rejected(self, instrument: str, direction: str, reason: str) -> bool:
+        return self.mark_signal_rejected(instrument, direction, f"BROKER: {reason}")
+
+    def mark_signal_rejected(self, instrument: str, direction: str, reason: str) -> bool:
+        """Flip the signal row behind a refused order to accepted=0 with
+        reject_reason stored as given (broker path prefixes "BROKER: "). log_signal() records accepted=1 at
+        risk approval, before the order is placed, so without this the signals
+        table shows a trade that never happened (CAS 15:15 block, margin…).
+
+        Targets the instrument's LATEST signal row, and only if it is an
+        accepted row in the same direction — the reject arrives seconds after
+        placement, so that row is the one. Id-ordered on purpose: no wall-clock
+        comparison (logged_at is the candle timestamp, and the server is UTC).
+        Returns True when a row was updated."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, accepted, direction FROM signals WHERE instrument = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (instrument,),
+            ).fetchone()
+            if row is None or not row[1] or row[2] != direction:
+                return False
+            conn.execute(
+                "UPDATE signals SET accepted = 0, reject_reason = ? WHERE id = ?",
+                (reason[:300], row[0]),
+            )
+            return True
+
+    # ------------------------------------------------------------------ #
+    # Open positions (paper mode persistence)                              #
+    # ------------------------------------------------------------------ #
+
+    def upsert_open_position(self, instrument: str, entry_price: float,
+                             quantity: int, held_bars: int, entry_time: datetime,
+                             low_since_entry: float | None = None):
+        """Insert/replace a parent lot (only caller is a parent BUY fill); also records parent_notional."""
+        _low = low_since_entry if low_since_entry is not None else entry_price
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO open_positions (instrument, entry_price, quantity, held_bars, entry_time, low_since_entry,
+                                            parent_notional)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument) DO UPDATE SET
+                    entry_price     = excluded.entry_price,
+                    quantity        = excluded.quantity,
+                    held_bars       = excluded.held_bars,
+                    entry_time      = excluded.entry_time,
+                    low_since_entry = excluded.low_since_entry,
+                    parent_notional = excluded.parent_notional
+                """,
+                (instrument, entry_price, quantity, held_bars,
+                 self._to_naive(entry_time).isoformat(), _low,
+                 entry_price * quantity),
+            )
+
+    def update_position_metrics(self, instrument: str, held_bars: int,
+                                current_price: float, pct_change: float,
+                                unrealised_pnl: float, peak_close: float,
+                                trailing_active: bool, candle_low: float = 0.0,
+                                pattern_top_trailing: bool = False,
+                                partial_taken: bool | None = None,
+                                breakeven_active: bool | None = None):
+        # partial_taken / breakeven_active: None leaves the stored value unchanged.
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE open_positions
+                   SET held_bars = ?, current_price = ?, pct_change = ?,
+                       unrealised_pnl = ?, peak_close = MAX(peak_close, ?), trailing_active = ?,
+                       low_since_entry = CASE WHEN low_since_entry = 0 THEN ?
+                                              ELSE MIN(low_since_entry, ?) END,
+                       pattern_top_trailing = ?,
+                       partial_taken = COALESCE(?, partial_taken),
+                       breakeven_active = COALESCE(?, breakeven_active)
+                   WHERE instrument = ?""",
+                (held_bars, current_price, pct_change, unrealised_pnl,
+                 peak_close, int(trailing_active), candle_low, candle_low,
+                 int(pattern_top_trailing),
+                 None if partial_taken is None else int(partial_taken),
+                 None if breakeven_active is None else int(breakeven_active),
+                 instrument),
+            )
+
+    def save_exit_flags(self, instrument: str, trailing_active: bool,
+                        pattern_top_trailing: bool, partial_taken: bool,
+                        breakeven_active: bool):
+        """Persist the exit-policy flags immediately (e.g. at a scale-out fill) —
+        update_position_metrics only runs on decision candles, and a CAS stock's
+        15:15 auction bar is persist-only, so a restart could otherwise land before
+        the flags are written."""
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE open_positions
+                   SET trailing_active = ?, pattern_top_trailing = ?,
+                       partial_taken = ?, breakeven_active = ?
+                   WHERE instrument = ?""",
+                (int(trailing_active), int(pattern_top_trailing),
+                 int(partial_taken), int(breakeven_active), instrument),
+            )
+
+    def add_position_lot(self, instrument: str, fill_price: float, quantity: int,
+                         fill_time: datetime):
+        """Record a scale-in add-on lot: append to the addon_lots JSON list and bump
+        the blended quantity. Parent entry_price / entry_time / trailing state are
+        deliberately untouched — all exit anchors and UI sparklines stay on the
+        original entry. ``notional`` is the lot's original ₹ size and is never
+        reduced by scale-outs (seeds last_lot_notional after a reboot)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT quantity, addon_lots FROM open_positions WHERE instrument = ?",
+                (instrument,),
+            ).fetchone()
+            if row is None:
+                return
+            lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
+            lots.append({
+                "price": fill_price, "qty": quantity,
+                "notional": fill_price * quantity,
+                "date": self._to_naive(fill_time).isoformat(),
+            })
+            conn.execute(
+                "UPDATE open_positions SET quantity = ?, addon_lots = ? WHERE instrument = ?",
+                (int(row["quantity"]) + quantity, json.dumps(lots), instrument),
+            )
+
+    def update_position_quantity(self, instrument: str, quantity: int):
+        """Adjust the tracked quantity of an open position after a scale-out
+        (partial SELL), leaving entry_price / entry_time / trailing state intact."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE open_positions SET quantity = ? WHERE instrument = ?",
+                (quantity, instrument),
+            )
+
+    def consume_position_lots(self, instrument: str, sold_qty: int):
+        """Partial SELL on a (possibly scaled-in) position: reduce quantity and
+        reduce the parent and every add-on lot PROPORTIONALLY, like
+        RiskManager.reduce_position and the backtest's in-memory ledger — so the
+        daily reboot does not change avg cost, pool usage, realised/cumulative
+        P&L or loss-block arming (ISS-03). Whole shares via largest-remainder
+        allocation (ties to the lower index, parent first). Add-on lots that reach
+        0 are retained so the tier count and last-investment date survive a
+        reboot. Keeps addon_lots consistent with quantity so restart seeding
+        (parent_qty = quantity − Σ addon lots) can never go negative."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT quantity, addon_lots FROM open_positions WHERE instrument = ?",
+                (instrument,),
+            ).fetchone()
+            if row is None:
+                return
+            qty = int(row["quantity"])
+            lots = json.loads(row["addon_lots"]) if row["addon_lots"] else []
+            sold = min(max(int(sold_qty), 0), qty)
+            if sold == 0:
+                return
+            parent_qty = max(qty - sum(int(l["qty"]) for l in lots), 0)
+            parts = [parent_qty] + [int(l["qty"]) for l in lots]
+            total = sum(parts)
+            ideal = [p * sold / total for p in parts] if total else [0.0] * len(parts)
+            take = [int(x) for x in ideal]  # floor (non-negative)
+            leftover = sold - sum(take)
+            order = sorted(range(len(parts)), key=lambda i: (-(ideal[i] - take[i]), i))
+            for i in order[:leftover]:
+                take[i] += 1
+            new_lots = [
+                {**lot, "qty": parts[i + 1] - take[i + 1]} for i, lot in enumerate(lots)
+            ]
+            conn.execute(
+                "UPDATE open_positions SET quantity = ?, addon_lots = ? WHERE instrument = ?",
+                (qty - sold, json.dumps(new_lots) if new_lots else None, instrument),
+            )
+
+    def delete_open_position(self, instrument: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM open_positions WHERE instrument = ?", (instrument,))
+
+    def read_open_positions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT instrument, entry_price, quantity, held_bars, entry_time,"
+                " low_since_entry, addon_lots, trailing_active, pattern_top_trailing,"
+                " partial_taken, breakeven_active, parent_notional FROM open_positions"
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["addon_lots"] = json.loads(d["addon_lots"]) if d.get("addon_lots") else []
+            for k in ("trailing_active", "pattern_top_trailing", "partial_taken", "breakeven_active"):
+                d[k] = bool(d.get(k))
+            d["parent_notional"] = float(d.get("parent_notional") or 0.0)
+            out.append(d)
+        return out
+
+    def read_pending_live_orders(self) -> list[dict]:
+        """Return today's live BUY orders still in PENDING state (unfilled on restart)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT instrument, quantity, price
+                FROM orders
+                WHERE status = 'PENDING'
+                  AND mode   = 'live'
+                  AND direction = 'BUY'
+                  AND date(placed_at) = date('now', 'localtime')
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def write_trade(self, trade: dict):
+        """Record a filled trade."""
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO trades
+                    (trade_id, order_id, instrument, direction, quantity, price, traded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade["trade_id"],
+                    trade["order_id"],
+                    trade["instrument"],
+                    trade["direction"],
+                    trade["quantity"],
+                    trade["price"],
+                    trade.get("traded_at", datetime.now().isoformat()),
+                ),
+            )

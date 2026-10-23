@@ -1,0 +1,136 @@
+{
+  "mode": "asof-grid (trade-period PIT)",
+  "asof": null,
+  "asof_grid": [
+    "2024-07-01",
+    "2025-01-01",
+    "2025-07-01",
+    "2026-01-01"
+  ],
+  "n_winners_with_fund": 17,
+  "n_contrast_with_fund": 120,
+  "bonferroni_alpha": 0.005,
+  "n_factors_tested": 10,
+  "factors": [
+    {
+      "factor": "yoy_profit_growth",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": 0.1713,
+      "median_con": 0.1187,
+      "effect_mad": 0.333,
+      "p": 0.75149,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "growth_acceleration",
+      "n_win": 16,
+      "n_con": 116,
+      "median_win": -0.1081,
+      "median_con": 0.0056,
+      "effect_mad": -0.948,
+      "p": 0.00866,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "earnings_consistency",
+      "n_win": 17,
+      "n_con": 116,
+      "median_win": -0.3344,
+      "median_con": -0.354,
+      "effect_mad": 0.095,
+      "p": 0.61087,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "opm_trend",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": 0.2681,
+      "median_con": 0.1114,
+      "effect_mad": 0.394,
+      "p": 0.43524,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "roce",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": 17.095,
+      "median_con": 16.99,
+      "effect_mad": 0.012,
+      "p": 0.96094,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "roce_trend",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": 0.4765,
+      "median_con": 0.44,
+      "effect_mad": 0.022,
+      "p": 0.59463,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "debt_to_equity",
+      "n_win": 15,
+      "n_con": 120,
+      "median_win": 0.1,
+      "median_con": 0.07,
+      "effect_mad": 0.353,
+      "p": 0.97448,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "cfo_to_np",
+      "n_win": 15,
+      "n_con": 120,
+      "median_win": 1.0186,
+      "median_con": 1.122,
+      "effect_mad": -0.238,
+      "p": 0.79828,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "interest_coverage",
+      "n_win": 15,
+      "n_con": 120,
+      "median_win": 14.665,
+      "median_con": 18.9575,
+      "effect_mad": -0.304,
+      "p": 0.34991,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "pledge",
+      "n_win": 0,
+      "n_con": 0,
+      "status": "insufficient"
+    },
+    {
+      "factor": "promoter_trend_pp_per_qtr",
+      "n_win": 17,
+      "n_con": 115,
+      "median_win": -0.003,
+      "median_con": -0.0,
+      "effect_mad": -0.5,
+      "p": 0.68069,
+      "status": "tested",
+      "discriminating": false
+    }
+  ],
+  "discriminating_factors": [],
+  "null_result": true,
+  "low_power": true,
+  "pit_caveat": "per-stock median over within-window as-of dates \u2014 no look-ahead from post-window financials; still N-limited and uses period-median not per-trade dates (candle cache too thin for per-trade PIT)."
+}

@@ -1,0 +1,6 @@
+# EXP-18b — market-regime entry modulation (W6, exp/regime; DECISIONS 2026-10-18)
+strategies:
+  lr_extrema:
+    market_regime:
+      enabled: true
+      stress: {threshold_delta: -0.05}

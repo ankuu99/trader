@@ -1,0 +1,2 @@
+# EXP-07 — market context add-on: rel. strength vs Nifty, Nifty drawdown, VIX level/change (W2, exp/features)
+strategies: {lr_extrema: {features: {market: {enabled: true}}}}

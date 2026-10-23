@@ -21,11 +21,11 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ### 2.1 Live Quotes
 - Fetch real-time quotes for a watchlist of instruments
 - Support NSE and BSE segments
-- Data fields: LTP, OHLC, volume, bid/ask, OI (for F&O)
+- Data fields: LTP, OHLC, volume, bid/ask
 
 ### 2.2 Historical Data
 - Download historical OHLCV data for backtesting and analysis
-- Configurable timeframe: 1min, 5min, 15min, 30min, 60min, day
+- Configurable timeframe: 1min, 5min, 15min, 30min, 60min, 4hour, day, week
 - Support date-range queries
 - Cache downloaded data locally to avoid redundant API calls
 
@@ -40,14 +40,13 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ## 3. Order Management
 
 ### 3.1 Order Placement
-- Place market, limit, SL, and SL-M orders
-- Support order types: regular, BO (bracket order), CO (cover order)
-- Support exchange segments: NSE, BSE, NFO, MCX
-- Support product types: CNC (delivery), ~~MIS (intraday)~~
+- Place market, orders
+- Support order types: regular
+- Support exchange segments: NSE, BSE
+- Support product types: CNC (delivery)
 
 ### 3.2 Order Lifecycle
 - Modify open orders (price, quantity)
-- Cancel open/pending orders
 - Track order status: pending → open → complete / rejected / cancelled
 
 ### 3.3 Order Logging
@@ -59,7 +58,6 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ## 4. Portfolio & Position Tracking
 
 - Fetch current holdings (long-term positions / CNC)
-~~- Fetch intraday positions (MIS/NRML)~~
 - Track unrealised and realised P&L
 - Display net position per instrument
 
@@ -75,27 +73,10 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
   - `generate_signals()` — produce buy/sell signals
 - Allow multiple strategies to run simultaneously
 - Strategies should be self-contained and configurable via parameters
+- Strategies only give buy/entry signals
+- Every entry is marked with a dual side GTT, which covers exit at profit and loss.
 
 ### 5.2 Built-in Strategies
-
-**Intraday (5-minute candles, MIS):**
-~~- **RSI Mean Reversion** — buy oversold, sell overbought on NSE equities~~
-~~- **Opening Range Breakout (ORB)** — trade breakout of first N minutes high/low (configurable)~~
-~~- **VWAP Reversion** — enter on VWAP deviation, exit on mean reversion~~
-~~- **Supertrend** — ATR-based trend filter; usable standalone or as a group filter~~
-~~- **Bollinger Band** — mean reversion at band extremes~~
-~~- **EMA Pullback** — enter on pullbacks to fast EMA in an uptrend~~
-
-**Interday (daily candles, CNC):**
-- **EMA Crossover** — BUY on golden cross, EXIT on death cross
-- **RSI + EMA** — RSI oversold + price above EMA for entry
-- **Breakout** — 52-week high breakout with trailing stop
-- **ADX Filter** — trend strength filter; filter-only, not used standalone
-
-**Strategy Groups (AND-logic):**
-- **orb_supertrend** — ORB primary + Supertrend filter
-- **rsi_bollinger** — RSI primary + Bollinger filter
-- **ema_adx** — EMA Crossover primary + ADX filter
 
 ### 5.3 Signal → Order Bridge
 - Convert strategy signals into actual orders respecting risk controls
@@ -106,12 +87,9 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ## 6. Risk Management
 
 - Starting capital: ₹20,000
-- Max risk per trade: 1–2% of capital (₹200–₹400)
-- Maximum number of open positions at any time (to be configured)
+- Max risk per trade: 1–2% of capital
 - Daily loss limit — halt trading if breached (e.g. 3% of capital = ₹600)
-- Stop-loss enforcement: mandatory SL on every order
-- Position sizing based on risk per trade (ATR-based optional, later)
-- System initiates square-off at 3:15 PM IST; Zerodha's 3:20 PM auto square-off is the hard backstop
+- Stop-loss enforcement: mandatory SL on every order (via GTT)
 
 ---
 
@@ -151,7 +129,7 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 
 - Schedule strategy runs aligned to market hours (9:15 AM – 3:30 PM IST)
 - Pre-market setup task (fetch instruments, warm up data cache)
-- Post-market teardown task (square-off check, generate daily report)
+- Post-market teardown task (generate daily report)
 - Configurable via cron or APScheduler
 
 ---
@@ -223,9 +201,3 @@ A personal automated trading system built in Python, connected to Zerodha's Kite
 ---
 
 ## 19. Decisions
-
-1. **Strategies (initial):** RSI mean reversion and Opening Range Breakout (ORB) — equities only (NSE), no F&O
-2. **Paper trading:** 2 weeks, running in parallel with backtesting before going live
-3. **Starting capital:** ₹20,000. Per-trade risk: 1–2% (₹200–₹400 max loss per trade)
-4. **Telegram bot token:** already done
-5. **Historical data storage:** Single unified SQLite DB with instrument column. Migrate to Parquet if performance degrades.

@@ -1,0 +1,129 @@
+{
+  "asof": "2026-06-30",
+  "n_winners_with_fund": 17,
+  "n_contrast_with_fund": 121,
+  "bonferroni_alpha": 0.005,
+  "n_factors_tested": 10,
+  "factors": [
+    {
+      "factor": "yoy_profit_growth",
+      "n_win": 17,
+      "n_con": 121,
+      "median_win": 0.5019,
+      "median_con": 0.1126,
+      "effect_mad": 1.204,
+      "p": 0.04249,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "growth_acceleration",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": 0.0676,
+      "median_con": -0.0095,
+      "effect_mad": 0.505,
+      "p": 0.08071,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "earnings_consistency",
+      "n_win": 17,
+      "n_con": 120,
+      "median_win": -0.2304,
+      "median_con": -0.4401,
+      "effect_mad": 0.818,
+      "p": 0.74654,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "opm_trend",
+      "n_win": 17,
+      "n_con": 121,
+      "median_win": 0.2271,
+      "median_con": 0.09,
+      "effect_mad": 0.256,
+      "p": 0.29688,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "roce",
+      "n_win": 17,
+      "n_con": 121,
+      "median_win": 19.96,
+      "median_con": 15.57,
+      "effect_mad": 0.481,
+      "p": 0.23319,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "roce_trend",
+      "n_win": 17,
+      "n_con": 121,
+      "median_win": 2.716,
+      "median_con": 0.298,
+      "effect_mad": 1.623,
+      "p": 0.07585,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "debt_to_equity",
+      "n_win": 15,
+      "n_con": 121,
+      "median_win": 0.1,
+      "median_con": 0.07,
+      "effect_mad": 0.333,
+      "p": 0.87377,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "cfo_to_np",
+      "n_win": 15,
+      "n_con": 121,
+      "median_win": 0.6749,
+      "median_con": 1.107,
+      "effect_mad": -0.876,
+      "p": 0.17547,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "interest_coverage",
+      "n_win": 15,
+      "n_con": 121,
+      "median_win": 10.25,
+      "median_con": 17.52,
+      "effect_mad": -0.572,
+      "p": 0.53177,
+      "status": "tested",
+      "discriminating": false
+    },
+    {
+      "factor": "pledge",
+      "n_win": 0,
+      "n_con": 0,
+      "status": "insufficient"
+    },
+    {
+      "factor": "promoter_trend_pp_per_qtr",
+      "n_win": 17,
+      "n_con": 119,
+      "median_win": -0.0,
+      "median_con": -0.0,
+      "effect_mad": 0.0,
+      "p": 0.53976,
+      "status": "tested",
+      "discriminating": false
+    }
+  ],
+  "discriminating_factors": [],
+  "null_result": true,
+  "low_power": true,
+  "pit_caveat": "single-asof snapshot, not trade-period PIT \u2014 look-ahead; OOS validation (Step 5) is required before trusting."
+}

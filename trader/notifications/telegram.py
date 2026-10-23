@@ -31,6 +31,13 @@ logger = get_logger(__name__)
 
 _BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _TIMEOUT = 5  # seconds
+_enabled = True
+
+
+def disable():
+    """Suppress all notifications (e.g. during backtesting)."""
+    global _enabled
+    _enabled = False
 
 
 def _token() -> str | None:
@@ -49,6 +56,8 @@ def _send(text: str) -> bool:
     token = _token()
     chat_id = _chat_id()
 
+    if not _enabled:
+        return False
     if not token or not chat_id:
         logger.debug("Telegram not configured — skipping notification")
         return False
@@ -60,6 +69,12 @@ def _send(text: str) -> bool:
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
             timeout=_TIMEOUT,
         )
+        if resp.status_code == 400 and "parse entities" in resp.text:
+            # Markdown broke on interpolated text (e.g. an underscore in a reason
+            # code opens an unclosed italic). Deliver it as plain text rather than
+            # dropping the alert.
+            logger.warning("Telegram Markdown rejected — resending as plain text | %s", resp.text)
+            resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=_TIMEOUT)
         if not resp.ok:
             logger.warning("Telegram send failed | status=%d | %s", resp.status_code, resp.text)
             return False
@@ -73,16 +88,45 @@ def _send(text: str) -> bool:
 # Public notification functions                                        #
 # ------------------------------------------------------------------ #
 
+def notify_order_queued(instrument: str, direction: str, quantity: int,
+                        strategy: str, mode: str,
+                        stop_loss: float | None = None, target_price: float | None = None,
+                        price_hint: float | None = None, order_type: str = "MARKET"):
+    emoji = "🟡" if direction == "BUY" else "🟠"
+    tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    price_line = f"Price      : ₹{price_hint:,.2f}\n" if price_hint else ""
+    sl_line    = f"SL         : ₹{stop_loss:,.2f}\n" if stop_loss else ""
+    tgt_line   = f"Target     : ₹{target_price:,.2f}\n" if target_price else ""
+    status = "Queued" if mode == "paper" else f"Placed ({order_type})"
+    text = (
+        f"{emoji} *Order {status}* {tag}\n"
+        f"Instrument : `{instrument}`\n"
+        f"Direction  : {direction}\n"
+        f"Quantity   : {quantity}\n"
+        f"{price_line}"
+        f"{sl_line}"
+        f"{tgt_line}"
+        f"Strategy   : {strategy}\n"
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
+
 def notify_order_filled(instrument: str, direction: str, quantity: int,
-                        fill_price: float, strategy: str, mode: str):
+                        fill_price: float, strategy: str, mode: str,
+                        stop_loss: float | None = None, target_price: float | None = None):
     emoji = "🟢" if direction == "BUY" else "🔴"
     tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    sl_line = f"SL         : ₹{stop_loss:,.2f}\n" if stop_loss else ""
+    tgt_line = f"Target     : ₹{target_price:,.2f}\n" if target_price else ""
     text = (
         f"{emoji} *Order Filled* {tag}\n"
         f"Instrument : `{instrument}`\n"
         f"Direction  : {direction}\n"
         f"Quantity   : {quantity}\n"
         f"Price      : ₹{fill_price:,.2f}\n"
+        f"{sl_line}"
+        f"{tgt_line}"
         f"Strategy   : {strategy}\n"
         f"Time       : {datetime.now().strftime('%H:%M:%S')}"
     )
@@ -140,6 +184,25 @@ def notify_error(component: str, message: str):
     _send(text)
 
 
+def notify_token_reminder():
+    text = (
+        f"⏰ *Token Refresh Reminder*\n"
+        f"Run `~/scripts/refresh-token.sh` before 9:15 AM to authenticate today's session.\n"
+        f"Date : {datetime.now().strftime('%d %b %Y')}"
+    )
+    _send(text)
+
+
+def notify_token_refreshed(user_id: str):
+    text = (
+        f"🔑 *Token Refreshed*\n"
+        f"User : {user_id}\n"
+        f"Time : {datetime.now().strftime('%H:%M:%S IST')}\n"
+        f"Valid until midnight IST."
+    )
+    _send(text)
+
+
 def notify_startup(mode: str, instruments: list[str], strategies: int):
     tag = "[PAPER]" if mode == "paper" else "[LIVE]"
     text = (
@@ -147,5 +210,49 @@ def notify_startup(mode: str, instruments: list[str], strategies: int):
         f"Instruments : {', '.join(instruments)}\n"
         f"Strategies  : {strategies}\n"
         f"Time        : {datetime.now().strftime('%H:%M:%S IST')}"
+    )
+    _send(text)
+
+
+def notify_gtt_placed(instrument: str, quantity: int, stop_loss: float, target_price: float):
+    text = (
+        f"🎯 *GTT OCO Placed* [LIVE]\n"
+        f"Instrument : `{instrument}`\n"
+        f"Quantity   : {quantity}\n"
+        f"SL         : ₹{stop_loss:,.2f}\n"
+        f"Target     : ₹{target_price:,.2f}\n"
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
+
+def notify_trailing_activated(instrument: str, entry_price: float, peak: float,
+                               gain_pct: float, trail_pct: float,
+                               trigger_type: str, mode: str):
+    tag = "[PAPER]" if mode == "paper" else "[LIVE]"
+    trail_stop = peak * (1 - trail_pct / 100)
+    text = (
+        f"🔔 *Trailing Stop Activated* {tag}\n"
+        f"Instrument : `{instrument}`\n"
+        f"Entry      : ₹{entry_price:,.2f}\n"
+        f"Peak       : ₹{peak:,.2f} (+{gain_pct:.2f}%)\n"
+        f"Trail stop : ₹{trail_stop:,.2f} (-{trail_pct:.1f}% from peak)\n"
+        f"Type       : `{trigger_type}`\n"  # code span: PATTERN_TOP's "_" broke Markdown
+        f"Time       : {datetime.now().strftime('%H:%M:%S')}"
+    )
+    _send(text)
+
+
+def notify_positions_restored(positions: list[dict]):
+    if not positions:
+        return
+    lines = "\n".join(
+        f"  • `{p['instrument']}` x{p['quantity']} @ ₹{p['entry_price']:,.2f}"
+        for p in positions
+    )
+    text = (
+        f"♻️ *Positions Restored* [PAPER]\n"
+        f"{lines}\n"
+        f"Time : {datetime.now().strftime('%H:%M:%S')}"
     )
     _send(text)

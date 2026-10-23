@@ -1,0 +1,5 @@
+# EXP-04 — lag stacking: append the feature vector at t-1, t-2 (ledger B-02). Config-only on the TD-018 scaffold.
+strategies:
+  lr_extrema:
+    features:
+      lags: [1, 2]

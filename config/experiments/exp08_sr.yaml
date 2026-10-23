@@ -1,0 +1,2 @@
+# EXP-08 — touch-counted support/resistance add-on (W2, exp/features)
+strategies: {lr_extrema: {features: {sr: {enabled: true}}}}
