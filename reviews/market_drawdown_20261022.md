@@ -94,3 +94,41 @@ Sources: HDFC Sky and Kotak Neo closing reports (23 Oct), Business Standard clos
 - The loss block refused 17 rebuys. QUESS signalled at 306 → 298 and TIPSMUSIC at 716 → 704 while blocked, so both kept
   falling after the block. ADFFOODS, ENGINERSIN and CGPOWER are now blocked for 2 sessions.
 - Nothing hit the 20 % hard stop.
+
+## Addendum 2026-10-23 (evening) — vs backtest drawdowns in past corrections
+
+**Method.** Both curves are daily mark-to-market: realised P&L plus open lots marked at the daily close, with drawdown
+taken as % of account value at the peak (₹6L + profits to date).
+- **Backtest:** current config, 2020-01-01 → 2026-10-16 (local candles end there), 3,226 trades, ₹60k add-on pool funded.
+- **Live:** FIFO of live fills since May.
+- **Normalisation:** the backtest compounds (₹15–19L deployed by 2025–26 vs ₹3–5L live), so rupee drawdowns are not
+  comparable; only % of account is.
+- **Corrections:** Smallcap 250 declines of ≥8 % on a zigzag, from Kite daily index data.
+- **Scripts:** `reviews/market_drawdown_20261022/`.
+
+**Live now: −6.3 % of account** (−₹41.4k, MTM peak +₹57.8k on 14 Oct → +₹16.3k on 23 Oct, 7 sessions). Smallcap 250 is −11.5 %
+from its 8 Sep high.
+
+| Small-cap correction | SC250 | Backtest account DD | Worst 7-session | Recovered (after trough) |
+|---|---|---|---|---|
+| COVID, Jan–Mar 2020 | −43.8 % | −36.2 % | −25.7 % | 323 d |
+| Aug 2021 | −9.3 % | −5.3 % | −3.2 % | 10 d |
+| Nov 2021 | −8.6 % | −4.3 % | −2.9 % | 11 d |
+| Jan–Feb 2022 | −19.3 % | −8.1 % | −5.7 % | 39 d |
+| Apr–Jun 2022 | −23.2 % | −9.6 % | −7.5 % | 57 d |
+| Dec 2022–Mar 2023 | −13.6 % | −6.4 % | −3.9 % | 69 d |
+| Feb–Mar 2024 | −12.5 % | −5.5 % | −5.5 % | 8 d |
+| Oct–Nov 2024 | −10.5 % | −5.4 % | −3.1 % | 20 d |
+| Dec 2024–Mar 2025 | −25.7 % | −12.4 % | −8.4 % | 77 d |
+| Jul 2025–Mar 2026 | −21.1 % | −6.4 % | −4.4 % | 16 d |
+| **Live, Sep–Oct 2026** | **−11.5 % so far** | **−6.3 % so far** | **−6.3 %** | — |
+
+Reading:
+- **Depth is in line.** The −10 to −14 % small-cap corrections cost the backtest 5.4–6.4 %, and live is at −6.3 %.
+  The 19–26 % corrections cost 8–12 %.
+- **Speed is in the tail.** Only 1.5 % of all backtest 7-session windows lost ≥6.3 %. The faster ones were COVID, Feb 2025
+  (−8.4 %), May 2022 (−7.5 %) and Sep 2020 (−7.0 %).
+- **If it extends.** A 2022/2025-scale slide (−20 to −26 %) implies a backtest-typical 8–12 % account DD, about ₹11k–₹40k
+  more from here. Outside COVID, recovery took 8–77 days after the trough.
+- **Live is likely a little milder.** Its add-on pool is unfunded (TD-022), and the backtest's funded pool amplifies bad
+  quarters.
