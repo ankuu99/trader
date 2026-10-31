@@ -19,3 +19,10 @@ Source: Independent production-safety review 2026-10-17, finding 1 (`reviews/pro
 ## Addendum 2026-10-17 — fixed (1756139)
 
 `free_cash_from_margins` (trader/risk/manager.py) reads `net` → `available.live_balance` → `available.cash`; `main.py::_fetch_kite_cash` uses it and logs all raw fields. Guide: `to_develop/completed/2026-10-17_ISS-01_live-cash-from-margins-net.md`. Not yet released.
+
+## Addendum 2026-10-31 — field validation (live 26–30 Oct)
+
+EC2 journal "Kite margins |" lines: on 27 Oct, `net` went from 285,003 (open) to 323,488 after the ACMESOLAR sale
+(debits −38,484.5), then to 285,374 after the TIPSMUSIC buy. On 30 Oct it went from 287,355 to 248,848 (QUESS buy),
+then 210,863 (CGPOWER) and 172,469 (ACMESOLAR). `opening`/`cash` stayed at the opening balance throughout. The bot reads
+`net`, which tracks intraday trades. Validated.

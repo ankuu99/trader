@@ -132,3 +132,62 @@ Reading:
   more from here. Outside COVID, recovery took 8–77 days after the trough.
 - **Live is likely a little milder.** Its add-on pool is unfunded (TD-022), and the backtest's funded pool amplifies bad
   quarters.
+
+## Addendum 2026-10-31 — the week of 26–30 Oct (partial rebound)
+
+**Market:** the Smallcap 250 bottomed on 23 Oct (16,385, −11.5 % from the 8 Sep high), rose four sessions to 17,101 on
+29 Oct (+4.4 %), then fell 2.0 % on 30 Oct to 16,765 (−9.5 % from the high, +2.3 % off the low). Nifty 50 held up
+(22,600 → 23,053). Source: Kite daily index candles (`fetch_idx.py`).
+
+**Account (mark-to-market, gross, `live_eq.py`):**
+
+| Close | Realised since May | Unrealised | Equity vs May | Positions / deployed |
+|---|---|---|---|---|
+| 14 Oct (peak) | ₹51.9k | +₹5.8k | ₹57.8k | 12 / ₹3.45L |
+| 23 Oct (low) | ₹32.5k | −₹16.1k | ₹16.3k | 11 / ₹3.29L |
+| 27 Oct | ₹31.9k | −₹1.8k | ₹30.1k | 10 / ₹2.87L |
+| 30 Oct | ₹26.3k | −₹4.5k | ₹21.8k | 13 / ₹3.99L |
+
+Drawdown from the peak is now −₹36.0k (≈ −5.5 % of account value at the peak), against −₹41.4k (−6.3 %) at the 23 Oct low.
+The account recovered about 13 % of its drawdown, and the Smallcap 250 about 18 % of its fall. `cumulative_pnl` (net,
+realised since 17 Oct) is −₹26.6k (−₹20.4k on 23 Oct).
+
+**Realised this week: −₹6.2k gross.**
+
+| Exit | Reason | P&L | Note |
+|---|---|---|---|
+| STYLAMIND (from 16 Sep) | STALE_REARM | −₹5,395 | the week's whole loss; on the loss block for 2 sessions |
+| ACMESOLAR (from 5 Oct) | STALE_REARM | −₹2,109 | re-bought 30 Oct at 404 |
+| CUMMINSIND (from 14 Oct) | STALE | −₹1,962 | |
+| ATHERENERG (from 21 Oct) | STALE_REARM | −₹991 | see below |
+| CUPID (from 22 Oct) | STALE | −₹549 | |
+| TIPSMUSIC (27 Oct → 28 Oct) | PATTERN_TOP_PARTIAL + TRAILING_EOD_CLOSE | +₹2,239 | first entry after its loss block expired |
+| KPL (23 Oct → 26 Oct) | PATTERN_TOP_PARTIAL + TRAILING | +₹1,297 | |
+| THANGAMAYL (26 Oct → 27 Oct) | PATTERN_TOP_PARTIAL + TRAILING_EOD_CLOSE | +₹1,256 | exposed ISS-16 |
+
+The stale exits were losses already showing on 23 Oct; this week's wins all came from new entries made during the
+rebound (THANGAMAYL, TIPSMUSIC, KPL). New entries on 30 Oct (QUESS, CGPOWER, ACMESOLAR, KPL) took the book back
+to 13 positions on the day the index fell 2 %.
+
+**ATHERENERG (hindsight, an upper bound, not a lost profit):** the stale re-arm sold 27 shares at 1,399.5 at 12:30 on
+26 Oct. The stock closed that day at 1,575 (low 1,346, high 1,613) and closed at 1,756 on 30 Oct, about ₹9.6k above
+the exit for the lot. The −₹991 exit armed the loss block, which refused 8 re-entry signals at 1,645–1,674 on 27–28 Oct.
+An add-on at 1,357.9 at 09:15 on 26 Oct was refused for the empty pool. One case; stale exits are validated over
+4/4 half-year windows (ATHERENERG's 28 Aug forensic is the opposite case: the stale exit dodged −7 %).
+
+**Add-on pool still unfunded (TD-013, TD-022):** no pay-in all week (`intraday_payin=0` every morning); the pool logged
+`funded=0 of cap=60000` at every boot (sleeve ₹5.79–5.81L). 15 add-on signals were refused `addon_budget_exhausted`
+(TIPSMUSIC 7, RADICO 2, STYLAMIND 2, THANGAMAYL 2, ATHERENERG 1, CHENNPETRO 1). Other refusals: 10 `loss_reentry_block`
+(ATHERENERG 8, TIPSMUSIC 2 on 26 Oct, before its block expired), 7 `addon_spacing`, 1 `stock_paused` (ADFFOODS).
+
+**Field checks from the 17 Oct fixes:**
+- ISS-01 **passes**: the "Kite margins |" line tracks every same-day trade. On 27 Oct, `net` rose by the ACMESOLAR sale
+  proceeds (285,003 → 323,488), then fell by the TIPSMUSIC buy (→ 285,374). On 30 Oct it fell by the QUESS buy
+  (287,355 → 248,848), the CGPOWER buy (→ 210,863) and the ACMESOLAR buy (→ 172,469).
+- TD-001: not exercised yet, since cash was ₹1.7–3.2L all week and no entry was short.
+
+**New issue — ISS-16:** on 27 Oct a THANGAMAYL scale-out decided at the 15:29:15 pre-close flush armed the remainder
+trail after the 15:25 trailing force-close time, so the next tick emitted a full EOD close for 8 shares while the 4-share
+partial sell was still pending. Kite refused it twice ("Insufficient stock holding … pending sell orders"). The 4-share
+remainder sold at 15:29:20, after the partial filled. That was 40 s before the 15:30 cutoff. A slower fill would have left
+it overnight.
