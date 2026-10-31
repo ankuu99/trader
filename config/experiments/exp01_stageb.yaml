@@ -1,0 +1,72 @@
+# Stage-B overlay for exp01: exp01_tradeable.yaml + exp01_matched.yaml (calibration-window matched thresholds)
+per_stock_params:
+  NSE:ACMESOLAR:
+    lr_extrema:
+      threshold: 0.8
+  NSE:ADFFOODS:
+    lr_extrema:
+      threshold: 0.53
+  NSE:ATHERENERG:
+    lr_extrema:
+      threshold: 0.9
+  NSE:CGPOWER:
+    lr_extrema:
+      threshold: 0.395
+  NSE:CHENNPETRO:
+    lr_extrema:
+      threshold: 0.565
+  NSE:CUMMINSIND:
+    lr_extrema:
+      threshold: 0.595
+  NSE:CUPID:
+    lr_extrema:
+      threshold: 0.445
+  NSE:ENGINERSIN:
+    lr_extrema:
+      threshold: 0.725
+  NSE:GESHIP:
+    lr_extrema:
+      threshold: 0.695
+  NSE:INDHOTEL:
+    lr_extrema:
+      threshold: 0.67
+  NSE:IPCALAB:
+    lr_extrema:
+      threshold: 0.545
+  NSE:KPL:
+    lr_extrema:
+      threshold: 0.9
+  NSE:M&MFIN:
+    lr_extrema:
+      threshold: 0.825
+  NSE:MAYURUNIQ:
+    lr_extrema:
+      threshold: 0.625
+  NSE:QUESS:
+    lr_extrema:
+      threshold: 0.35
+  NSE:RADICO:
+    lr_extrema:
+      threshold: 0.375
+  NSE:SCHAEFFLER:
+    lr_extrema:
+      threshold: 0.72
+  NSE:STYLAMIND:
+    lr_extrema:
+      threshold: 0.495
+  NSE:THANGAMAYL:
+    lr_extrema:
+      threshold: 0.37
+  NSE:TIPSMUSIC:
+    lr_extrema:
+      threshold: 0.32
+  NSE:TVSMOTOR:
+    lr_extrema:
+      threshold: 0.34
+strategies:
+  lr_extrema:
+    labels:
+      tradeable:
+        candidates: extrema
+        failed_class: neutral
+      type: tradeable

@@ -1,0 +1,2 @@
+# EXP-09b — no-ML rule: prev bar = 20-bar low, then up-close (W5, exp/rules)
+strategies: {lr_extrema: {features: {type: rules, rules: {kind: lowest_turn}}, model: {type: passthrough}}}

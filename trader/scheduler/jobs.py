@@ -1,13 +1,12 @@
 """
 Scheduler — market-hours automation using APScheduler.
 
-Jobs
-----
-pre_market   : 09:00 IST — warm up data cache, validate token
-market_open  : 09:15 IST — start live feed, activate strategies
-post_market  : 15:35 IST — daily P&L report, reset state
-
-Only runs on weekdays. CNC positions are held indefinitely — no square-off job.
+Jobs:
+  pre_market  : 09:00 IST — warm up data cache
+  midday      : 13:20 IST — refresh 4h candle cache for ht_trend gate
+  pre_auction : 15:14:15 IST — early-decide CAS-eligible stocks before the 15:15 auction block
+  eod_flush   : 15:16 IST — flush in-progress aggregated (4hour/day) bars
+  post_market : 15:35 IST — daily P&L report, reset state
 """
 
 from datetime import datetime
@@ -16,6 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from trader.core.logger import get_logger
+from trader.notifications.telegram import notify_token_reminder
 
 logger = get_logger(__name__)
 
@@ -25,49 +25,96 @@ _IST = "Asia/Kolkata"
 class Scheduler:
     def __init__(self):
         self._scheduler = BackgroundScheduler(timezone=_IST)
-        self._hooks: dict[str, list] = {
-            "pre_market": [],
-            "market_open": [],
-            "post_market": [],
-        }
-
-    # ------------------------------------------------------------------ #
-    # Registration                                                         #
-    # ------------------------------------------------------------------ #
+        self._pre_market_hooks: list = []
+        self._midday_hooks: list = []
+        self._eod_flush_hooks: list = []
+        self._pre_close_hooks: list = []
+        self._pre_auction_hooks: list = []
+        self._market_close_hooks: list = []
+        self._post_market_hooks: list = []
+        self._heartbeat_hooks: list = []
 
     def on_pre_market(self, fn):
-        """Register a callable to run at 09:00 IST."""
-        self._hooks["pre_market"].append(fn)
+        self._pre_market_hooks.append(fn)
 
-    def on_market_open(self, fn):
-        """Register a callable to run at 09:15 IST."""
-        self._hooks["market_open"].append(fn)
+    def on_midday(self, fn):
+        self._midday_hooks.append(fn)
+
+    def on_eod_flush(self, fn):
+        self._eod_flush_hooks.append(fn)
+
+    def on_pre_auction(self, fn):
+        self._pre_auction_hooks.append(fn)
+
+    def on_pre_close(self, fn):
+        self._pre_close_hooks.append(fn)
+
+    def on_market_close(self, fn):
+        self._market_close_hooks.append(fn)
 
     def on_post_market(self, fn):
-        """Register a callable to run at 15:35 IST."""
-        self._hooks["post_market"].append(fn)
+        self._post_market_hooks.append(fn)
 
-    # ------------------------------------------------------------------ #
-    # Start / stop                                                         #
-    # ------------------------------------------------------------------ #
+    def on_heartbeat(self, fn):
+        self._heartbeat_hooks.append(fn)
 
     def start(self):
         self._scheduler.add_job(
-            lambda: self._run("pre_market"),
+            notify_token_reminder,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=30, timezone=_IST),
+            id="token_reminder",
+        )
+        self._scheduler.add_job(
+            lambda: self._run(self._pre_market_hooks, "pre_market"),
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=_IST),
             id="pre_market",
         )
         self._scheduler.add_job(
-            lambda: self._run("market_open"),
-            CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=_IST),
-            id="market_open",
+            lambda: self._run(self._midday_hooks, "midday"),
+            CronTrigger(day_of_week="mon-fri", hour=13, minute=20, timezone=_IST),
+            id="midday",
         )
         self._scheduler.add_job(
-            lambda: self._run("post_market"),
+            # Pre-auction: CAS-eligible (F&O) stocks stop continuous trading at
+            # 15:15 and NSE blocks fresh orders 15:15–15:20, so their 15:00–15:15
+            # candle (and day/4h bars ending on it) must decide ~45s early.
+            # See LiveFeed.flush_auction_partials_early.
+            lambda: self._run(self._pre_auction_hooks, "pre_auction"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=14, second=15, timezone=_IST),
+            id="pre_auction",
+        )
+        self._scheduler.add_job(
+            # Aggregated-timeframe (4hour/day) end-of-day flush: emit any
+            # in-progress bar whose last-member candle never completed (no ticks
+            # after 15:15) so day-TF decisions still fire before market close.
+            lambda: self._run(self._eod_flush_hooks, "eod_flush"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=16, timezone=_IST),
+            id="eod_flush",
+        )
+        self._scheduler.add_job(
+            # Pre-close: deliver the still-open last base candle (15:15–15:30) so
+            # last-candle decisions place their orders BEFORE the 15:30 Closing
+            # Auction Session rejects them. 45s of buffer covers sequential order
+            # placement across the watchlist. See LiveFeed.flush_open_partials_early.
+            lambda: self._run(self._pre_close_hooks, "pre_close"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=29, second=15, timezone=_IST),
+            id="pre_close",
+        )
+        self._scheduler.add_job(
+            lambda: self._run(self._market_close_hooks, "market_close"),
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=_IST),
+            id="market_close",
+        )
+        self._scheduler.add_job(
+            lambda: self._run(self._post_market_hooks, "post_market"),
             CronTrigger(day_of_week="mon-fri", hour=15, minute=35, timezone=_IST),
             id="post_market",
         )
-
+        self._scheduler.add_job(
+            lambda: self._run(self._heartbeat_hooks, "heartbeat"),
+            CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/30", timezone=_IST),
+            id="heartbeat",
+        )
         self._scheduler.start()
         logger.info("Scheduler started")
 
@@ -75,14 +122,10 @@ class Scheduler:
         self._scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped")
 
-    # ------------------------------------------------------------------ #
-    # Internal                                                             #
-    # ------------------------------------------------------------------ #
-
-    def _run(self, event: str):
-        logger.info("Scheduler event: %s | %s", event, datetime.now().strftime("%H:%M:%S"))
-        for fn in self._hooks[event]:
+    def _run(self, hooks: list, name: str):
+        logger.info("Scheduler: %s | %s", name, datetime.now().strftime("%H:%M:%S"))
+        for fn in hooks:
             try:
                 fn()
             except Exception:
-                logger.exception("Error in %s hook: %s", event, fn)
+                logger.exception("Error in %s hook", name)

@@ -27,8 +27,13 @@ class Signal:
     signal_type: SignalType
     price_hint: float        # indicative price at signal time (LTP)
     strategy: str            # name of the strategy that generated this
-    atr: float | None = None          # ATR at signal time; used by RiskManager for SL and sizing
-    target_price: float | None = None # ENTRY only: intra-candle target; engine checks HIGH, live uses GTT OCO
+    atr: float | None = None              # ATR at signal time; used by RiskManager for SL and sizing
+    target_price: float | None = None     # ENTRY only: if set, RiskManager uses this as GTT target instead of computing one
+    stop_loss_hint: float | None = None   # ENTRY only: if set, RiskManager uses this as GTT SL price instead of computing one
+    exit_reason: str | None = None        # EXIT only: reason code passed to backtest trade record (e.g. "PATTERN_TOP")
+    timestamp: object | None = None       # candle/tick timestamp; used by RiskManager for trading-window gate
+    size_weight: float | None = None      # ENTRY only: confidence multiplier (meta-labeling sizing); scales risk-based qty. None = full size
+    exit_fraction: float | None = None     # EXIT only: fraction of position to sell (scale-out). None/1.0 = full close
 
 
 class Strategy(ABC):
@@ -68,11 +73,18 @@ class Strategy(ABC):
             Signal if an action is warranted, else None.
         """
 
-    def on_tick(self, tick: dict) -> None:
+    def on_tick(self, tick: dict) -> "Signal | None":
         """
-        Called on every raw tick. Override only if tick-level logic is needed.
+        Called on every raw tick (live) or simulated tick (backtest).
+        Override to implement tick-speed exit logic (e.g. trailing stop).
+        Entry logic should stay in on_candle.
         Default: no-op.
         """
+        return None
+
+    def tick_exit_level(self) -> "tuple[float, str] | None":
+        """Backtest-only hook (ISS-14): the highest armed tick-exit price, or None."""
+        return None
 
     def on_order_update(self, order: dict) -> None:
         """
@@ -85,11 +97,37 @@ class Strategy(ABC):
             signal_type = order.get("signal_type")
             if signal_type == SignalType.ENTRY:
                 self.position = Direction(direction)
-            elif signal_type == SignalType.EXIT:
+            elif signal_type == SignalType.EXIT and not order.get("partial"):
+                # Partial (scale-out) fills leave the position open with the remainder.
                 self.position = None
         elif status in ("REJECTED", "CANCELLED"):
             # Order didn't go through — leave position state unchanged
             pass
+
+    # Pre-order reject reasons where an order or position for this instrument really
+    # exists, so the pending-entry guard must stay armed.
+    _GUARD_KEEP_REASONS = frozenset({"already_in_position", "pending_order_exists"})
+
+    def on_pre_order_reject(self, signal: "Signal", reason: str | None) -> None:
+        """RiskManager refused an ENTRY before any order was placed, so no order
+        update will ever arrive. Clear the pending-entry guard (set at signal time)
+        through the normal REJECTED path; otherwise the strategy waits for a fill
+        forever and emits nothing more for this instrument — the rest of the run in
+        a backtest, until restart live (QUESS/TVSMOTOR frozen Jan→Oct 2026 by one
+        `quantity_zero`). EXITs and in-position add-on ENTRYs are left alone."""
+        if signal.signal_type != SignalType.ENTRY or self.position is not None:
+            return
+        if reason in self._GUARD_KEEP_REASONS:
+            return
+        self.on_order_update({
+            "instrument": signal.instrument, "status": "REJECTED",
+            "signal_type": SignalType.ENTRY, "reject_reason": reason,
+        })
+
+    def seed_position_state(self, peak_close: float, max_gain_pct: float,
+                            exit_flags: dict | None = None) -> None:
+        """Restore in-memory position state after a restart. No-op by default."""
+        pass
 
     def is_flat(self) -> bool:
         return self.position is None

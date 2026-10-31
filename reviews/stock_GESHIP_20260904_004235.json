@@ -1,0 +1,593 @@
+{
+  "generated_at": "2026-09-04T00:42:35",
+  "symbol": "NSE:GESHIP",
+  "full_from": "2023-01-01",
+  "recent_from": "2026-03-08",
+  "in_watchlist": true,
+  "override": {
+    "timeframe": "day",
+    "warmup_bars": 100,
+    "lookback_bars": 400,
+    "threshold": 0.82,
+    "retrain_every": 1,
+    "extrema_order": 5,
+    "exits": {
+      "hold_bars": 40,
+      "sell_min_pct": 7.0,
+      "hard_stop": {
+        "stop_pct": 20
+      },
+      "trailing": {
+        "profit_pct": 10,
+        "trail_pct": 4,
+        "force_close_time": null
+      },
+      "pattern_top": {
+        "sell_threshold": 0.85,
+        "min_hold_before_exit": 2
+      },
+      "stale": {
+        "check_bars": 10,
+        "min_gain_pct": 0.5
+      },
+      "stale_2": {
+        "check_bars": 30,
+        "min_gain_pct": -2.0
+      }
+    }
+  },
+  "params_used": {
+    "enabled": true,
+    "warmup_bars": 100,
+    "lookback_bars": 400,
+    "threshold": 0.82,
+    "veto_threshold": 1.0,
+    "retrain_every": 1,
+    "extrema_order": 5,
+    "exits": {
+      "hold_bars": 40,
+      "sell_min_pct": 7.0,
+      "hard_stop": {
+        "stop_pct": 20
+      },
+      "trailing": {
+        "profit_pct": 10,
+        "trail_pct": 4,
+        "force_close_time": null,
+        "pattern_top_floor_enabled": false
+      },
+      "pattern_top": {
+        "sell_threshold": 0.85,
+        "min_hold_before_exit": 2,
+        "scale_out": {
+          "enabled": true,
+          "fraction": 0.5
+        }
+      },
+      "stale": {
+        "check_bars": 10,
+        "min_gain_pct": 0.5,
+        "rearm": {
+          "enabled": true,
+          "cur_floor_pct": -2.0
+        }
+      },
+      "stale_2": {
+        "check_bars": 30,
+        "min_gain_pct": -2.0
+      }
+    },
+    "entry_gates": {},
+    "forward_label": {
+      "enabled": false,
+      "forward_bars": 150,
+      "min_return_pct": 1.5
+    },
+    "labels": {
+      "type": "extrema",
+      "trend_scan": {
+        "min_bars": 10,
+        "max_bars": 60,
+        "t_threshold": 2.0
+      },
+      "neutral": {
+        "enabled": false,
+        "ratio": 1.0,
+        "margin_bars": null
+      }
+    },
+    "model": {
+      "type": "logistic"
+    },
+    "features": {
+      "volume_ma_bars": 20,
+      "depth": {
+        "enabled": true,
+        "lookback_bars": 50
+      },
+      "macd": {
+        "enabled": false,
+        "fast": 12,
+        "slow": 26,
+        "signal_period": 9,
+        "hist_lookback": 3
+      },
+      "curvature": {
+        "enabled": false,
+        "lookback_bars": 50
+      }
+    },
+    "meta_label": {
+      "enabled": false,
+      "meta_threshold": 0.55,
+      "sizing": {
+        "enabled": false,
+        "min_fraction": 0.5,
+        "max_fraction": 1.0
+      },
+      "model": {
+        "type": "xgboost",
+        "max_depth": 3,
+        "n_estimators": 100,
+        "min_child_weight": 5,
+        "reg_lambda": 1.0
+      },
+      "features": {
+        "vol_bars": 20,
+        "rsi_period": 14,
+        "depth_bars": 50,
+        "include_primary_scores": true
+      },
+      "barriers": {
+        "profit_pct": null,
+        "stop_pct": null,
+        "max_bars": null,
+        "atr_mult_pt": null,
+        "atr_mult_sl": null,
+        "atr_period": 14
+      }
+    },
+    "timeframe": "day",
+    "hold_bars": 40,
+    "sell_min_pct": 7.0,
+    "stop_pct": 20,
+    "profit_pct": 10,
+    "trail_pct": 4,
+    "force_trailing_close_time": null,
+    "pattern_top_floor_enabled": false,
+    "sell_threshold": 0.85,
+    "min_hold_before_exit": 2,
+    "pattern_top_scale_out_enabled": true,
+    "pattern_top_scale_out_fraction": 0.5,
+    "stale_exit_enabled": true,
+    "stale_check_bars": 10,
+    "stale_min_gain_pct": 0.5,
+    "stale_rearm_enabled": true,
+    "stale_rearm_cur_floor_pct": -2.0,
+    "stale_exit_2_enabled": true,
+    "stale_check_bars_2": 30,
+    "stale_min_gain_pct_2": -2.0
+  },
+  "full": {
+    "pnl": 34027.24,
+    "trades": 30,
+    "win_rate": 76.7,
+    "avg_win": 2479.35,
+    "avg_loss": -3285.4
+  },
+  "recent": {
+    "pnl": 8117.6,
+    "trades": 10,
+    "win_rate": 70.0,
+    "avg_win": 2372.98,
+    "avg_loss": -2831.08
+  },
+  "yearly": {
+    "2023": {
+      "pnl": 3831.02,
+      "trades": 1,
+      "win_rate": 100.0,
+      "avg_win": 3831.02,
+      "avg_loss": 0.0
+    },
+    "2024": {
+      "pnl": 8453.14,
+      "trades": 10,
+      "win_rate": 70.0,
+      "avg_win": 2945.59,
+      "avg_loss": -4055.32
+    },
+    "2025": {
+      "pnl": 8877.12,
+      "trades": 7,
+      "win_rate": 85.7,
+      "avg_win": 1813.17,
+      "avg_loss": -2001.92
+    },
+    "2026": {
+      "pnl": 12865.97,
+      "trades": 12,
+      "win_rate": 75.0,
+      "avg_win": 2410.65,
+      "avg_loss": -2943.29
+    }
+  },
+  "monthly_recent": {
+    "2026-03": {
+      "pnl": 3601.61,
+      "trades": 1,
+      "win_rate": 100.0,
+      "avg_win": 3601.61,
+      "avg_loss": 0.0
+    },
+    "2026-04": {
+      "pnl": 3211.22,
+      "trades": 1,
+      "win_rate": 100.0,
+      "avg_win": 3211.22,
+      "avg_loss": 0.0
+    },
+    "2026-05": {
+      "pnl": 5146.23,
+      "trades": 2,
+      "win_rate": 100.0,
+      "avg_win": 2573.12,
+      "avg_loss": 0.0
+    },
+    "2026-06": {
+      "pnl": -3002.91,
+      "trades": 3,
+      "win_rate": 66.7,
+      "avg_win": 1349.39,
+      "avg_loss": -5701.69
+    },
+    "2026-08": {
+      "pnl": -750.75,
+      "trades": 2,
+      "win_rate": 50.0,
+      "avg_win": 1952.98,
+      "avg_loss": -2703.74
+    },
+    "2026-09": {
+      "pnl": -87.8,
+      "trades": 1,
+      "win_rate": 0.0,
+      "avg_win": 0.0,
+      "avg_loss": -87.8
+    }
+  },
+  "reasons": {
+    "TRAILING": {
+      "count": 15,
+      "pnl": 41532.06,
+      "avg": 2768.8
+    },
+    "PATTERN_TOP_PARTIAL": {
+      "count": 7,
+      "pnl": 14999.5,
+      "avg": 2142.79
+    },
+    "OPEN@END": {
+      "count": 1,
+      "pnl": -93.66,
+      "avg": -93.66
+    },
+    "STRATEGY": {
+      "count": 2,
+      "pnl": -743.13,
+      "avg": -371.57
+    },
+    "STALE_REARM": {
+      "count": 1,
+      "pnl": -6036.7,
+      "avg": -6036.7
+    },
+    "STALE": {
+      "count": 4,
+      "pnl": -15630.83,
+      "avg": -3907.71
+    }
+  },
+  "trades": [
+    {
+      "entry_date": "2023-11-09",
+      "exit_date": "2023-11-29",
+      "entry": 732.6,
+      "exit": 805.25,
+      "qty": 54,
+      "pnl": 3831.02,
+      "reason": "TRAILING",
+      "held_candles": 297
+    },
+    {
+      "entry_date": "2024-02-12",
+      "exit_date": "2024-02-29",
+      "entry": 920.1,
+      "exit": 1000.0,
+      "qty": 43,
+      "pnl": 3344.11,
+      "reason": "TRAILING",
+      "held_candles": 325
+    },
+    {
+      "entry_date": "2024-03-12",
+      "exit_date": "2024-04-02",
+      "entry": 940.0,
+      "exit": 1019.55,
+      "qty": 43,
+      "pnl": 3327.17,
+      "reason": "TRAILING",
+      "held_candles": 303
+    },
+    {
+      "entry_date": "2024-04-12",
+      "exit_date": "2024-04-24",
+      "entry": 956.0,
+      "exit": 1067.45,
+      "qty": 21,
+      "pnl": 2293.36,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 175
+    },
+    {
+      "entry_date": "2024-04-12",
+      "exit_date": "2024-05-02",
+      "entry": 956.0,
+      "exit": 1079.25,
+      "qty": 21,
+      "pnl": 2540.9,
+      "reason": "TRAILING",
+      "held_candles": 285
+    },
+    {
+      "entry_date": "2024-05-06",
+      "exit_date": "2024-05-14",
+      "entry": 1006.45,
+      "exit": 1103.25,
+      "qty": 40,
+      "pnl": 3778.42,
+      "reason": "TRAILING",
+      "held_candles": 129
+    },
+    {
+      "entry_date": "2024-05-22",
+      "exit_date": "2024-06-07",
+      "entry": 1025.0,
+      "exit": 1162.25,
+      "qty": 20,
+      "pnl": 2696.54,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 300
+    },
+    {
+      "entry_date": "2024-05-22",
+      "exit_date": "2024-06-12",
+      "entry": 1025.0,
+      "exit": 1159.35,
+      "qty": 20,
+      "pnl": 2638.6,
+      "reason": "TRAILING",
+      "held_candles": 375
+    },
+    {
+      "entry_date": "2024-07-19",
+      "exit_date": "2024-09-16",
+      "entry": 1294.8,
+      "exit": 1259.0,
+      "qty": 32,
+      "pnl": -1236.59,
+      "reason": "STRATEGY",
+      "held_candles": 1000
+    },
+    {
+      "entry_date": "2024-10-18",
+      "exit_date": "2024-12-04",
+      "entry": 1266.3,
+      "exit": 1086.0,
+      "qty": 33,
+      "pnl": -6036.7,
+      "reason": "STALE_REARM",
+      "held_candles": 754
+    },
+    {
+      "entry_date": "2024-12-13",
+      "exit_date": "2024-12-30",
+      "entry": 1072.45,
+      "exit": 945.95,
+      "qty": 38,
+      "pnl": -4892.68,
+      "reason": "STALE",
+      "held_candles": 250
+    },
+    {
+      "entry_date": "2025-01-06",
+      "exit_date": "2025-02-14",
+      "entry": 945.0,
+      "exit": 900.5,
+      "qty": 43,
+      "pnl": -2001.92,
+      "reason": "STALE",
+      "held_candles": 750
+    },
+    {
+      "entry_date": "2025-02-27",
+      "exit_date": "2025-03-07",
+      "entry": 839.15,
+      "exit": 907.3,
+      "qty": 24,
+      "pnl": 1589.1,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 150
+    },
+    {
+      "entry_date": "2025-02-27",
+      "exit_date": "2025-03-25",
+      "entry": 839.15,
+      "exit": 923.05,
+      "qty": 24,
+      "pnl": 1966.7,
+      "reason": "TRAILING",
+      "held_candles": 422
+    },
+    {
+      "entry_date": "2025-07-28",
+      "exit_date": "2025-09-16",
+      "entry": 934.45,
+      "exit": 1062.65,
+      "qty": 22,
+      "pnl": 2771.74,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 850
+    },
+    {
+      "entry_date": "2025-07-28",
+      "exit_date": "2025-09-22",
+      "entry": 934.45,
+      "exit": 1043.75,
+      "qty": 22,
+      "pnl": 2356.37,
+      "reason": "TRAILING",
+      "held_candles": 948
+    },
+    {
+      "entry_date": "2025-09-26",
+      "exit_date": "2025-10-06",
+      "entry": 990.3,
+      "exit": 1063.15,
+      "qty": 21,
+      "pnl": 1482.0,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 125
+    },
+    {
+      "entry_date": "2025-09-26",
+      "exit_date": "2025-10-14",
+      "entry": 990.3,
+      "exit": 1026.5,
+      "qty": 21,
+      "pnl": 713.14,
+      "reason": "TRAILING",
+      "held_candles": 264
+    },
+    {
+      "entry_date": "2025-11-20",
+      "exit_date": "2026-01-19",
+      "entry": 1099.8,
+      "exit": 1115.6,
+      "qty": 37,
+      "pnl": 493.46,
+      "reason": "STRATEGY",
+      "held_candles": 1000
+    },
+    {
+      "entry_date": "2026-02-13",
+      "exit_date": "2026-03-05",
+      "entry": 1300.8,
+      "exit": 1413.5,
+      "qty": 32,
+      "pnl": 3510.05,
+      "reason": "TRAILING",
+      "held_candles": 303
+    },
+    {
+      "entry_date": "2026-03-09",
+      "exit_date": "2026-03-12",
+      "entry": 1336.9,
+      "exit": 1464.2,
+      "qty": 31,
+      "pnl": 3850.0,
+      "reason": "TRAILING",
+      "held_candles": 60
+    },
+    {
+      "entry_date": "2026-03-16",
+      "exit_date": "2026-04-29",
+      "entry": 1371.0,
+      "exit": 1484.9,
+      "qty": 30,
+      "pnl": 3321.95,
+      "reason": "TRAILING",
+      "held_candles": 677
+    },
+    {
+      "entry_date": "2026-05-12",
+      "exit_date": "2026-05-18",
+      "entry": 1509.8,
+      "exit": 1696.6,
+      "qty": 14,
+      "pnl": 2565.46,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 100
+    },
+    {
+      "entry_date": "2026-05-12",
+      "exit_date": "2026-05-19",
+      "entry": 1509.8,
+      "exit": 1726.0,
+      "qty": 14,
+      "pnl": 2976.63,
+      "reason": "TRAILING",
+      "held_candles": 112
+    },
+    {
+      "entry_date": "2026-05-22",
+      "exit_date": "2026-06-08",
+      "entry": 1669.0,
+      "exit": 1434.9,
+      "qty": 25,
+      "pnl": -5939.26,
+      "reason": "STALE",
+      "held_candles": 250
+    },
+    {
+      "entry_date": "2026-06-10",
+      "exit_date": "2026-06-22",
+      "entry": 1362.8,
+      "exit": 1472.7,
+      "qty": 15,
+      "pnl": 1601.31,
+      "reason": "PATTERN_TOP_PARTIAL",
+      "held_candles": 200
+    },
+    {
+      "entry_date": "2026-06-10",
+      "exit_date": "2026-06-24",
+      "entry": 1362.8,
+      "exit": 1446.2,
+      "qty": 16,
+      "pnl": 1284.5,
+      "reason": "TRAILING",
+      "held_candles": 227
+    },
+    {
+      "entry_date": "2026-07-01",
+      "exit_date": "2026-08-04",
+      "entry": 1427.0,
+      "exit": 1500.0,
+      "qty": 30,
+      "pnl": 2092.48,
+      "reason": "TRAILING",
+      "held_candles": 577
+    },
+    {
+      "entry_date": "2026-08-05",
+      "exit_date": "2026-08-19",
+      "entry": 1405.0,
+      "exit": 1314.8,
+      "qty": 30,
+      "pnl": -2796.97,
+      "reason": "STALE",
+      "held_candles": 250
+    },
+    {
+      "entry_date": "2026-08-27",
+      "exit_date": "2026-09-04",
+      "entry": 1315.5,
+      "exit": 1315.5,
+      "qty": 32,
+      "pnl": -93.66,
+      "reason": "OPEN@END",
+      "held_candles": 126
+    }
+  ]
+}

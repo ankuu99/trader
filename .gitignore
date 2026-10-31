@@ -4,8 +4,11 @@
 
 # Data & logs (generated at runtime)
 data/
+!trader/data/
+!trader/fvm/data/
 logs/
 backtest_results/
+lab_data/
 
 # Python
 __pycache__/
@@ -22,3 +25,9 @@ venv/
 
 # OS
 .DS_Store
+*.csv
+*.txt
+
+backtest*.log
+# Keep committed test fixtures despite the broad *.csv ignore above
+!tests/fixtures/integration/candles.csv

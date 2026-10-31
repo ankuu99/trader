@@ -1,0 +1,428 @@
+"""
+FVM Cockpit — framework-agnostic data layer.
+
+The UI never reimplements engine logic: every number here comes from the tested
+`scoring` / `vetoes` / `technical` / `handoff` functions. This module is pure
+(no Streamlit import) so it stays testable; the Streamlit app wraps these with
+`st.cache_data`. Reads cached data only (run fvm_ingest + fvm_prices first).
+"""
+
+import datetime
+import sqlite3
+from pathlib import Path
+
+import pandas as pd
+
+from trader.data.store import Store
+from trader.fvm import engine as enginemod
+from trader.fvm import factors, handoff, scoring, technical, vetoes, walkforward
+from trader.fvm.data import prices, universe
+from trader.fvm.data.store import FVMStore
+from trader.fvm.fields import (
+    BASIC_EPS_Q, CFO_A, DE_A, INT_COVERAGE_A, NET_PROFIT_A, NET_PROFIT_Q,
+    OPM_Q, REVENUE_GROWTH_Q, ROCE_A, TOTAL_REVENUE_Q,
+)
+from trader.fvm.scoring import FACTORS, PILLAR_WEIGHTS
+
+PILLARS = list(PILLAR_WEIGHTS)
+
+# Fundamentals history rows for the Stock Detail page: (label, statement, field)
+FUNDAMENTAL_HISTORY = [
+    ("Revenue (Qtr)",      *TOTAL_REVENUE_Q),
+    ("Net Profit (Qtr)",   *NET_PROFIT_Q),
+    ("OPM % (Qtr)",        *OPM_Q),
+    ("Rev growth YoY %",   *REVENUE_GROWTH_Q),
+    ("Basic EPS (Qtr)",    *BASIC_EPS_Q),
+    ("CFO (Annual)",       *CFO_A),
+    ("Net Profit (Annual)", *NET_PROFIT_A),
+    ("D/E (Annual)",       *DE_A),
+    ("Int coverage (Annual)", *INT_COVERAGE_A),
+    ("ROCE % (Annual)",    *ROCE_A),
+]
+
+SHAREHOLDING_FIELDS = ["promoter", "fii", "dii", "pledge", "holders"]
+
+
+def scored_symbols(db_path: str) -> list[str]:
+    con = sqlite3.connect(db_path)
+    try:
+        return [r[0] for r in con.execute(
+            "SELECT DISTINCT symbol FROM fundamentals ORDER BY symbol").fetchall()]
+    finally:
+        con.close()
+
+
+def all_symbols(db_path: str) -> dict[str, str]:
+    """symbol -> company name for every NSE name in the Trendlyne master list
+    (fund_stocks) — feeds the searchable symbol dropdown in the Study page."""
+    con = sqlite3.connect(db_path)
+    try:
+        return {r[0]: (r[1] or "") for r in con.execute(
+            "SELECT nsecode, name FROM fund_stocks ORDER BY nsecode").fetchall()}
+    finally:
+        con.close()
+
+
+def _decision(diag: dict) -> str:
+    """One-word reason a name is / isn't a candidate (same taxonomy as the CLI)."""
+    if not diag.get("veto_passed", True):
+        return "VETOED"
+    if not diag.get("gate_a", False):
+        return "WEAK_FUND"
+    if not diag.get("gate_b", False):
+        return "NO_TREND"
+    if not diag.get("trigger", False):
+        return "NO_TIMING"
+    return "CANDIDATE"
+
+
+def _load_prices(market_db: str, symbols: list[str], asof: str,
+                 from_year: int = 2015, min_bars: int = 60) -> dict[str, pd.DataFrame]:
+    store = Store(Path(market_db))
+    return prices.load_universe_prices(
+        None, store, symbols, datetime.datetime(from_year, 1, 1),
+        datetime.datetime.fromisoformat(asof), token_map={}, min_bars=min_bars)
+
+
+def build_board(db: str, market_db: str, asof: str) -> dict:
+    """Score the whole ingested universe as of `asof`. Returns a serializable dict:
+       {asof, priced, total, board (DataFrame), candidates (list), diag (dict)}."""
+    fvm = FVMStore(db)
+    symbols = scored_symbols(db)
+    asof_ts = pd.to_datetime(asof)
+    price_data = _load_prices(market_db, symbols, asof)
+    universe = list(price_data)
+
+    if not universe:
+        return {"asof": asof, "priced": 0, "total": len(symbols),
+                "board": pd.DataFrame(), "candidates": [], "diag": {}}
+
+    pp = prices.price_provider(price_data, asof)
+    scores = scoring.compute_scores(fvm, universe, asof, price_provider=pp)
+    vmap = {s: vetoes.check_vetoes(fvm, s, asof) for s in universe}
+    tmap = {}
+    for s in universe:
+        d = price_data[s]
+        d = d[pd.to_datetime(d["timestamp"]) <= asof_ts]
+        tmap[s] = technical.evaluate(d)
+
+    cands, diag = handoff.select_candidates(scores, vmap, tmap, regime_ok=True)
+    sectors = fvm.sectors_map()
+
+    rows = []
+    for s in universe:
+        sc = scores[s]
+        t = tmap[s]
+        passed, reasons = vmap[s]
+        dec = _decision(diag.get(s, {}))
+        note = ",".join(reasons) if not passed else ("parabolic_ext" if t["extension_vetoed"] else "")
+        row = {
+            "symbol": s, "sector": sectors.get(s, "Unknown"),
+            "composite": round(sc["composite"], 1),
+            "trend": round(t["trend_score"], 2), "timing": round(t["timing_score"], 2),
+            "technical": round(t["technical_score"], 3),
+            "decision": dec, "note": note,
+        }
+        for p in PILLARS:
+            row[p] = round(sc["pillars"][p], 2)
+        rows.append(row)
+
+    board = pd.DataFrame(rows).sort_values("composite", ascending=False).reset_index(drop=True)
+    return {"asof": asof, "priced": len(universe), "total": len(symbols),
+            "board": board, "candidates": cands, "diag": diag}
+
+
+def load_stock(db: str, market_db: str, symbol: str, asof: str) -> dict:
+    """Everything the Stock Detail page needs for one name, as of `asof`."""
+    symbol = symbol.upper()
+    fvm = FVMStore(db)
+    asof_ts = pd.to_datetime(asof)
+    price_data = _load_prices(market_db, [symbol], asof)
+    daily = price_data.get(symbol)
+    if daily is None or daily.empty:
+        return {"symbol": symbol, "asof": asof, "priced": False}
+
+    daily = daily[pd.to_datetime(daily["timestamp"]) <= asof_ts].reset_index(drop=True)
+    weekly = technical.resample_weekly(daily)
+
+    pp = prices.price_provider(price_data, asof)
+    scores = scoring.compute_scores(fvm, [symbol], asof, price_provider=pp)[symbol]
+    passed, reasons = vetoes.check_vetoes(fvm, symbol, asof)
+    tech = technical.evaluate(daily, weekly)
+    last_price = pp(symbol)
+    raw = factors.all_factors(fvm, symbol, asof, price=last_price)
+
+    factor_rows = []
+    for fname, (pillar, w, direction, ntype, scope) in FACTORS.items():
+        factor_rows.append({
+            "factor": fname, "pillar": pillar, "weight": w, "direction": direction,
+            "normalized": round(scores["factors"].get(fname, 0.5), 3),
+            "raw": raw.get(fname),
+        })
+
+    fundamentals = {}
+    for label, statement, field in FUNDAMENTAL_HISTORY:
+        series = fvm.read_fundamental_asof(symbol, statement, "consolidated", field, asof)
+        if not series:
+            series = fvm.read_fundamental_asof(symbol, statement, "standalone", field, asof)
+        if series:
+            fundamentals[label] = series
+
+    shareholding = {}
+    for field in SHAREHOLDING_FIELDS:
+        series = fvm.read_shareholding_asof(symbol, field, asof)
+        if series:
+            shareholding[field] = series
+
+    return {
+        "symbol": symbol, "asof": asof, "priced": True,
+        "daily": daily, "weekly": weekly,
+        "scores": scores, "veto": {"passed": passed, "reasons": reasons},
+        "technical": tech, "last_price": last_price,
+        "factors": pd.DataFrame(factor_rows),
+        "fundamentals": fundamentals, "shareholding": shareholding,
+        "sector": fvm.sectors_map().get(symbol, "Unknown"),
+    }
+
+
+# ------------------------------------------------------------------ #
+# Coverage / ops (U2) — cheap SQL aggregates, no scoring sweep        #
+# ------------------------------------------------------------------ #
+def _fundamentals_coverage(db: str) -> dict[str, dict]:
+    """Per ingested symbol: quarter/annual period depth, latest quarter, last ingest."""
+    con = sqlite3.connect(db)
+    try:
+        rows = con.execute(
+            """SELECT symbol,
+                      SUM(statement='quarter') AS q_rows,
+                      SUM(statement='annual')  AS a_rows,
+                      MAX(CASE WHEN statement='quarter' THEN period END) AS last_q,
+                      MAX(CASE WHEN statement='annual'  THEN period END) AS last_a,
+                      MAX(ingested_at) AS ingested
+               FROM fundamentals GROUP BY symbol""").fetchall()
+        depth = {}
+        for sym, *_ in rows:
+            q = con.execute("SELECT COUNT(DISTINCT period) FROM fundamentals "
+                            "WHERE symbol=? AND statement='quarter'", (sym,)).fetchone()[0]
+            a = con.execute("SELECT COUNT(DISTINCT period) FROM fundamentals "
+                            "WHERE symbol=? AND statement='annual'", (sym,)).fetchone()[0]
+            depth[sym] = (q, a)
+        sh = {r[0] for r in con.execute("SELECT DISTINCT symbol FROM shareholding").fetchall()}
+    finally:
+        con.close()
+    out = {}
+    for sym, q_rows, a_rows, last_q, last_a, ingested in rows:
+        q_depth, a_depth = depth[sym]
+        out[sym] = {"q_depth": q_depth, "a_depth": a_depth, "last_q": last_q,
+                    "last_a": last_a, "ingested": ingested, "has_shareholding": sym in sh}
+    return out
+
+
+def _price_coverage(market_db: str) -> dict[str, dict]:
+    con = sqlite3.connect(market_db)
+    try:
+        rows = con.execute(
+            "SELECT instrument, COUNT(*), MIN(timestamp), MAX(timestamp) "
+            "FROM candles WHERE timeframe='day' GROUP BY instrument").fetchall()
+    finally:
+        con.close()
+    out = {}
+    for inst, n, lo, hi in rows:
+        sym = inst.split(":", 1)[1] if ":" in inst else inst
+        out[sym.upper()] = {"bars": n, "first": (lo or "")[:10], "last": (hi or "")[:10]}
+    return out
+
+
+def coverage(db: str, market_db: str, asof: str, index_name: str = "NIFTY500") -> dict:
+    """Universe ingest/price coverage for the ops page. Cheap aggregates only."""
+    fvm = FVMStore(db)
+    target = universe.eligible_universe(fvm, asof, index_name=index_name)
+    funda = _fundamentals_coverage(db)
+    px = _price_coverage(market_db)
+    sectors = fvm.sectors_map()
+    ingested = set(funda)
+
+    rows = []
+    for sym in sorted(set(target) | ingested):
+        f = funda.get(sym, {})
+        p = px.get(sym, {})
+        rows.append({
+            "symbol": sym, "sector": sectors.get(sym, "Unknown"),
+            "in_universe": sym in target, "ingested": sym in ingested,
+            "q_depth": f.get("q_depth", 0), "a_depth": f.get("a_depth", 0),
+            "last_q": f.get("last_q", ""), "shareholding": bool(f.get("has_shareholding")),
+            "price_bars": p.get("bars", 0), "price_last": p.get("last", ""),
+            "last_ingest": (f.get("ingested") or "")[:10],
+        })
+    df = pd.DataFrame(rows)
+
+    missing = sorted(set(target) - ingested)
+    not_priced = sorted(s for s in ingested if not px.get(s, {}).get("bars"))
+    return {
+        "asof": asof, "df": df,
+        "target": len(target), "ingested": len(ingested),
+        "priced": sum(1 for s in ingested if px.get(s, {}).get("bars")),
+        "missing": missing, "not_priced": not_priced,
+        "last_ingest": max((f.get("ingested") or "" for f in funda.values()), default=""),
+        "min_q_depth": min((f["q_depth"] for f in funda.values()), default=0),
+        "max_q_depth": max((f["q_depth"] for f in funda.values()), default=0),
+    }
+
+
+# ------------------------------------------------------------------ #
+# Milestone-A validation (U3) — walk-forward gate + equity curves     #
+# ------------------------------------------------------------------ #
+def milestone_a(db: str, market_db: str, from_dt: str = "2018-01-01", to_dt: str | None = None,
+                capital: float = 500_000.0, test_len_w: int = 39, step_w: int = 13,
+                warmup_w: int = 52, min_scoreable: int = 5) -> dict:
+    """Run the Milestone-A walk-forward gate + a continuous full-window equity comparison.
+
+    Mirrors scripts/fvm_milestone_a.py — same auto-start at the first data-scoreable week,
+    same defaults — but also captures the FVM vs benchmark equity curves over the whole
+    data-valid window for charting. Calls only the tested walkforward/engine functions.
+    """
+    to_dt = to_dt or datetime.datetime.now().date().isoformat()
+    fvm = FVMStore(db)
+    candle_store = Store(Path(market_db))
+    symbols = scored_symbols(db)
+    price_data = prices.load_universe_prices(
+        None, candle_store, symbols,
+        datetime.datetime.fromisoformat(from_dt), datetime.datetime.fromisoformat(to_dt),
+        token_map={}, min_bars=60)
+    if len(price_data) < 2:
+        return {"ok": False, "reason": "not enough priced names — run fvm_prices.py first",
+                "priced": len(price_data), "total": len(symbols)}
+
+    sectors = {s: fvm.get_sector(s) or "Unknown" for s in price_data}
+    weeks = walkforward.all_weeks(price_data)
+    start_idx = walkforward.first_scoreable_week(
+        fvm, weeks, list(price_data), vetoes.check_vetoes, min_names=min_scoreable)
+    if start_idx is None:
+        return {"ok": False, "reason": f"no week has >= {min_scoreable} scoreable names",
+                "priced": len(price_data), "total": len(symbols)}
+
+    folds = walkforward.make_folds(weeks, test_len_w=test_len_w, step_w=step_w,
+                                   warmup_w=warmup_w, start_idx=start_idx)
+    if not folds:
+        return {"ok": False, "reason": "no folds — widen the date range or reduce test_len_w",
+                "priced": len(price_data), "total": len(symbols),
+                "start_week": weeks[start_idx].date().isoformat()}
+
+    def score_fn(store, uni, asof):
+        return scoring.compute_scores(store, uni, asof,
+                                      price_provider=prices.price_provider(price_data, asof))
+
+    res = walkforward.run_walk_forward(fvm, price_data, sectors, capital, folds, score_fn=score_fn)
+
+    # continuous full data-valid window, for one FVM-vs-benchmark equity line each
+    full = weeks[start_idx:]
+    fvm_run = enginemod.run_backtest(fvm, price_data, sectors, capital,
+                                     rebalance_weeks=full, score_fn=score_fn)
+    bench_run = walkforward.naive_momentum_backtest(price_data, capital, rebalance_weeks=full)
+    equity = pd.DataFrame({
+        "week": [pd.to_datetime(w) for w, _ in fvm_run["equity_curve"]],
+        "FVM": [e for _, e in fvm_run["equity_curve"]],
+        "Benchmark": [e for _, e in bench_run["equity_curve"]],
+    })
+
+    # down-vs-up regime split (by benchmark sign per fold)
+    down = [r for r in res["folds"] if r["bench_return_pct"] <= 0]
+    up = [r for r in res["folds"] if r["bench_return_pct"] > 0]
+    regime = {
+        "down_n": len(down), "up_n": len(up),
+        "down_edge": (sum(r["edge_pct"] for r in down) / len(down)) if down else None,
+        "up_edge": (sum(r["edge_pct"] for r in up) / len(up)) if up else None,
+        "down_fvm": (sum(r["fvm_return_pct"] for r in down) / len(down)) if down else None,
+        "up_fvm": (sum(r["fvm_return_pct"] for r in up) / len(up)) if up else None,
+    }
+
+    return {
+        "ok": True, "priced": len(price_data), "total": len(symbols),
+        "capital": capital, "from": from_dt, "to": to_dt,
+        "start_week": weeks[start_idx].date().isoformat(),
+        "n_weeks": len(weeks), "n_folds": len(folds),
+        "params": {"test_len_w": test_len_w, "step_w": step_w, "warmup_w": warmup_w,
+                   "min_scoreable": min_scoreable},
+        "folds": pd.DataFrame(res["folds"]), "summary": res["summary"],
+        "equity": equity, "regime": regime,
+    }
+
+
+# ------------------------------------------------------------------ #
+# Scoring Lab (U4) — score anatomy + gate sensitivity                 #
+# ------------------------------------------------------------------ #
+def scoring_lab(db: str, market_db: str, asof: str) -> dict:
+    """Cross-sectional score anatomy: composite distribution, pillar means, per-factor
+    coverage + mean normalized score, and the raw inputs needed for live gate sensitivity.
+    Calls only scoring/vetoes/technical/handoff (cache-only)."""
+    fvm = FVMStore(db)
+    symbols = scored_symbols(db)
+    asof_ts = pd.to_datetime(asof)
+    price_data = _load_prices(market_db, symbols, asof)
+    universe = list(price_data)
+    if not universe:
+        return {"priced": 0, "total": len(symbols)}
+
+    pp = prices.price_provider(price_data, asof)
+    scores = scoring.compute_scores(fvm, universe, asof, price_provider=pp)
+    vmap = {s: vetoes.check_vetoes(fvm, s, asof) for s in universe}
+    tmap = {}
+    for s in universe:
+        d = price_data[s]
+        d = d[pd.to_datetime(d["timestamp"]) <= asof_ts]
+        tmap[s] = technical.evaluate(d)
+    sectors = fvm.sectors_map()
+
+    # raw factor values across the universe (for coverage / NaN rates)
+    raw = {s: factors.all_factors(fvm, s, asof, price=pp(s)) for s in universe}
+    tail = scoring._sector_tailwind(raw, sectors)
+    for s in universe:
+        raw[s]["sector_tailwind"] = tail.get(s)
+
+    n = len(universe)
+    factor_rows = []
+    for fname, (pillar, w, direction, ntype, scope) in FACTORS.items():
+        present = sum(1 for s in universe if raw[s].get(fname) is not None)
+        mean_norm = sum(scores[s]["factors"].get(fname, 0.5) for s in universe) / n
+        factor_rows.append({
+            "factor": fname, "pillar": pillar, "weight_in_pillar": w, "direction": direction,
+            "coverage_pct": round(100 * present / n, 0), "missing": n - present,
+            "mean_normalized": round(mean_norm, 3),
+        })
+
+    pillar_rows = []
+    for p in PILLARS:
+        mean_p = sum(scores[s]["pillars"][p] for s in universe) / n
+        pillar_rows.append({
+            "pillar": p, "weight": PILLAR_WEIGHTS[p], "mean_score": round(mean_p, 3),
+            "mean_contribution": round(100 * PILLAR_WEIGHTS[p] * mean_p, 1),
+        })
+
+    board = pd.DataFrame([
+        {"symbol": s, "sector": sectors.get(s, "Unknown"),
+         "composite": round(scores[s]["composite"], 1),
+         **{p: round(scores[s]["pillars"][p], 3) for p in PILLARS}}
+        for s in universe]).sort_values("composite", ascending=False).reset_index(drop=True)
+
+    return {
+        "asof": asof, "priced": n, "total": len(symbols),
+        "board": board,
+        "composite": [scores[s]["composite"] for s in universe],
+        "factor_table": pd.DataFrame(factor_rows),
+        "pillar_table": pd.DataFrame(pillar_rows),
+        "_scores": scores, "_vmap": vmap, "_tmap": tmap,
+    }
+
+
+def gate_counts(lab: dict, pctile_cut: float, floor: float, trend_floor: float) -> dict:
+    """Re-run the handoff gate at given thresholds over the cached lab inputs. Returns the
+    funnel: universe → pass-veto → gate-A pool → gate-B trend → trigger → candidates."""
+    cands, diag = handoff.select_candidates(
+        lab["_scores"], lab["_vmap"], lab["_tmap"], regime_ok=True,
+        pctile_cut=pctile_cut, floor=floor, trend_floor=trend_floor)
+    veto_ok = sum(1 for d in diag.values() if d.get("veto_passed"))
+    gate_a = sum(1 for d in diag.values() if d.get("gate_a"))
+    gate_b = sum(1 for d in diag.values() if d.get("gate_b"))
+    trigger = sum(1 for d in diag.values() if d.get("gate_b") and d.get("trigger"))
+    return {"universe": len(diag), "veto_ok": veto_ok, "gate_a": gate_a,
+            "gate_b": gate_b, "trigger": trigger, "candidates": len(cands)}

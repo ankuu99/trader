@@ -1,45 +1,33 @@
 """
-Project-wide pytest fixtures.
+Shared test fixtures and setup.
 
-The autouse fixture below pins capital and risk settings to stable test values so
-that test assertions don't drift when config.yaml is tuned for live trading.
-
-Tests that specifically exercise position-sizing caps re-enable max_position_pct
-via their own monkeypatch calls.
+Must set dummy env vars before any trader module is imported,
+since config.py validates KITE_API_KEY / KITE_API_SECRET at import time.
 """
+import os
+os.environ.setdefault("KITE_API_KEY", "test_key")
+os.environ.setdefault("KITE_API_SECRET", "test_secret")
+
+from datetime import datetime
 
 import pytest
 
+from trader.notifications import telegram
+telegram.disable()  # suppress all notifications during tests
 
-@pytest.fixture(autouse=True)
-def _stable_test_config(monkeypatch):
-    """
-    Pin capital to ₹20,000 and disable max_position_pct for all tests.
 
-    Rationale:
-    - Tests that check specific quantities (qty == 8, pnl == 400, etc.) were
-      written against 20,000 capital with 1% risk (max_risk = 200).
-    - max_position_pct is a portfolio-level cap tested in TestATRSizing; it
-      should not silently zero out quantities in unrelated tests.
-    """
-    import trader.core.config as cfg_mod
-    data = cfg_mod.config._data
+def candle(close, *, open_=None, high=None, low=None, volume=1000, ts=None):
+    """Build a minimal candle dict."""
+    return {
+        "open":      open_  if open_  is not None else close,
+        "high":      high   if high   is not None else close,
+        "low":       low    if low    is not None else close,
+        "close":     close,
+        "volume":    volume,
+        "timestamp": ts or datetime(2025, 6, 1, 10, 0),
+    }
 
-    # Pin capital section
-    orig_capital = data["capital"].copy()
-    data["capital"]["total"] = 20000
-    data["capital"]["max_risk_per_trade_pct"] = 1.0
 
-    # Standardize position_sizing: disable ATR-based sizing and per-position cap.
-    # Tests that specifically exercise these features re-enable them via monkeypatch.
-    ps = data["risk"].setdefault("position_sizing", {})
-    orig_ps = ps.copy()
-    ps["atr_based"] = False
-    ps["max_position_pct"] = 0
-
-    yield
-
-    # Restore
-    data["capital"].update(orig_capital)
-    ps.clear()
-    ps.update(orig_ps)
+@pytest.fixture
+def make_candle():
+    return candle

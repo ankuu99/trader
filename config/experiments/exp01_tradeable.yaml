@@ -1,0 +1,2 @@
+# EXP-01 — tradeable-trough labels, candidates = geometric minima, failed minima → neutral (W1, exp/labels)
+strategies: {lr_extrema: {labels: {type: tradeable, tradeable: {candidates: extrema, failed_class: neutral}}}}

@@ -1,0 +1,440 @@
+{
+  "generated_at": "2026-06-06T23:29:29",
+  "full_from": "2023-01-01",
+  "recent_from": "2025-12-08",
+  "portfolio": {
+    "total_pnl": 339794.13,
+    "return_pct": 135.92,
+    "win_rate": 48.1,
+    "total_trades": 2598,
+    "max_dd": 23794.25,
+    "sortino": 0
+  },
+  "stocks": {
+    "NSE:ATHERENERG": {
+      "full": {
+        "pnl": 21607.5,
+        "trades": 49,
+        "win_rate": 67.3,
+        "avg_win": 940.21,
+        "avg_loss": -588.72
+      },
+      "recent": {
+        "pnl": 4643.76,
+        "trades": 24,
+        "win_rate": 66.7,
+        "avg_win": 404.07,
+        "avg_loss": -227.67
+      },
+      "trend": "improving"
+    },
+    "NSE:CUPID": {
+      "full": {
+        "pnl": 58623.37,
+        "trades": 222,
+        "win_rate": 50.0,
+        "avg_win": 976.08,
+        "avg_loss": -447.94
+      },
+      "recent": {
+        "pnl": 4478.09,
+        "trades": 12,
+        "win_rate": 66.7,
+        "avg_win": 787.73,
+        "avg_loss": -455.93
+      },
+      "trend": "stable"
+    },
+    "NSE:DCXINDIA": {
+      "full": {
+        "pnl": 4483.34,
+        "trades": 25,
+        "win_rate": 52.0,
+        "avg_win": 976.17,
+        "avg_loss": -683.91
+      },
+      "recent": {
+        "pnl": -246.7,
+        "trades": 5,
+        "win_rate": 40.0,
+        "avg_win": 362.7,
+        "avg_loss": -324.03
+      },
+      "trend": "declining"
+    },
+    "NSE:GOKEX": {
+      "full": {
+        "pnl": 18239.45,
+        "trades": 102,
+        "win_rate": 45.1,
+        "avg_win": 1049.84,
+        "avg_loss": -536.67
+      },
+      "recent": {
+        "pnl": 5905.15,
+        "trades": 11,
+        "win_rate": 54.5,
+        "avg_win": 1330.86,
+        "avg_loss": -416.0
+      },
+      "trend": "improving"
+    },
+    "NSE:COROMANDEL": {
+      "full": {
+        "pnl": 9173.86,
+        "trades": 138,
+        "win_rate": 51.4,
+        "avg_win": 559.25,
+        "avg_loss": -455.71
+      },
+      "recent": {
+        "pnl": -734.51,
+        "trades": 14,
+        "win_rate": 42.9,
+        "avg_win": 365.74,
+        "avg_loss": -366.12
+      },
+      "trend": "declining"
+    },
+    "NSE:GUJALKALI": {
+      "full": {
+        "pnl": 4098.33,
+        "trades": 28,
+        "win_rate": 57.1,
+        "avg_win": 601.61,
+        "avg_loss": -460.62
+      },
+      "recent": {
+        "pnl": 152.93,
+        "trades": 3,
+        "win_rate": 66.7,
+        "avg_win": 167.57,
+        "avg_loss": -182.21
+      },
+      "trend": "declining"
+    },
+    "NSE:MARKSANS": {
+      "full": {
+        "pnl": 26284.55,
+        "trades": 113,
+        "win_rate": 59.3,
+        "avg_win": 771.22,
+        "avg_loss": -551.9
+      },
+      "recent": {
+        "pnl": 4048.29,
+        "trades": 17,
+        "win_rate": 64.7,
+        "avg_win": 490.65,
+        "avg_loss": -224.8
+      },
+      "trend": "stable"
+    },
+    "NSE:INDHOTEL": {
+      "full": {
+        "pnl": 8214.36,
+        "trades": 92,
+        "win_rate": 47.8,
+        "avg_win": 656.3,
+        "avg_loss": -430.48
+      },
+      "recent": {
+        "pnl": 1747.12,
+        "trades": 15,
+        "win_rate": 53.3,
+        "avg_win": 437.84,
+        "avg_loss": -250.8
+      },
+      "trend": "improving"
+    },
+    "NSE:NATIONALUM": {
+      "full": {
+        "pnl": 17608.73,
+        "trades": 116,
+        "win_rate": 50.0,
+        "avg_win": 862.18,
+        "avg_loss": -558.58
+      },
+      "recent": {
+        "pnl": 385.28,
+        "trades": 13,
+        "win_rate": 38.5,
+        "avg_win": 608.44,
+        "avg_loss": -332.12
+      },
+      "trend": "declining"
+    },
+    "NSE:TVSMOTOR": {
+      "full": {
+        "pnl": 10686.13,
+        "trades": 112,
+        "win_rate": 47.3,
+        "avg_win": 603.16,
+        "avg_loss": -360.7
+      },
+      "recent": {
+        "pnl": -190.23,
+        "trades": 26,
+        "win_rate": 38.5,
+        "avg_win": 283.94,
+        "avg_loss": -189.35
+      },
+      "trend": "declining"
+    },
+    "NSE:BLUESTARCO": {
+      "full": {
+        "pnl": 6343.52,
+        "trades": 88,
+        "win_rate": 51.1,
+        "avg_win": 658.25,
+        "avg_loss": -541.35
+      },
+      "recent": {
+        "pnl": 386.55,
+        "trades": 10,
+        "win_rate": 50.0,
+        "avg_win": 433.31,
+        "avg_loss": -355.99
+      },
+      "trend": "declining"
+    },
+    "NSE:RADICO": {
+      "full": {
+        "pnl": 11816.33,
+        "trades": 134,
+        "win_rate": 47.8,
+        "avg_win": 663.5,
+        "avg_loss": -437.83
+      },
+      "recent": {
+        "pnl": -449.94,
+        "trades": 29,
+        "win_rate": 37.9,
+        "avg_win": 300.78,
+        "avg_loss": -208.81
+      },
+      "trend": "declining"
+    },
+    "NSE:RVNL": {
+      "full": {
+        "pnl": 22958.74,
+        "trades": 85,
+        "win_rate": 47.1,
+        "avg_win": 1306.27,
+        "avg_loss": -650.93
+      },
+      "recent": {
+        "pnl": -2033.54,
+        "trades": 12,
+        "win_rate": 16.7,
+        "avg_win": 664.71,
+        "avg_loss": -336.3
+      },
+      "trend": "declining"
+    },
+    "NSE:M&MFIN": {
+      "full": {
+        "pnl": 6308.09,
+        "trades": 133,
+        "win_rate": 41.4,
+        "avg_win": 708.37,
+        "avg_loss": -418.62
+      },
+      "recent": {
+        "pnl": -853.01,
+        "trades": 19,
+        "win_rate": 26.3,
+        "avg_win": 576.58,
+        "avg_loss": -266.85
+      },
+      "trend": "declining"
+    },
+    "NSE:SOLARINDS": {
+      "full": {
+        "pnl": 12831.13,
+        "trades": 123,
+        "win_rate": 41.5,
+        "avg_win": 671.68,
+        "avg_loss": -297.56
+      },
+      "recent": {
+        "pnl": 0,
+        "trades": 0,
+        "win_rate": 0.0,
+        "avg_win": 0.0,
+        "avg_loss": 0.0
+      },
+      "trend": "declining"
+    },
+    "NSE:CGPOWER": {
+      "full": {
+        "pnl": 22730.77,
+        "trades": 120,
+        "win_rate": 53.3,
+        "avg_win": 740.59,
+        "avg_loss": -440.48
+      },
+      "recent": {
+        "pnl": 896.22,
+        "trades": 18,
+        "win_rate": 44.4,
+        "avg_win": 358.78,
+        "avg_loss": -197.4
+      },
+      "trend": "declining"
+    },
+    "NSE:INDUSTOWER": {
+      "full": {
+        "pnl": 13321.87,
+        "trades": 123,
+        "win_rate": 50.4,
+        "avg_win": 674.81,
+        "avg_loss": -467.48
+      },
+      "recent": {
+        "pnl": -522.04,
+        "trades": 18,
+        "win_rate": 27.8,
+        "avg_win": 335.44,
+        "avg_loss": -169.17
+      },
+      "trend": "declining"
+    },
+    "NSE:MFSL": {
+      "full": {
+        "pnl": 1692.66,
+        "trades": 75,
+        "win_rate": 45.3,
+        "avg_win": 563.62,
+        "avg_loss": -426.11
+      },
+      "recent": {
+        "pnl": -896.7,
+        "trades": 13,
+        "win_rate": 30.8,
+        "avg_win": 356.79,
+        "avg_loss": -258.21
+      },
+      "trend": "declining"
+    },
+    "NSE:MARICO": {
+      "full": {
+        "pnl": -648.61,
+        "trades": 120,
+        "win_rate": 36.7,
+        "avg_win": 455.05,
+        "avg_loss": -271.99
+      },
+      "recent": {
+        "pnl": -427.14,
+        "trades": 17,
+        "win_rate": 29.4,
+        "avg_win": 292.9,
+        "avg_loss": -157.64
+      },
+      "trend": "declining"
+    },
+    "NSE:ASHOKLEY": {
+      "full": {
+        "pnl": 4070.13,
+        "trades": 131,
+        "win_rate": 41.2,
+        "avg_win": 617.45,
+        "avg_loss": -380.16
+      },
+      "recent": {
+        "pnl": 1147.41,
+        "trades": 21,
+        "win_rate": 42.9,
+        "avg_win": 411.5,
+        "avg_loss": -213.01
+      },
+      "trend": "improving"
+    },
+    "NSE:HAL": {
+      "full": {
+        "pnl": 1400.82,
+        "trades": 41,
+        "win_rate": 48.8,
+        "avg_win": 687.21,
+        "avg_loss": -587.78
+      },
+      "recent": {
+        "pnl": -848.01,
+        "trades": 4,
+        "win_rate": 50.0,
+        "avg_win": 97.0,
+        "avg_loss": -521.01
+      },
+      "trend": "declining"
+    },
+    "NSE:LTF": {
+      "full": {
+        "pnl": 15576.24,
+        "trades": 116,
+        "win_rate": 49.1,
+        "avg_win": 731.24,
+        "avg_loss": -442.45
+      },
+      "recent": {
+        "pnl": 741.1,
+        "trades": 26,
+        "win_rate": 42.3,
+        "avg_win": 324.87,
+        "avg_loss": -188.83
+      },
+      "trend": "declining"
+    },
+    "NSE:RECLTD": {
+      "full": {
+        "pnl": 8435.8,
+        "trades": 43,
+        "win_rate": 53.5,
+        "avg_win": 851.28,
+        "avg_loss": -557.18
+      },
+      "recent": {
+        "pnl": 1051.28,
+        "trades": 9,
+        "win_rate": 66.7,
+        "avg_win": 253.22,
+        "avg_loss": -156.02
+      },
+      "trend": "stable"
+    },
+    "NSE:MCX": {
+      "full": {
+        "pnl": 25335.15,
+        "trades": 164,
+        "win_rate": 46.3,
+        "avg_win": 827.7,
+        "avg_loss": -426.93
+      },
+      "recent": {
+        "pnl": 661.53,
+        "trades": 15,
+        "win_rate": 40.0,
+        "avg_win": 574.76,
+        "avg_loss": -309.67
+      },
+      "trend": "declining"
+    },
+    "NSE:DIXON": {
+      "full": {
+        "pnl": 8601.85,
+        "trades": 105,
+        "win_rate": 46.7,
+        "avg_win": 663.82,
+        "avg_loss": -427.24
+      },
+      "recent": {
+        "pnl": 0,
+        "trades": 0,
+        "win_rate": 0.0,
+        "avg_win": 0.0,
+        "avg_loss": 0.0
+      },
+      "trend": "declining"
+    }
+  }
+}

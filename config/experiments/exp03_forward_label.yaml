@@ -1,0 +1,7 @@
+# EXP-03 — forward_label re-test on the fixed engine (ledger R-02). Config-only.
+strategies:
+  lr_extrema:
+    forward_label:
+      enabled: true
+      forward_bars: 150
+      min_return_pct: 1.5

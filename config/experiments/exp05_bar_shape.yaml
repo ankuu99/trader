@@ -1,0 +1,2 @@
+# EXP-05 — reversal bar-shape add-on (W2, exp/features)
+strategies: {lr_extrema: {features: {bar_shape: {enabled: true}}}}

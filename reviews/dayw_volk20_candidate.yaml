@@ -1,0 +1,774 @@
+env: paper
+candle_timeframe: 15minute
+capital:
+  total: 400000
+  max_risk_per_trade_pct: 5.0
+  daily_loss_limit_pct: 10
+risk:
+  gtt_enabled: false
+  order_type: market
+  market_protection_pct: 1.0
+  max_open_positions: 25
+  compounding: true
+  default_sl_pct: 3
+  risk_reward: 2.5
+  max_capital_per_stock_pct: 10.0
+  trading_start: 09:15
+  trading_end: '15:30'
+scale_in:
+  enabled: false
+  fraction_pct: 50
+  max_addons: 2
+  min_spacing_days: 1
+  budget_pct: 10
+watchlist:
+- NSE:REDTAPE
+- NSE:THANGAMAYL
+- NSE:CHENNPETRO
+- NSE:CUMMINSIND
+- NSE:KPL
+- NSE:ADFFOODS
+- NSE:STYLAMIND
+- NSE:TIPSMUSIC
+- NSE:MAYURUNIQ
+- NSE:GESHIP
+- NSE:ENGINERSIN
+- NSE:SCHAEFFLER
+- NSE:ATHERENERG
+- NSE:CUPID
+- NSE:INDHOTEL
+- NSE:ACMESOLAR
+- NSE:TVSMOTOR
+- NSE:RADICO
+- NSE:M&MFIN
+- NSE:CGPOWER
+- NSE:SKYGOLD
+- NSE:QUESS
+- NSE:IPCALAB
+strategies:
+  lr_extrema:
+    enabled: true
+    warmup_bars: 300
+    lookback_bars: 1200
+    threshold: 0.65
+    veto_threshold: 1.0
+    retrain_every: 25
+    extrema_order: 10
+    exits:
+      hold_bars: 200
+      sell_min_pct: 3.0
+      hard_stop:
+        stop_pct: 20
+      trailing:
+        profit_pct: 7
+        trail_pct: 2
+        force_close_time: '15:25'
+        pattern_top_floor_enabled: false
+      pattern_top:
+        sell_threshold: 0.6
+        min_hold_before_exit: 1
+        scale_out:
+          enabled: true
+          fraction: 0.5
+      stale:
+        check_bars: 40
+        min_gain_pct: 0.5
+      stale_2:
+        check_bars: 200
+        min_gain_pct: -2.0
+    entry_gates: {}
+    forward_label:
+      enabled: false
+      forward_bars: 150
+      min_return_pct: 1.5
+    labels:
+      type: zigzag
+      zigzag:
+        reversal_pct: 5.0
+        vol_scaled:
+          enabled: true
+          k: 2.0
+          min_pct: 2.0
+          max_pct: 9.0
+      neutral:
+        enabled: true
+        ratio: 2.0
+        margin_bars: null
+    model:
+      type: gbdt
+    features:
+      volume_ma_bars: 20
+      depth:
+        enabled: false
+        lookback_bars: 50
+      macd:
+        enabled: false
+        fast: 12
+        slow: 26
+        signal_period: 9
+        hist_lookback: 3
+      curvature:
+        enabled: false
+        lookback_bars: 50
+      type: extrema_regime
+      regime:
+        horizons:
+        - 20
+        - 60
+        - 250
+    meta_label:
+      enabled: false
+      meta_threshold: 0.55
+      sizing:
+        enabled: false
+        min_fraction: 0.5
+        max_fraction: 1.0
+      model:
+        type: xgboost
+        max_depth: 3
+        n_estimators: 100
+        min_child_weight: 5
+        reg_lambda: 1.0
+      features:
+        vol_bars: 20
+        rsi_period: 14
+        depth_bars: 50
+        include_primary_scores: true
+      barriers:
+        profit_pct: null
+        stop_pct: null
+        max_bars: null
+        atr_mult_pt: null
+        atr_mult_sl: null
+        atr_period: 14
+per_stock_params:
+  NSE:REDTAPE:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:THANGAMAYL:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:CHENNPETRO:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:CUMMINSIND:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:KPL:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:ADFFOODS:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:STYLAMIND:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:TIPSMUSIC:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:MAYURUNIQ:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:GESHIP:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:ENGINERSIN:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:SCHAEFFLER:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:ATHERENERG:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:CUPID:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:INDHOTEL:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:ACMESOLAR:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:TVSMOTOR:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:RADICO:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:M&MFIN:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:CGPOWER:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:SKYGOLD:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:QUESS:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+  NSE:IPCALAB:
+    lr_extrema:
+      timeframe: day
+      warmup_bars: 150
+      lookback_bars: 400
+      retrain_every: 1
+      exits:
+        hold_bars: 40
+        sell_min_pct: 7.0
+        hard_stop:
+          stop_pct: 20
+        trailing:
+          profit_pct: 10
+          trail_pct: 4
+          force_close_time: null
+        pattern_top:
+          sell_threshold: 0.6
+          min_hold_before_exit: 2
+          scale_out:
+            enabled: true
+            fraction: 0.5
+        stale:
+          check_bars: 10
+          min_gain_pct: 0.5
+        stale_2:
+          check_bars: 30
+          min_gain_pct: -2.0
+data:
+  db_path: data/market.db
+  historical_cache_days: 400
+logging:
+  level: INFO
+  dir: logs/
+ui:
+  enabled: true
+  port: 8080
